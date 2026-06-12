@@ -30,7 +30,7 @@ class ADroneProtoCharacter : public ACharacter
 	/** Follow camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FollowCamera;
-	
+
 protected:
 
 	/** Jump Input Action */
@@ -49,15 +49,15 @@ protected:
 	UPROPERTY(EditAnywhere, Category="Input")
 	UInputAction* MouseLookAction;
 
-	// ¼­¹ö°¡ °ªÀ» ¹Ù²Ù¸é ¸ğµç Å¬¶ó¿¡ º¹Á¦µÊ
+	// ê°’ì´ ë°”ë€Œë©´ ëª¨ë“  í´ë¼ì´ì–¸íŠ¸ì— ìë™ ë³µì œ
 	UPROPERTY(ReplicatedUsing = OnRep_Health)
 	float Health = 100.0f;
 
-	// Health°¡ º¹Á¦µÇ¾î µµÂøÇßÀ» ¶§ Å¬¶ó¿¡¼­ ÀÚµ¿ È£ÃâµÇ´Â ÇÔ¼ö
+	// Healthê°€ ë³µì œë˜ì—ˆì„ ë•Œ í´ë¼ì´ì–¸íŠ¸ì—ì„œ ìë™ í˜¸ì¶œë˜ëŠ” í•¨ìˆ˜
 	UFUNCTION()
 	void OnRep_Health();
 
-	// ¼­¹ö ±ÇÇÑÀ¸·Î µ¥¹ÌÁö Àû¿ë (Å×½ºÆ®¿ë)
+	// ì„œë²„ ê¶Œí•œ ë³€ê²½ í…ŒìŠ¤íŠ¸ìš© í•¨ìˆ˜ (Kí‚¤)
 	void ApplyTestDamage();
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -65,7 +65,7 @@ protected:
 public:
 
 	/** Constructor */
-	ADroneProtoCharacter();	
+	ADroneProtoCharacter();
 
 protected:
 
@@ -106,4 +106,3 @@ public:
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 };
-

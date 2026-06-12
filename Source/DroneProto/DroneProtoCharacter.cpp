@@ -17,7 +17,7 @@ ADroneProtoCharacter::ADroneProtoCharacter()
 {
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
-		
+
 	// Don't rotate when the controller rotates. Let that just affect the camera.
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
@@ -49,7 +49,7 @@ ADroneProtoCharacter::ADroneProtoCharacter()
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
 
-	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
+	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character)
 	// are set in the derived blueprint asset named ThirdPersonCharacter (to avoid direct content references in C++)
 }
 
@@ -57,7 +57,7 @@ void ADroneProtoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 {
 	// Set up action bindings
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
-		
+
 		// Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
@@ -69,7 +69,7 @@ void ADroneProtoCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ADroneProtoCharacter::Look);
 
-		// ÇÔ¼ö ¾È¿¡ Ãß°¡ (¿¹: K Å° ´©¸£¸é µ¥¹ÌÁö)
+		// Kí‚¤: ì„œë²„ ê¶Œí•œ ë³€ê²½ í…ŒìŠ¤íŠ¸
 		PlayerInputComponent->BindKey(EKeys::K, IE_Pressed, this, &ADroneProtoCharacter::ApplyTestDamage);
 	}
 	else
@@ -107,10 +107,10 @@ void ADroneProtoCharacter::DoMove(float Right, float Forward)
 		// get forward vector
 		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
 
-		// get right vector 
+		// get right vector
 		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 
-		// add movement 
+		// add movement
 		AddMovementInput(ForwardDirection, Forward);
 		AddMovementInput(RightDirection, Right);
 	}
@@ -138,24 +138,24 @@ void ADroneProtoCharacter::DoJumpEnd()
 	StopJumping();
 }
 
-// ¾î¶² º¯¼ö¸¦ º¹Á¦ÇÒÁö ¿£Áø¿¡ µî·Ï
+// ì„œë²„ì—ì„œ ë³µì œí•  ë³€ìˆ˜ë¥¼ ì—¬ê¸°ì— ë“±ë¡
 void ADroneProtoCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ADroneProtoCharacter, Health);
 }
 
-// ¼­¹ö¿¡¼­¸¸ ½ÇÇàµÇ¾î¾ß ÇÏ´Â µ¥¹ÌÁö Ã³¸®
+// ì„œë²„ì—ì„œë§Œ ì‹¤í–‰ë˜ì–´ì•¼ í•˜ëŠ” ë°ë¯¸ì§€ ì²˜ë¦¬
 void ADroneProtoCharacter::ApplyTestDamage()
 {
-	if (HasAuthority())  // ¼­¹öÀÏ ¶§¸¸ °ª º¯°æ (¼­¹ö ±ÇÇÑ)
+	if (HasAuthority())  // ì„œë²„ ê¶Œí•œ í™•ì¸ ê°€ë“œ
 	{
 		Health -= 10.0f;
 		UE_LOG(LogTemp, Warning, TEXT("Server: Health = %f"), Health);
 	}
 }
 
-// º¹Á¦µÈ °ªÀÌ Å¬¶ó¿¡ µµÂøÇÏ¸é ÀÚµ¿ È£Ãâ
+// ì„œë²„ì—ì„œ ë³µì œë˜ë©´ í´ë¼ì´ì–¸íŠ¸ì—ì„œ ìë™ í˜¸ì¶œ
 void ADroneProtoCharacter::OnRep_Health()
 {
 	UE_LOG(LogTemp, Warning, TEXT("Client: Health replicated = %f"), Health);
