@@ -25,6 +25,7 @@ public class DroneProto : ModuleRules
 
 		PublicIncludePaths.AddRange(new string[] {
 			"DroneProto",
+			"DroneProto/Raid",
 			"DroneProto/Variant_Platforming",
 			"DroneProto/Variant_Platforming/Animation",
 			"DroneProto/Variant_Combat",
