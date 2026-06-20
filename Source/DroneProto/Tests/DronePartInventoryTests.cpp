@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "Drone.h"
 #include "DronePart.h"
 #include "Raid/DronePartInventory.h"
 #include "Raid/DronePartReturnManager.h"
@@ -158,6 +159,44 @@ bool FDronePartSelectUIGlueTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("known part description is not empty"), PC->GetPartDescription(ADronePartInventory::GetPulseLaserPartID()).IsEmpty());
 	TestEqual(TEXT("unknown part current count is zero without inventory"), PC->GetPartCurrentCount(TEXT("UNKNOWN_PART")), 0);
 	TestEqual(TEXT("unknown part max count is zero without inventory"), PC->GetPartMaxCount(TEXT("UNKNOWN_PART")), 0);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneApplyLoadoutTest,
+	"DroneProto.D5.Drone.ApplySelectedLoadout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneApplyLoadoutTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneApplyLoadoutTestWorld")));
+	TestNotNull(TEXT("test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ADrone* Drone = World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("drone is spawned"), Drone);
+	if (!Drone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	TestFalse(TEXT("loadout rejects missing core"),
+		Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), ADronePartInventory::GetVectorCannonPartID()));
+
+	TestTrue(TEXT("loadout accepts selected core and weapons"),
+		Drone->ApplyLoadout(
+			ADronePartInventory::GetCoreZenithPartID(),
+			ADronePartInventory::GetPulseLaserPartID(),
+			ADronePartInventory::GetVectorCannonPartID()));
+	TestEqual(TEXT("loadout recalculates max health"), Drone->GetMaxHealth(), 220);
+	TestEqual(TEXT("loadout recalculates attack power"), Drone->GetAttackPower(), 35);
+	TestEqual(TEXT("loadout fills health after drafting"), Drone->GetHealth(), 220);
 
 	World->DestroyWorld(false);
 	return true;

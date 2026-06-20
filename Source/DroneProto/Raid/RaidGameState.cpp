@@ -62,6 +62,24 @@ ADronePartInventory* ARaidGameState::GetDronePartInventory() const
 	return DronePartInventory.Get();
 }
 
+void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetRaidStateForServer rejected: GameState has no authority"));
+		return;
+	}
+
+	if (RaidState == NewRaidState)
+	{
+		return;
+	}
+
+	RaidState = NewRaidState;
+	ForceNetUpdate();
+	UE_LOG(LogTemp, Log, TEXT("[Server] RaidState changed -> %d"), static_cast<int32>(RaidState));
+}
+
 void ARaidGameState::SetDronePartInventory(ADronePartInventory* InDronePartInventory)
 {
 	if (!HasAuthority())

@@ -38,6 +38,7 @@ public:
 	ADronePartInventory* GetDronePartInventory() const;
 
 	void SetDronePartInventory(ADronePartInventory* InDronePartInventory);
+	void SetRaidStateForServer(ERaidState NewRaidState);
 
 private:
 	UFUNCTION()

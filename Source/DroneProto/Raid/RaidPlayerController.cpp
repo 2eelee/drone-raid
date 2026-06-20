@@ -1,4 +1,5 @@
 #include "RaidPlayerController.h"
+#include "Drone.h"
 #include "DronePartInventory.h"
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
@@ -39,7 +40,7 @@ const TCHAR* ToNetModeLogString(ENetMode NetMode)
 	}
 }
 
-const TCHAR* ToNetRoleLogString(ENetRole Role)
+const TCHAR* ToRaidPCNetRoleLogString(ENetRole Role)
 {
 	switch (Role)
 	{
@@ -78,12 +79,15 @@ FString BuildInventoryLookupDebugString(const ADronePartInventory* Inventory)
 		return TEXT("Inventory=None");
 	}
 
+	const FString LocalRoleString = ToRaidPCNetRoleLogString(Inventory->GetLocalRole());
+	const FString RemoteRoleString = ToRaidPCNetRoleLogString(Inventory->GetRemoteRole());
+
 	return FString::Printf(
 		TEXT("Inventory=%s HasAuthority=%s LocalRole=%s RemoteRole=%s Replicates=%s AlwaysRelevant=%s Dormancy=%d"),
 		*Inventory->GetName(),
 		Inventory->HasAuthority() ? TEXT("true") : TEXT("false"),
-		ToNetRoleLogString(Inventory->GetLocalRole()),
-		ToNetRoleLogString(Inventory->GetRemoteRole()),
+		*LocalRoleString,
+		*RemoteRoleString,
 		Inventory->GetIsReplicated() ? TEXT("true") : TEXT("false"),
 		Inventory->bAlwaysRelevant ? TEXT("true") : TEXT("false"),
 		static_cast<int32>(Inventory->NetDormancy));
@@ -536,7 +540,58 @@ void ARaidPlayerController::Server_RequestReadyForRaid_Implementation()
 		*SelectedLeftWeaponPartID.ToString(),
 		*SelectedRightWeaponPartID.ToString());
 
-	// TODO(D5 CombatStart): pass selected parts to Drone::ApplyLoadout before battle transition.
+	FString FailureReason;
+	if (!ValidateSelectedLoadoutForServer(FailureReason))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Reason=%s Core=%s Left=%s Right=%s"),
+			*BuildControllerLogString(this),
+			*FailureReason,
+			*SelectedCorePartID.ToString(),
+			*SelectedLeftWeaponPartID.ToString(),
+			*SelectedRightWeaponPartID.ToString());
+		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		return;
+	}
+
+	ADrone* ControlledDrone = Cast<ADrone>(GetPawn());
+	if (!ControlledDrone)
+	{
+		FailureReason = TEXT("Controlled pawn is not ADrone");
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Reason=%s"),
+			*BuildControllerLogString(this),
+			*FailureReason);
+		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		return;
+	}
+
+	const FName ReadyCorePartID = SelectedCorePartID;
+	const FName ReadyLeftWeaponPartID = SelectedLeftWeaponPartID;
+	const FName ReadyRightWeaponPartID = SelectedRightWeaponPartID;
+
+	if (!ControlledDrone->ApplyLoadout(ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID))
+	{
+		FailureReason = TEXT("Drone ApplyLoadout failed");
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Reason=%s"),
+			*BuildControllerLogString(this),
+			*FailureReason);
+		Client_NotifyRaidReadyResult(false, FailureReason, ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
+		return;
+	}
+
+	MoveSelectedPartsToEquippedForServer();
+
+	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] RequestReadyForRaid Success: Player=%s Core=%s Left=%s Right=%s RaidState=Battle"),
+		*BuildControllerLogString(this),
+		*ReadyCorePartID.ToString(),
+		*ReadyLeftWeaponPartID.ToString(),
+		*ReadyRightWeaponPartID.ToString());
+
+	Client_NotifyRaidReadyResult(true, TEXT("Battle started"), ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
 }
 
 void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
@@ -575,6 +630,36 @@ void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 	}
 
 	OnPartSelectionResult.Broadcast(Slot, PartID, bSuccess, Reason);
+}
+
+void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
+	bool bSuccess,
+	const FString& Reason,
+	FName CorePartID,
+	FName LeftWeaponPartID,
+	FName RightWeaponPartID)
+{
+	UE_LOG(LogTemp, Log, TEXT("[Client] Raid ready result: Success=%s Reason=%s Core=%s Left=%s Right=%s"),
+		bSuccess ? TEXT("true") : TEXT("false"),
+		*Reason,
+		*CorePartID.ToString(),
+		*LeftWeaponPartID.ToString(),
+		*RightWeaponPartID.ToString());
+
+	if (!bSuccess)
+	{
+		return;
+	}
+
+	SetEquippedPartIDForSlot(EPartSlot::Core, CorePartID);
+	SetEquippedPartIDForSlot(EPartSlot::LeftWeapon, LeftWeaponPartID);
+	SetEquippedPartIDForSlot(EPartSlot::RightWeapon, RightWeaponPartID);
+	SetSelectedPartIDForSlot(EPartSlot::Core, NAME_None);
+	SetSelectedPartIDForSlot(EPartSlot::LeftWeapon, NAME_None);
+	SetSelectedPartIDForSlot(EPartSlot::RightWeapon, NAME_None);
+	OnSelectedPartsChanged.Broadcast();
+
+	HideDronePartSelectUI();
 }
 
 void ARaidPlayerController::D4SelectPart(FString SlotName, FString PartIDText)
@@ -621,8 +706,8 @@ ADronePartInventory* ARaidPlayerController::GetDronePartInventory() const
 					HasAuthority() ? TEXT("Server") : TEXT("Client"),
 					*BuildControllerLogString(this),
 					*GS->GetName(),
-					ToNetRoleLogString(GS->GetLocalRole()),
-					ToNetRoleLogString(GetLocalRole()));
+					ToRaidPCNetRoleLogString(GS->GetLocalRole()),
+					ToRaidPCNetRoleLogString(GetLocalRole()));
 			}
 			else
 			{
@@ -639,14 +724,14 @@ ADronePartInventory* ARaidPlayerController::GetDronePartInventory() const
 			HasAuthority() ? TEXT("Server") : TEXT("Client"),
 			*BuildControllerLogString(this),
 			ToNetModeLogString(World->GetNetMode()),
-			ToNetRoleLogString(GetLocalRole()));
+			ToRaidPCNetRoleLogString(GetLocalRole()));
 	}
 	else
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[%s] DronePartInventory lookup: Player=%s World=None PC_LocalRole=%s"),
 			HasAuthority() ? TEXT("Server") : TEXT("Client"),
 			*BuildControllerLogString(this),
-			ToNetRoleLogString(GetLocalRole()));
+			ToRaidPCNetRoleLogString(GetLocalRole()));
 	}
 
 	return nullptr;
@@ -967,6 +1052,87 @@ bool ARaidPlayerController::TryParsePartSlot(const FString& SlotName, EPartSlot&
 	}
 
 	return false;
+}
+
+bool ARaidPlayerController::ValidateSelectedLoadoutForServer(FString& OutReason) const
+{
+	if (!HasAuthority())
+	{
+		OutReason = TEXT("Server authority required");
+		return false;
+	}
+
+	if (SelectedCorePartID.IsNone())
+	{
+		OutReason = TEXT("Core part is not selected");
+		return false;
+	}
+	if (SelectedLeftWeaponPartID.IsNone())
+	{
+		OutReason = TEXT("Left weapon part is not selected");
+		return false;
+	}
+	if (SelectedRightWeaponPartID.IsNone())
+	{
+		OutReason = TEXT("Right weapon part is not selected");
+		return false;
+	}
+
+	const ADronePartInventory* Inventory = GetDronePartInventory();
+	if (!Inventory)
+	{
+		OutReason = TEXT("DronePartInventory is missing");
+		return false;
+	}
+
+	const auto ValidatePartForSlot = [Inventory, &OutReason](FName PartID, EPartSlot Slot) -> bool
+	{
+		EDronePartType PartType = EDronePartType::Core;
+		if (!Inventory->GetPartType(PartID, PartType))
+		{
+			OutReason = FString::Printf(TEXT("Unknown PartID: %s"), *PartID.ToString());
+			return false;
+		}
+
+		const bool bTypeMatches = Slot == EPartSlot::Core
+			? PartType == EDronePartType::Core
+			: PartType == EDronePartType::Weapon;
+		if (!bTypeMatches)
+		{
+			OutReason = FString::Printf(TEXT("Part type mismatch: Slot=%s Part=%s"),
+				ToSelectionSlotLogString(Slot),
+				*PartID.ToString());
+			return false;
+		}
+
+		return true;
+	};
+
+	if (!ValidatePartForSlot(SelectedCorePartID, EPartSlot::Core)
+		|| !ValidatePartForSlot(SelectedLeftWeaponPartID, EPartSlot::LeftWeapon)
+		|| !ValidatePartForSlot(SelectedRightWeaponPartID, EPartSlot::RightWeapon))
+	{
+		return false;
+	}
+
+	OutReason.Reset();
+	return true;
+}
+
+void ARaidPlayerController::MoveSelectedPartsToEquippedForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	SetEquippedPartIDForSlot(EPartSlot::Core, SelectedCorePartID);
+	SetEquippedPartIDForSlot(EPartSlot::LeftWeapon, SelectedLeftWeaponPartID);
+	SetEquippedPartIDForSlot(EPartSlot::RightWeapon, SelectedRightWeaponPartID);
+
+	SetSelectedPartIDForSlot(EPartSlot::Core, NAME_None);
+	SetSelectedPartIDForSlot(EPartSlot::LeftWeapon, NAME_None);
+	SetSelectedPartIDForSlot(EPartSlot::RightWeapon, NAME_None);
 }
 
 void ARaidPlayerController::HandleDronePartStocksChanged()

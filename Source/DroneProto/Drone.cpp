@@ -1,5 +1,6 @@
 #include "Drone.h"
 #include "DronePart.h"
+#include "DummyParts.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "Components/SceneComponent.h"
 #include "EnhancedInputComponent.h"
@@ -8,7 +9,87 @@
 #include "Engine/LocalPlayer.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/Engine.h"
+#include "Raid/DronePartInventory.h"
 #include "Raid/RaidPlayerController.h"
+
+namespace
+{
+bool TryGetStatsForPartID(FName PartID, EPartSlot Slot, FDronePartStats& OutStats)
+{
+	OutStats = FDronePartStats();
+
+	if (Slot == EPartSlot::Core)
+	{
+		if (PartID == ADronePartInventory::GetCoreZenithPartID())
+		{
+			OutStats.HealthBonus = 100;
+			OutStats.AttackBonus = 0;
+			return true;
+		}
+		if (PartID == ADronePartInventory::GetCoreBoosterPartID())
+		{
+			OutStats.HealthBonus = 60;
+			OutStats.AttackBonus = 5;
+			return true;
+		}
+		if (PartID == ADronePartInventory::GetCoreDrainPartID())
+		{
+			OutStats.HealthBonus = 30;
+			OutStats.AttackBonus = 15;
+			return true;
+		}
+		return false;
+	}
+
+	if (PartID == ADronePartInventory::GetPulseLaserPartID())
+	{
+		OutStats.HealthBonus = 0;
+		OutStats.AttackBonus = 20;
+		return true;
+	}
+	if (PartID == ADronePartInventory::GetFractureBurstPartID())
+	{
+		OutStats.HealthBonus = 0;
+		OutStats.AttackBonus = 25;
+		return true;
+	}
+	if (PartID == ADronePartInventory::GetVectorCannonPartID())
+	{
+		OutStats.HealthBonus = 20;
+		OutStats.AttackBonus = 15;
+		return true;
+	}
+
+	return false;
+}
+
+UDronePart* CreateLoadoutPart(UObject* Outer, FName PartID, EPartSlot Slot, const FDronePartStats& Stats)
+{
+	UDronePart* NewPart = nullptr;
+	switch (Slot)
+	{
+	case EPartSlot::Core:
+		NewPart = NewObject<UCorePart>(Outer);
+		break;
+	case EPartSlot::LeftWeapon:
+		NewPart = NewObject<ULeftWeaponPart>(Outer);
+		break;
+	case EPartSlot::RightWeapon:
+		NewPart = NewObject<URightWeaponPart>(Outer);
+		break;
+	default:
+		return nullptr;
+	}
+
+	if (NewPart)
+	{
+		NewPart->Slot = Slot;
+		NewPart->StatContribution = Stats;
+	}
+
+	return NewPart;
+}
+}
 
 ADrone::ADrone()
 {
@@ -90,6 +171,78 @@ float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 	}
 
 	return Applied;
+}
+
+bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ApplyLoadout rejected: server authority required"));
+		return false;
+	}
+
+	if (CorePartID.IsNone() || LeftWeaponPartID.IsNone() || RightWeaponPartID.IsNone())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout Failed: Core=%s Left=%s Right=%s Reason=Missing selected part"),
+			*CorePartID.ToString(),
+			*LeftWeaponPartID.ToString(),
+			*RightWeaponPartID.ToString());
+		return false;
+	}
+
+	FDronePartStats CoreStats;
+	FDronePartStats LeftStats;
+	FDronePartStats RightStats;
+	if (!TryGetStatsForPartID(CorePartID, EPartSlot::Core, CoreStats)
+		|| !TryGetStatsForPartID(LeftWeaponPartID, EPartSlot::LeftWeapon, LeftStats)
+		|| !TryGetStatsForPartID(RightWeaponPartID, EPartSlot::RightWeapon, RightStats))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout Failed: Core=%s Left=%s Right=%s Reason=Unknown or mismatched PartID"),
+			*CorePartID.ToString(),
+			*LeftWeaponPartID.ToString(),
+			*RightWeaponPartID.ToString());
+		return false;
+	}
+
+	EquippedParts.Reset();
+	EquippedParts.Add(CreateLoadoutPart(this, CorePartID, EPartSlot::Core, CoreStats));
+	EquippedParts.Add(CreateLoadoutPart(this, LeftWeaponPartID, EPartSlot::LeftWeapon, LeftStats));
+	EquippedParts.Add(CreateLoadoutPart(this, RightWeaponPartID, EPartSlot::RightWeapon, RightStats));
+
+	if (EquippedParts.Contains(nullptr))
+	{
+		EquippedParts.Reset();
+		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout Failed: Core=%s Left=%s Right=%s Reason=Part object creation failed"),
+			*CorePartID.ToString(),
+			*LeftWeaponPartID.ToString(),
+			*RightWeaponPartID.ToString());
+		return false;
+	}
+
+	RecalculateStats();
+	UE_LOG(LogTemp, Log, TEXT("[Server] ApplyLoadout Success: Core=%s Left=%s Right=%s MaxHealth=%d AttackPower=%d"),
+		*CorePartID.ToString(),
+		*LeftWeaponPartID.ToString(),
+		*RightWeaponPartID.ToString(),
+		MaxHealth,
+		AttackPower);
+
+	return true;
+}
+
+int32 ADrone::GetHealth() const
+{
+	return Health;
+}
+
+int32 ADrone::GetMaxHealth() const
+{
+	return MaxHealth;
+}
+
+int32 ADrone::GetAttackPower() const
+{
+	return AttackPower;
 }
 
 void ADrone::OnRep_Health()

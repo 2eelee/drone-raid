@@ -8,6 +8,7 @@
 #include "RaidPlayerController.generated.h"
 
 class ADronePartInventory;
+class ADrone;
 class UTexture2D;
 class UDronePartReturnManager;
 
@@ -127,6 +128,9 @@ public:
 	UFUNCTION(Client, Reliable, Category = "Drone Parts")
 	void Client_NotifyPartSelectionResult(EPartSlot Slot, FName PartID, bool bSuccess, const FString& Reason);
 
+	UFUNCTION(Client, Reliable, Category = "Raid")
+	void Client_NotifyRaidReadyResult(bool bSuccess, const FString& Reason, FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID);
+
 	UFUNCTION(Exec)
 	void D4SelectPart(FString SlotName, FString PartIDText);
 
@@ -169,6 +173,8 @@ private:
 	void SetEquippedPartIDForSlot(EPartSlot Slot, FName PartID);
 	bool IsPartTypeAllowedForSlot(EPartSlot Slot, EDronePartType PartType) const;
 	bool TryParsePartSlot(const FString& SlotName, EPartSlot& OutSlot) const;
+	bool ValidateSelectedLoadoutForServer(FString& OutReason) const;
+	void MoveSelectedPartsToEquippedForServer();
 
 	UFUNCTION()
 	void HandleDronePartStocksChanged();

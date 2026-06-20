@@ -18,6 +18,18 @@ class DRONEPROTO_API ADrone : public APawn
 public:
 	ADrone();
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
+	bool ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID);
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
+	int32 GetHealth() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
+	int32 GetMaxHealth() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
+	int32 GetAttackPower() const;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
@@ -58,7 +70,8 @@ private:
 	void Move(const FInputActionValue& Value);
 
 	// ---- 장착 부품 (서버 전용, 복제 안 함) ----
-	TArray<UDronePart*> EquippedParts;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UDronePart>> EquippedParts;
 
 	void ServerEquipPart(TSubclassOf<UDronePart> PartClass);
 	void RecalculateStats();
