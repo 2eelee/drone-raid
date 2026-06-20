@@ -7,11 +7,26 @@
 class ADrone;
 
 UENUM(BlueprintType)
+enum class EDronePartType : uint8
+{
+	Core,
+	Weapon
+};
+
+UENUM(BlueprintType)
 enum class EPartSlot : uint8
 {
 	Core,
 	LeftWeapon,
 	RightWeapon
+};
+
+UENUM(BlueprintType)
+enum class EDronePartSlot : uint8
+{
+	Core,
+	RightWeapon,
+	LeftWeapon
 };
 
 USTRUCT(BlueprintType)

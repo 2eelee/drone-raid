@@ -1,6 +1,5 @@
 #include "Drone.h"
 #include "DronePart.h"
-#include "DummyParts.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "Components/SceneComponent.h"
 #include "EnhancedInputComponent.h"
@@ -9,6 +8,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/Engine.h"
+#include "Raid/RaidPlayerController.h"
 
 ADrone::ADrone()
 {
@@ -49,12 +49,8 @@ void ADrone::BeginPlay()
 	}
 
 	// D3 검증용, 추후 제거 — 슬롯별 3종 장착 → MaxHealth=220, AttackPower=35 복제 확인
-	if (HasAuthority())
-	{
-		ServerEquipPart(UCorePart::StaticClass());
-		ServerEquipPart(ULeftWeaponPart::StaticClass());
-		ServerEquipPart(URightWeaponPart::StaticClass());
-	}
+	// D3 temporary auto-equip is intentionally disabled.
+	// TODO(D5 Ready): Apply selected parts after RequestReadyForRaidFromUI.
 }
 
 void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -87,6 +83,12 @@ float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 	const float Applied = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	Health = FMath::Max(0, Health - FMath::RoundToInt(Applied));
 	UE_LOG(LogTemp, Log, TEXT("[Server] TakeDamage: Health=%d"), Health);
+
+	if (Health <= 0)
+	{
+		HandleDeath();
+	}
+
 	return Applied;
 }
 
@@ -140,4 +142,22 @@ void ADrone::RecalculateStats()
 	             // 암묵 제약: 전투 중 RecalculateStats 호출 금지 (풀피 회복 버그)
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] Stats: MaxHealth=%d, AttackPower=%d"), MaxHealth, AttackPower);
+}
+
+void ADrone::HandleDeath()
+{
+	if (!HasAuthority() || bIsDead)
+	{
+		return;
+	}
+
+	bIsDead = true;
+
+	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
+	{
+		RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Death);
+	}
+
+	// TODO(D5 UI): show drone death state when the combat death UI flow exists.
+	UE_LOG(LogTemp, Log, TEXT("[Server] Drone death handled: equipped parts returned"));
 }

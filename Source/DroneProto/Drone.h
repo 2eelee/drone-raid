@@ -43,6 +43,8 @@ private:
 	UPROPERTY(Replicated)
 	int32 AttackPower = 0;
 
+	bool bIsDead = false;
+
 	UFUNCTION()
 	void OnRep_Health();
 
@@ -60,4 +62,5 @@ private:
 
 	void ServerEquipPart(TSubclassOf<UDronePart> PartClass);
 	void RecalculateStats();
+	void HandleDeath();
 };
