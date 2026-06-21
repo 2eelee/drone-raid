@@ -4,6 +4,106 @@
 
 ---
 
+## 2026-06-21 — D8 서버 권한 이동 입력 + 이동거리 누적 기반
+
+### 구현
+
+- Vector Cannon/Booster Core 실제 보너스 계산은 제외하고, 두 효과가 사용할 서버 권한 이동거리 원천 데이터만 먼저 구축.
+- `ADrone`에 Tick을 켜고 `SetReplicates(true)`, `SetReplicateMovement(true)`를 명시해 서버 이동 결과가 클라이언트로 복제되도록 정리.
+- `ADrone::Move`는 클라이언트 위치값을 보내지 않고 이동 축 입력만 `Server_SetMoveInput`으로 전달.
+- 서버는 `ApplyMoveInputForServer`에서 입력 벡터를 길이 1 이하로 clamp하고, Pawn 없음/ADrone 아님/Possess 불일치/Dead/NotInBattle/ZeroAxis 상황을 거부.
+- Listen Server 로컬 플레이어도 동일한 서버 적용 경로를 타도록 authority 분기에서 직접 `ApplyMoveInputForServer`를 호출.
+- 서버 Tick에서 ActorLocation delta를 cm가 아닌 m 기준으로 계산해 `VectorAccumulatedMoveDistanceMeters`, `BoosterAccumulatedMoveDistanceMeters`에 각각 누적.
+- 이동거리 누적은 `PlayerSelectionState == InBattle`, Dead 아님, 정상 possess, RaidEnd 아님 조건에서만 허용.
+- Spawn/Possess/Loadout/Death/RaidEnd 시 전체 이동거리 누적값과 baseline을 reset.
+- FirstSample은 baseline만 잡고 누적하지 않으며, `DeltaSeconds > 0.25`, 20m 초과 hard delta, MaxSpeed 기반 예상치보다 큰 delta는 Teleport/TooLargeDelta로 무시.
+- 향후 Vector 공격 후 사용할 `ResetVectorMoveDistanceForServer` helper를 추가하되, 이번 단계에서는 Vector 피해 보너스에 연결하지 않음.
+- `WEAPON_003`은 이동거리 보너스를 아직 구현하지 않고 base 7 damage만 반환하도록 유지해 Vector/Booster 효과 구현 범위를 넘지 않게 함.
+- 신규 DR_SUMMARY:
+  - `[DR_SUMMARY] MoveInput ...`
+  - `[DR_SUMMARY] MoveAudit ...`
+  - `[DR_SUMMARY] MoveDistance ...`
+  - `[DR_SUMMARY] MoveDistanceIgnored ...`
+  - `[DR_SUMMARY] MoveDistanceReset ...`
+
+### 검증
+
+- RED: 신규 D8 자동화 테스트가 `ApplyMoveInputForServerForTest`, `UpdateMoveDistanceForServerForTest`, 이동거리 getter 미구현으로 컴파일 실패하는 것을 먼저 확인.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D8` 신규 3개 성공.
+- `Automation RunTests DroneProto` 전체 22개 성공.
+- 신규 테스트:
+  - `DroneProto.D8.Drone.ServerMoveInputAuthority`
+  - `DroneProto.D8.Drone.MoveDistanceAccumulation`
+  - `DroneProto.D8.Drone.MoveDistanceReset`
+
+### PIE 검색어
+
+- `[DR_SUMMARY] MoveInput PC=`
+- `[DR_SUMMARY] MoveAudit PC=`
+- `[DR_SUMMARY] MoveDistance PC=`
+- `[DR_SUMMARY] MoveDistanceIgnored PC=`
+- `[DR_SUMMARY] MoveDistanceReset PC=`
+
+### 범위 제외 / 다음 단계
+
+- Vector Cannon 이동거리 피해 보너스와 Booster Core 이동거리/속도/공격 보너스는 아직 미구현.
+- Vector+Vector 동시 장착 시 한쪽 계산 후 reset되는 문제를 피하려면 다음 단계에서 공격 입력 1회 기준 이동거리 snapshot을 먼저 잡고 좌/우 무기 계산 후 Vector 누적을 reset해야 함.
+- Booster는 실제 속도 변경까지 한 번에 넣기보다, D8 누적값 기반 공격 보너스를 먼저 서버 계산에 연결하고 MovementComponent 속도 변경/클라 체감은 별도 검증하는 편이 안전.
+- 2 Clients PIE에서 클라이언트 창 이동이 서버 로그의 `MoveInput`, `MoveDistance`로 반영되는지 수동 확인 필요.
+- UMG 에셋/배치/디자인, 보스 패턴, VFX, ContributionManager, DroneReport, DataTable 전환은 변경하지 않음.
+
+---
+
+## 2026-06-21 — D7 이동거리 비기반 전투 부품 효과 구현
+
+### 구현
+
+- 기존 D5 `RequestAttackBoss -> Server_RequestAttackBoss -> HandleAttackBossForServer` 공격 입력 경로를 유지하고, 서버에서 좌/우 무기 피해와 코어 배율을 최종 피해로 계산.
+- `Pulse Laser(WEAPON_001)`는 슬롯별 독립 카운터를 사용해 1/2타 8, 3타 18 강공격 후 reset 처리.
+- Pulse 카운터는 새 Loadout 적용, Death, RaidEnd에서 초기화. RaidEnd는 ReturnManager 반환 경로를 유지한 채 eligible Drone의 전투 런타임 상태만 reset.
+- `Fracture Burst(WEAPON_002)`는 `5 + 3 * 2 = 11`, `HitCount=4`로 유지하고, `WEAPON_002 + WEAPON_002 + CORE_002` 회귀값 `Damage=20.90`을 보존.
+- `Zenith Core(CORE_001)`는 `CurrentHP / MaxHP`를 0~1로 clamp한 뒤 10% 단위 `0.02` 보너스를 적용하고 최대 `1.20` modifier로 제한.
+- `Drain Core(CORE_003)`는 AttackModifier `0.85`, MoveSpeedModifier `0.9` 기준을 유지하고, 실제 Boss HP 감소량의 `12%`를 서버에서 Drone HP로 회복. 1회 Z 입력당 최대 3, MaxHealth 초과 회복 금지.
+- Drain 회복의 소수 값을 잃지 않도록 `ADrone::Health` 내부 저장 타입을 float로 전환하되, 기존 `GetHealth()` 정수 표시 API는 유지.
+- Dead 상태에서는 기존 Attack/Move/Dodge/Heal 차단을 유지하고, Drain 회복도 Dead에서는 발생하지 않음.
+- 신규 DR_SUMMARY:
+  - `[DR_SUMMARY] PulseAttack ...`
+  - `[DR_SUMMARY] FractureAttack ...`
+  - `[DR_SUMMARY] ZenithBonus ...`
+  - `[DR_SUMMARY] DrainHeal ...`
+
+### 검증
+
+- RED: 신규 D7 자동화 테스트가 `GetPulseAttackCountForTest`, `GetHealthValueForTest` 미구현으로 컴파일 실패하는 것을 먼저 확인.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto` 전체 19개 성공.
+- 신규 테스트:
+  - `DroneProto.D7.Drone.PulseLaserCombat`
+  - `DroneProto.D7.Drone.FractureBurstCombat`
+  - `DroneProto.D7.Drone.ZenithCoreCombat`
+  - `DroneProto.D7.Drone.DrainCoreCombat`
+- 브랜치 `codex-drone-combat-effects-d7`에 내역별 커밋:
+  - `b28ecb2 feat: implement drone combat effects`
+  - `8ebafa6 test: cover drone combat effects`
+
+### PIE 검색어
+
+- `[DR_SUMMARY] PulseAttack PC=`
+- `[DR_SUMMARY] FractureAttack PC=`
+- `[DR_SUMMARY] ZenithBonus PC=`
+- `[DR_SUMMARY] DrainHeal PC=`
+- `[DR_SUMMARY] Attack PC=`
+- `[DR_SUMMARY] DeadInputIgnored PC=`
+
+### 범위 제외 / 다음 단계
+
+- Vector Cannon 이동거리 피해 보너스와 Booster Core 이동거리/속도 보너스는 이번 범위에서 구현하지 않음.
+- UMG 에셋/배치/디자인, 보스 패턴, VFX, ContributionManager, DroneReport, DataTable 전환은 변경하지 않음.
+- Vector/Booster 구현 전 서버 권한 이동거리 누적 기준, FloatingPawnMovement 서버 동기화 방식, 이동거리 reset 타이밍을 먼저 결정해야 함.
+
+---
+
 ## 2026-06-21 — D6 드론 사망/레이드 종료 부품 환원 + Dead Ready 차단
 
 ### 구현

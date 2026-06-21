@@ -16,6 +16,8 @@
 - 공유 부품 풀: 서버 단독 관리, Server RPC 요청 + 동시성 처리(중복 선택 방지)
 - 사망 시 부품 환원 → 풀에 복귀
 - 보스 상태(스턴 등)일 때 데미지 배율
+- 드론 전투 부품 효과: Z 입력 1회에 좌/우 무기 동시 발동, 서버에서 무기 피해/코어 배율/흡혈 회복 계산
+- 드론 이동: 클라는 이동 축 입력만 Server RPC로 전달하고, 서버가 `UFloatingPawnMovement` 이동 적용/위치 복제/이동거리 누적을 담당
 
 ## 코딩 규칙
 - Unreal 네이밍: A=Actor, U=UObject, F=struct
@@ -35,13 +37,19 @@
 - `ServerState`(인스턴스 가용성) vs `RaidState`(레이드 진행단계) 분리 — 합치지 않음
 - 매치메이킹 레이어는 게임 서버 위 별도 계층. 단일 인스턴스는 전역 정원 불인지
 - `RecalculateStats`는 드래프팅(전투 전)에서만 호출 — 전투 중 호출 시 Health=MaxHealth로 풀피 회복 버그
+- 이동거리 기반 효과 계산은 별도 단계로 분리. D8에서 서버 권한 이동 입력과 Vector/Booster용 이동거리 누적 기반만 구현했고, Vector Cannon/Booster Core 보너스 계산은 아직 미구현.
+- 이동거리 누적은 서버 ActorLocation delta 기준. `InBattle + Alive`일 때만 누적하고 Spawn/Possess/Loadout/Death/RaidEnd/FirstSample/TooLargeDelta/Teleport성 delta는 reset 또는 ignore 처리.
+- `VectorAccumulatedMoveDistanceMeters`와 `BoosterAccumulatedMoveDistanceMeters`는 분리 유지. 향후 Vector 공격 후에는 Vector 누적만 reset하고, Booster 누적은 공격으로 reset하지 않는 설계.
+- Drain Core 회복은 서버에서 실제 Boss HP 감소량 기준으로 1회 Z 입력당 최대 3까지만 적용한다.
 
 ## 현재 상태 / 다음 단계
-- 현재: D6/D6-1 완료. D5 선택/Ready/AutoReady 구조를 유지한 상태에서 서버 권한 Drone HP/Dead 상태, DeathReturn, RaidEndReturn, Dead 상태 Ready/AutoReady 차단까지 구현.
-- TestMap PIE 2 Players 기준 D5 흐름은 유지: `BP_Drone_C` possess, 공유 재고 선택/취소/반환, 15초 AutoReady, 수동 Ready, Selecting 공격 차단, InBattle Z 공격으로 Boss HP 감소.
+- 현재: D8 완료. D5 선택/Ready/AutoReady, D6 DeathReturn/RaidEndReturn/Dead 차단, D7 이동거리 비기반 전투 효과를 유지한 상태에서 Vector/Booster 선행 작업인 서버 권한 이동 입력 + 서버 이동거리 누적 기반을 구현.
+- TestMap PIE 2 Players 기준 D5/D6 흐름은 유지: `BP_Drone_C` possess, 공유 재고 선택/취소/반환, 15초 AutoReady, 수동 Ready, Selecting 공격 차단, InBattle Z 공격으로 Boss HP 감소.
+- D7 전투 효과: Pulse Laser는 슬롯별 독립 3타 카운트(8/8/18), Fracture Burst는 11 damage/HitCount 4, Zenith Core는 HP 비율 단계 보너스, Drain Core는 피해량 기반 최대 3 회복.
+- D8 이동 기반: `ADrone::Move -> Server_SetMoveInput -> ApplyMoveInputForServer` 경로로 축 입력만 서버에 전달하고, 서버 Tick에서 위치 delta를 m 단위로 Vector/Booster 누적값에 더함.
 - D6 테스트 경로: `D6KillDrone`은 현재 콘솔/owning PlayerController의 Pawn을 사망 처리하고, `D6RaidEndReturn`은 레이드 종료 반환 경로를 실행한다. 에디터/서버 콘솔에서는 서버 쪽 PC가 대상이 될 수 있으므로 `[DR_SUMMARY] D6KillDrone RequestPC=... TargetPC=... TargetDrone=...` 로그로 대상 확인.
-- 검증: `Build.bat DroneProtoEditor Win64 Development -NoLiveCoding` 성공, `Automation RunTests DroneProto` 전체 15개 성공.
-- 다음: D6 이후 보이는 보스/HP UI 또는 전투/리포트 계층을 별도 범위로 진행. UMG 에셋/보스 패턴/ContributionManager/DroneReport/DataTable 전환은 아직 미구현.
+- 검증: `Build.bat DroneProtoEditor Win64 Development -NoLiveCoding` 성공, `Automation RunTests DroneProto` 전체 22개 성공.
+- 다음: D8 누적값을 사용해 Vector Cannon 피해 보너스와 Booster Core 공격/속도 보너스를 별도 범위로 구현. 보이는 보스/HP UI 또는 전투/리포트 계층은 이후 별도 범위. UMG 에셋/보스 패턴/ContributionManager/DroneReport/DataTable 전환은 아직 미구현.
 
 ## 보류 (D11)
 - 팝업 위젯 클래스 지정 + `IsSlotEnabled`(현재 dead) 정리
@@ -51,9 +59,24 @@
 ## 보류 (D6 이후)
 - UMG 배치/디자인/아이콘 polish.
 - 보이는 보스 액터/HP UI.
-- Booster Core 이동거리 보너스, Drain Core 흡혈, Vector Cannon 이동거리 피해 보너스.
+- Booster Core 이동거리/속도/공격 보너스, Vector Cannon 이동거리 피해 보너스.
+- D8 서버 이동 경로의 2 Clients PIE 체감/복제 수동 확인. 코드 기준 서버 누적 기반은 마련됐지만, 로컬 예측 제거로 조작감/보정은 별도 튜닝 대상.
 - ContributionManager / DroneReport / DataTable 전환 / 보스 패턴 / VFX.
-- FloatingPawnMovement 이동 동기화: autonomous proxy 로컬 이동만 → 서버 Pawn 제자리 → rubber-banding. Server RPC로 입력 전달 vs 클라 위치 보고 방식 결정 필요. (`Drone.cpp` 생성자 TODO 참조)
+
+## D7 PIE / 로그 검색어
+- `[DR_SUMMARY] PulseAttack PC=`
+- `[DR_SUMMARY] FractureAttack PC=`
+- `[DR_SUMMARY] ZenithBonus PC=`
+- `[DR_SUMMARY] DrainHeal PC=`
+- `[DR_SUMMARY] Attack PC=`
+- `[DR_SUMMARY] DeadInputIgnored PC=`
+
+## D8 PIE / 로그 검색어
+- `[DR_SUMMARY] MoveInput PC=`
+- `[DR_SUMMARY] MoveAudit PC=`
+- `[DR_SUMMARY] MoveDistance PC=`
+- `[DR_SUMMARY] MoveDistanceIgnored PC=`
+- `[DR_SUMMARY] MoveDistanceReset PC=`
 
 ## 하지 말 것
 - 게임 변형(Combat/Platforming 등) 없음 — 단일 게임
