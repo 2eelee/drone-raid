@@ -52,10 +52,19 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetPulseAttackCountForTest(bool bIsLeftWeapon) const;
 	float GetHealthValueForTest() const;
+	bool ApplyMoveInputForServerForTest(FVector2D RawAxis);
+	void UpdateMoveDistanceForServerForTest(float DeltaSeconds);
+	void ResetMoveDistanceForServerForTest(FName Reason);
+	void ResetVectorMoveDistanceForServerForTest(FName Reason);
+	float GetVectorAccumulatedMoveDistanceForTest() const;
+	float GetBoosterAccumulatedMoveDistanceForTest() const;
+	FVector2D GetLastServerMoveInputForTest() const;
 #endif
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual void PossessedBy(AController* NewController) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 	                         AController* EventInstigator, AActor* DamageCauser) override;
@@ -98,6 +107,9 @@ private:
 	UFUNCTION(Server, Reliable)
 	void Server_RequestAttackBoss();
 
+	UFUNCTION(Server, Unreliable)
+	void Server_SetMoveInput(FVector2D RawAxis);
+
 	void Move(const FInputActionValue& Value);
 
 	// ---- 장착 부품 (서버 전용, 복제 안 함) ----
@@ -120,7 +132,37 @@ private:
 	int32 RightPulseAttackCount = 0;
 
 	UPROPERTY(Transient)
-	float AccumulatedMoveDistanceMeters = 0.0f;
+	float VectorAccumulatedMoveDistanceMeters = 0.0f;
+
+	UPROPERTY(Transient)
+	float BoosterAccumulatedMoveDistanceMeters = 0.0f;
+
+	UPROPERTY(Transient)
+	FVector LastMoveDistanceLocation = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	bool bHasMoveDistanceSample = false;
+
+	UPROPERTY(Transient)
+	FVector2D LastServerMoveInput = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	float LastMoveInputSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	FName LastMoveInputSummaryResult = NAME_None;
+
+	UPROPERTY(Transient)
+	FName LastMoveInputSummaryReason = NAME_None;
+
+	UPROPERTY(Transient)
+	float LastMoveDistanceSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	float LastMoveDistanceIgnoredLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	FName LastMoveDistanceIgnoredReason = NAME_None;
 
 	void ServerEquipPart(TSubclassOf<UDronePart> PartClass);
 	void RecalculateStats();
@@ -128,10 +170,18 @@ private:
 	void HandleAttackBossForServer();
 	void ClearEquippedPartsForServer();
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
+	FVector2D ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const;
+	bool ApplyMoveInputForServer(FVector2D RawAxis);
+	void LogMoveInputSummary(const TCHAR* Result, const TCHAR* Reason, const FVector2D& Axis);
+	void UpdateMoveDistanceForServer(float DeltaSeconds);
+	void ResetMoveDistanceForServer(FName Reason);
+	void ResetVectorMoveDistanceForServer(FName Reason);
+	bool CanAccumulateMoveDistanceForServer(FName& OutIgnoreReason) const;
+	void LogMoveDistanceIgnored(FName Reason);
 	float CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon);
 	float GetCoreAttackModifierForServer(FName CorePartID) const;
 	float GetCoreBonusAttackModifierForServer(FName CorePartID) const;
 	ARaidBoss* FindRaidBossForServer() const;
 	void ApplyDrainHealForServer(float DamageDealt);
-	void ResetCombatRuntimeStateForLoadout();
+	void ResetCombatRuntimeStateForReason(FName Reason);
 };

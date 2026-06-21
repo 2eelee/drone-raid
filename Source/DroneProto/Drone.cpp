@@ -105,17 +105,24 @@ const TCHAR* ToWeaponSlotLogString(bool bIsLeftWeapon)
 {
 	return bIsLeftWeapon ? TEXT("Left") : TEXT("Right");
 }
+
+constexpr float MoveDistanceCmToMeters = 0.01f;
+constexpr float MoveDistanceMaxDeltaSeconds = 0.25f;
+constexpr float MoveDistanceHardMaxDeltaMeters = 20.0f;
+constexpr float MoveDistanceExpectedDeltaMultiplier = 2.0f;
+constexpr float MoveDistanceExpectedDeltaSlackMeters = 3.0f;
+constexpr float MoveInputSummaryLogIntervalSeconds = 0.50f;
+constexpr float MoveDistanceSummaryLogIntervalSeconds = 0.50f;
+constexpr float MoveDistanceIgnoredLogIntervalSeconds = 1.00f;
 }
 
 ADrone::ADrone()
 {
-	bReplicates = true;
-	// bReplicateMovement = true (APawn 기본값)
-	// → 서버가 자신의 위치를 simulated proxy에 복제
-	// TODO(D5 이전): FloatingPawnMovement는 CharacterMovement와 달리 클라 입력을
-	// 서버에 전달하는 파이프라인이 없다. autonomous proxy는 로컬에서 움직이지만
-	// 서버 Pawn은 제자리 → 서버가 제자리를 다시 복제 → rubber-banding 발생.
-	// 2클라 PIE에서 이동 확인 후, Server RPC로 입력을 전달하는 방식을 결정할 것.
+	PrimaryActorTick.bCanEverTick = true;
+	SetReplicates(true);
+	SetReplicateMovement(true);
+	// FloatingPawnMovement 이동은 클라 위치를 믿지 않고 입력 축만 Server RPC로 전달한다.
+	// 서버가 이동을 적용하고 ReplicateMovement로 위치를 동기화한다.
 
 	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
@@ -130,6 +137,11 @@ ADrone::ADrone()
 void ADrone::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		ResetMoveDistanceForServer(FName(TEXT("Spawn")));
+	}
 
 	// 로컬 컨트롤러(autonomous proxy)에만 입력 컨텍스트 등록
 	if (IsLocallyControlled())
@@ -150,6 +162,26 @@ void ADrone::BeginPlay()
 	// TODO(D5 Ready): Apply selected parts after RequestReadyForRaidFromUI.
 }
 
+void ADrone::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (HasAuthority())
+	{
+		UpdateMoveDistanceForServer(DeltaSeconds);
+	}
+}
+
+void ADrone::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+
+	if (HasAuthority())
+	{
+		ResetMoveDistanceForServer(FName(TEXT("Possess")));
+	}
+}
+
 void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
@@ -161,22 +193,21 @@ void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	PlayerInputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ADrone::RequestAttackBoss);
 }
 
-// autonomous proxy가 로컬에서 이동 (서버 권한 이동 없음 — TODO 참조)
 void ADrone::Move(const FInputActionValue& Value)
 {
-	if (bIsDead)
+	const FVector2D Axis = Value.Get<FVector2D>();
+	if (Axis.IsNearlyZero())
 	{
-		LogDeadInputIgnored(TEXT("Move"));
 		return;
 	}
 
-	const FVector2D Axis = Value.Get<FVector2D>();
-	if (!GetController())
+	if (HasAuthority())
+	{
+		ApplyMoveInputForServer(Axis);
 		return;
+	}
 
-	const FRotator YawRot(0.f, GetController()->GetControlRotation().Yaw, 0.f);
-	AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::X), Axis.Y);
-	AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y), Axis.X);
+	Server_SetMoveInput(Axis);
 }
 
 float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
@@ -289,7 +320,7 @@ void ADrone::ResetCombatRuntimeStateForServer()
 		return;
 	}
 
-	ResetCombatRuntimeStateForLoadout();
+	ResetCombatRuntimeStateForReason(FName(TEXT("RaidEnd")));
 }
 
 bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID)
@@ -366,7 +397,7 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 	EquippedCorePartID = ResolvedCorePartID;
 	EquippedLeftWeaponPartID = ResolvedLeftWeaponPartID;
 	EquippedRightWeaponPartID = ResolvedRightWeaponPartID;
-	ResetCombatRuntimeStateForLoadout();
+	ResetCombatRuntimeStateForReason(FName(TEXT("Loadout")));
 	RecalculateStats();
 	bIsDead = false;
 	ForceNetUpdate();
@@ -394,6 +425,11 @@ void ADrone::RequestAttackBoss()
 void ADrone::Server_RequestAttackBoss_Implementation()
 {
 	HandleAttackBossForServer();
+}
+
+void ADrone::Server_SetMoveInput_Implementation(FVector2D RawAxis)
+{
+	ApplyMoveInputForServer(RawAxis);
 }
 
 int32 ADrone::GetHealth() const
@@ -425,6 +461,41 @@ int32 ADrone::GetPulseAttackCountForTest(bool bIsLeftWeapon) const
 float ADrone::GetHealthValueForTest() const
 {
 	return Health;
+}
+
+bool ADrone::ApplyMoveInputForServerForTest(FVector2D RawAxis)
+{
+	return ApplyMoveInputForServer(RawAxis);
+}
+
+void ADrone::UpdateMoveDistanceForServerForTest(float DeltaSeconds)
+{
+	UpdateMoveDistanceForServer(DeltaSeconds);
+}
+
+void ADrone::ResetMoveDistanceForServerForTest(FName Reason)
+{
+	ResetMoveDistanceForServer(Reason);
+}
+
+void ADrone::ResetVectorMoveDistanceForServerForTest(FName Reason)
+{
+	ResetVectorMoveDistanceForServer(Reason);
+}
+
+float ADrone::GetVectorAccumulatedMoveDistanceForTest() const
+{
+	return VectorAccumulatedMoveDistanceMeters;
+}
+
+float ADrone::GetBoosterAccumulatedMoveDistanceForTest() const
+{
+	return BoosterAccumulatedMoveDistanceMeters;
+}
+
+FVector2D ADrone::GetLastServerMoveInputForTest() const
+{
+	return LastServerMoveInput;
 }
 #endif
 
@@ -499,6 +570,7 @@ void ADrone::HandleDeath()
 
 	bIsDead = true;
 	Health = 0.0f;
+	ResetCombatRuntimeStateForReason(FName(TEXT("Death")));
 	ForceNetUpdate();
 
 	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
@@ -599,6 +671,271 @@ void ADrone::HandleAttackBossForServer()
 		Boss->GetMaxHP());
 }
 
+FVector2D ADrone::ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const
+{
+	bOutWasClamped = false;
+	if (!FMath::IsFinite(RawAxis.X) || !FMath::IsFinite(RawAxis.Y))
+	{
+		bOutWasClamped = true;
+		return FVector2D::ZeroVector;
+	}
+
+	const float RawSize = RawAxis.Size();
+	if (RawSize > 1.0f)
+	{
+		bOutWasClamped = true;
+		return RawAxis / RawSize;
+	}
+
+	return RawAxis;
+}
+
+bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	bool bWasClamped = false;
+	const FVector2D Axis = ClampMoveInputAxisForServer(RawAxis, bWasClamped);
+	LastServerMoveInput = FVector2D::ZeroVector;
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (!RaidPC)
+	{
+		LogMoveInputSummary(TEXT("Ignored"), TEXT("NoPawn"), Axis);
+		return false;
+	}
+
+	if (RaidPC->GetPawn() != this)
+	{
+		LogMoveInputSummary(TEXT("Ignored"), TEXT("PossessMismatch"), Axis);
+		return false;
+	}
+
+	if (bIsDead)
+	{
+		LogDeadInputIgnored(TEXT("Move"));
+		LogMoveInputSummary(TEXT("Ignored"), TEXT("Dead"), Axis);
+		return false;
+	}
+
+	if (RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
+	{
+		LogMoveInputSummary(TEXT("Ignored"), TEXT("NotInBattle"), Axis);
+		return false;
+	}
+
+	if (Axis.IsNearlyZero())
+	{
+		LogMoveInputSummary(TEXT("Ignored"), TEXT("ZeroAxis"), Axis);
+		return false;
+	}
+
+	const FRotator YawRot(0.f, RaidPC->GetControlRotation().Yaw, 0.f);
+	AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::X), Axis.Y);
+	AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y), Axis.X);
+	LastServerMoveInput = Axis;
+
+	LogMoveInputSummary(TEXT("Accepted"), bWasClamped ? TEXT("Clamped") : TEXT("OK"), Axis);
+	return true;
+}
+
+void ADrone::LogMoveInputSummary(const TCHAR* Result, const TCHAR* Reason, const FVector2D& Axis)
+{
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	const FName ResultName(Result ? Result : TEXT("Unknown"));
+	const FName ReasonName(Reason ? Reason : TEXT("None"));
+	const bool bSameSummary = LastMoveInputSummaryResult == ResultName
+		&& LastMoveInputSummaryReason == ReasonName;
+	if (bSameSummary && Now - LastMoveInputSummaryLogTime < MoveInputSummaryLogIntervalSeconds)
+	{
+		return;
+	}
+
+	LastMoveInputSummaryResult = ResultName;
+	LastMoveInputSummaryReason = ReasonName;
+	LastMoveInputSummaryLogTime = Now;
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveInput PC=%s Axis=%s Result=%s Reason=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		*Axis.ToString(),
+		Result ? Result : TEXT("Unknown"),
+		Reason ? Reason : TEXT("None"));
+}
+
+bool ADrone::CanAccumulateMoveDistanceForServer(FName& OutIgnoreReason) const
+{
+	OutIgnoreReason = NAME_None;
+	if (!HasAuthority())
+	{
+		OutIgnoreReason = FName(TEXT("NoAuthority"));
+		return false;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (!RaidPC || RaidPC->GetPawn() != this)
+	{
+		OutIgnoreReason = FName(TEXT("NoPawn"));
+		return false;
+	}
+
+	if (bIsDead)
+	{
+		OutIgnoreReason = FName(TEXT("Dead"));
+		return false;
+	}
+
+	if (RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
+	{
+		OutIgnoreReason = FName(TEXT("NotInBattle"));
+		return false;
+	}
+
+	if (const UWorld* World = GetWorld())
+	{
+		if (const ARaidGameState* RaidGameState = World->GetGameState<ARaidGameState>())
+		{
+			if (RaidGameState->RaidState == ERaidState::End)
+			{
+				OutIgnoreReason = FName(TEXT("RaidEnd"));
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+void ADrone::UpdateMoveDistanceForServer(float DeltaSeconds)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const FVector CurrentLocation = GetActorLocation();
+
+	FName IgnoreReason;
+	if (!CanAccumulateMoveDistanceForServer(IgnoreReason))
+	{
+		LastMoveDistanceLocation = CurrentLocation;
+		bHasMoveDistanceSample = true;
+		LogMoveDistanceIgnored(IgnoreReason);
+		return;
+	}
+
+	if (!bHasMoveDistanceSample)
+	{
+		LastMoveDistanceLocation = CurrentLocation;
+		bHasMoveDistanceSample = true;
+		LogMoveDistanceIgnored(FName(TEXT("FirstSample")));
+		return;
+	}
+
+	if (DeltaSeconds > MoveDistanceMaxDeltaSeconds)
+	{
+		LastMoveDistanceLocation = CurrentLocation;
+		LogMoveDistanceIgnored(FName(TEXT("Teleport")));
+		return;
+	}
+
+	const FVector PreviousLocation = LastMoveDistanceLocation;
+	const float DeltaMeters = FVector::Dist(CurrentLocation, PreviousLocation) * MoveDistanceCmToMeters;
+	LastMoveDistanceLocation = CurrentLocation;
+	if (DeltaMeters <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const float MaxSpeedCmPerSecond = FloatingMovement ? FMath::Max(0.0f, FloatingMovement->MaxSpeed) : 0.0f;
+	const float ExpectedMeters = MaxSpeedCmPerSecond * FMath::Max(DeltaSeconds, 0.0f) * MoveDistanceCmToMeters;
+	const float AllowedMeters = FMath::Max(MoveDistanceExpectedDeltaSlackMeters, ExpectedMeters * MoveDistanceExpectedDeltaMultiplier);
+	if (DeltaMeters > MoveDistanceHardMaxDeltaMeters || DeltaMeters > AllowedMeters)
+	{
+		LogMoveDistanceIgnored(FName(TEXT("TooLargeDelta")));
+		return;
+	}
+
+	VectorAccumulatedMoveDistanceMeters += DeltaMeters;
+	BoosterAccumulatedMoveDistanceMeters += DeltaMeters;
+
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (Now - LastMoveDistanceSummaryLogTime >= MoveDistanceSummaryLogIntervalSeconds)
+	{
+		LastMoveDistanceSummaryLogTime = Now;
+		const ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+		const TCHAR* StateLog = RaidPC
+			? ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState())
+			: TEXT("NoPawn");
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveAudit PC=%s CurrentLocation=%s LastLocation=%s DeltaMeters=%.2f State=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*CurrentLocation.ToString(),
+			*PreviousLocation.ToString(),
+			DeltaMeters,
+			StateLog);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveDistance PC=%s Delta=%.2f VectorTotal=%.2f BoosterTotal=%.2f State=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			DeltaMeters,
+			VectorAccumulatedMoveDistanceMeters,
+			BoosterAccumulatedMoveDistanceMeters,
+			StateLog);
+	}
+}
+
+void ADrone::ResetMoveDistanceForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	VectorAccumulatedMoveDistanceMeters = 0.0f;
+	BoosterAccumulatedMoveDistanceMeters = 0.0f;
+	LastMoveDistanceLocation = GetActorLocation();
+	bHasMoveDistanceSample = false;
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveDistanceReset PC=%s Reason=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString());
+}
+
+void ADrone::ResetVectorMoveDistanceForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	VectorAccumulatedMoveDistanceMeters = 0.0f;
+	LastMoveDistanceLocation = GetActorLocation();
+	bHasMoveDistanceSample = true;
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveDistanceReset PC=%s Reason=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		Reason.IsNone() ? TEXT("VectorAttack") : *Reason.ToString());
+}
+
+void ADrone::LogMoveDistanceIgnored(FName Reason)
+{
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (LastMoveDistanceIgnoredReason == Reason
+		&& Now - LastMoveDistanceIgnoredLogTime < MoveDistanceIgnoredLogIntervalSeconds)
+	{
+		return;
+	}
+
+	LastMoveDistanceIgnoredReason = Reason;
+	LastMoveDistanceIgnoredLogTime = Now;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveDistanceIgnored PC=%s Reason=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString());
+}
+
 float ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon)
 {
 	if (WeaponPartID.IsNone())
@@ -642,10 +979,8 @@ float ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWea
 
 	if (WeaponPartID == ADronePartInventory::GetVectorCannonPartID())
 	{
-		const int32 VectorBonusCount = FMath::FloorToInt(AccumulatedMoveDistanceMeters / 5.0f);
-		const float VectorBonusDamage = FMath::Min(static_cast<float>(VectorBonusCount), 8.0f);
-		AccumulatedMoveDistanceMeters = 0.0f;
-		return 7.0f + VectorBonusDamage;
+		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Vector Cannon: movement distance damage bonus not implemented yet"));
+		return 7.0f;
 	}
 
 	UE_LOG(LogTemp, Warning, TEXT("[Server] Weapon damage missing data: Part=%s treated as 0"), *WeaponPartID.ToString());
@@ -769,11 +1104,11 @@ void ADrone::ApplyDrainHealForServer(float DamageDealt)
 		bCapped ? TEXT("true") : TEXT("false"));
 }
 
-void ADrone::ResetCombatRuntimeStateForLoadout()
+void ADrone::ResetCombatRuntimeStateForReason(FName Reason)
 {
 	LeftPulseAttackCount = 0;
 	RightPulseAttackCount = 0;
-	AccumulatedMoveDistanceMeters = 0.0f;
+	ResetMoveDistanceForServer(Reason);
 }
 
 void ADrone::ClearEquippedPartsForServer()
@@ -788,7 +1123,6 @@ void ADrone::ClearEquippedPartsForServer()
 	EquippedLeftWeaponPartID = NAME_None;
 	EquippedRightWeaponPartID = NAME_None;
 	AttackPower = 0;
-	ResetCombatRuntimeStateForLoadout();
 	ForceNetUpdate();
 }
 
