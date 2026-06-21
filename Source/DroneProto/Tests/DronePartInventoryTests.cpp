@@ -87,6 +87,48 @@ FDroneSelectionTestContext CreateDroneReturnTestContext(
 
 	return Context;
 }
+
+bool PrepareBattleAttackTest(
+	FAutomationTestBase& Test,
+	FDroneSelectionTestContext& Context,
+	ARaidBoss*& OutBoss,
+	const TCHAR* ContextLabel)
+{
+	Test.TestNotNull(FString::Printf(TEXT("%s world is created"), ContextLabel), Context.World);
+	Test.TestNotNull(FString::Printf(TEXT("%s game state is spawned"), ContextLabel), Context.GameState);
+	Test.TestNotNull(FString::Printf(TEXT("%s player controller is spawned"), ContextLabel), Context.PC);
+	Test.TestNotNull(FString::Printf(TEXT("%s drone is spawned"), ContextLabel), Context.Drone);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone)
+	{
+		return false;
+	}
+
+	OutBoss = Context.World->SpawnActor<ARaidBoss>();
+	Test.TestNotNull(FString::Printf(TEXT("%s boss is spawned"), ContextLabel), OutBoss);
+	if (!OutBoss)
+	{
+		return false;
+	}
+
+	Context.GameState->SetRaidBossForServer(OutBoss);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	Test.TestEqual(FString::Printf(TEXT("%s player is InBattle"), ContextLabel),
+		Context.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	return true;
+}
+
+float AttackBossAndMeasureDamage(ADrone* Drone, const ARaidBoss* Boss)
+{
+	if (!Drone || !Boss)
+	{
+		return 0.0f;
+	}
+
+	const float HPBeforeAttack = Boss->GetCurrentHP();
+	Drone->RequestAttackBoss();
+	return HPBeforeAttack - Boss->GetCurrentHP();
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -828,6 +870,224 @@ bool FDroneAttackBossTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePulseLaserCombatTest,
+	"DroneProto.D7.Drone.PulseLaserCombat",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePulseLaserCombatTest::RunTest(const FString& Parameters)
+{
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+
+	FDroneSelectionTestContext SinglePulse = CreateDroneSelectionTestContext(TEXT("DronePulseSingleWorld"));
+	ARaidBoss* SingleBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, SinglePulse, SingleBoss, TEXT("single pulse")))
+	{
+		DestroyDroneSelectionTestContext(SinglePulse);
+		return false;
+	}
+
+	TestTrue(TEXT("single Pulse loadout applies"), SinglePulse.Drone->ApplyLoadout(NAME_None, PulseLaser, NAME_None));
+	TestTrue(TEXT("first Pulse attack deals base damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss), 8.0f, 0.01f));
+	TestEqual(TEXT("left Pulse count advances to 1"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 1);
+	TestTrue(TEXT("second Pulse attack deals base damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss), 8.0f, 0.01f));
+	TestEqual(TEXT("left Pulse count advances to 2"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 2);
+	TestTrue(TEXT("third Pulse attack deals strong damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss), 18.0f, 0.01f));
+	TestEqual(TEXT("third Pulse attack resets left count"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 0);
+
+	TestTrue(TEXT("new loadout resets Pulse count after partial chain"),
+		SinglePulse.Drone->ApplyLoadout(NAME_None, PulseLaser, NAME_None));
+	AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss);
+	AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss);
+	TestEqual(TEXT("left Pulse count reaches 2 before reset"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 2);
+	TestTrue(TEXT("reapplying loadout succeeds"), SinglePulse.Drone->ApplyLoadout(NAME_None, PulseLaser, NAME_None));
+	TestEqual(TEXT("new loadout clears left Pulse count"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 0);
+
+	AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss);
+	AttackBossAndMeasureDamage(SinglePulse.Drone, SingleBoss);
+	TestEqual(TEXT("left Pulse count reaches 2 before death"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 2);
+	SinglePulse.Drone->ApplyDamageForServer(SinglePulse.Drone->GetMaxHealth() + 10, FName(TEXT("Automation")));
+	TestTrue(TEXT("lethal damage marks Pulse test drone dead"), SinglePulse.Drone->IsDead());
+	TestEqual(TEXT("death clears left Pulse count"), SinglePulse.Drone->GetPulseAttackCountForTest(true), 0);
+	DestroyDroneSelectionTestContext(SinglePulse);
+
+	FDroneSelectionTestContext DoublePulse = CreateDroneSelectionTestContext(TEXT("DronePulseDoubleWorld"));
+	ARaidBoss* DoubleBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DoublePulse, DoubleBoss, TEXT("double pulse")))
+	{
+		DestroyDroneSelectionTestContext(DoublePulse);
+		return false;
+	}
+
+	TestTrue(TEXT("double Pulse loadout applies"),
+		DoublePulse.Drone->ApplyLoadout(NAME_None, PulseLaser, PulseLaser));
+	TestTrue(TEXT("double Pulse first attack deals two base hits"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(DoublePulse.Drone, DoubleBoss), 16.0f, 0.01f));
+	TestEqual(TEXT("left Pulse count advances independently to 1"),
+		DoublePulse.Drone->GetPulseAttackCountForTest(true),
+		1);
+	TestEqual(TEXT("right Pulse count advances independently to 1"),
+		DoublePulse.Drone->GetPulseAttackCountForTest(false),
+		1);
+	TestTrue(TEXT("double Pulse second attack deals two base hits"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(DoublePulse.Drone, DoubleBoss), 16.0f, 0.01f));
+	TestEqual(TEXT("left Pulse count advances independently to 2"),
+		DoublePulse.Drone->GetPulseAttackCountForTest(true),
+		2);
+	TestEqual(TEXT("right Pulse count advances independently to 2"),
+		DoublePulse.Drone->GetPulseAttackCountForTest(false),
+		2);
+	TestTrue(TEXT("double Pulse third attack deals two strong hits"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(DoublePulse.Drone, DoubleBoss), 36.0f, 0.01f));
+	TestEqual(TEXT("left Pulse strong hit resets only left count"),
+		DoublePulse.Drone->GetPulseAttackCountForTest(true),
+		0);
+	TestEqual(TEXT("right Pulse strong hit resets only right count"),
+		DoublePulse.Drone->GetPulseAttackCountForTest(false),
+		0);
+
+	AttackBossAndMeasureDamage(DoublePulse.Drone, DoubleBoss);
+	AttackBossAndMeasureDamage(DoublePulse.Drone, DoubleBoss);
+	TestEqual(TEXT("left Pulse count reaches 2 before RaidEnd"), DoublePulse.Drone->GetPulseAttackCountForTest(true), 2);
+	ARaidGameMode* GameMode = DoublePulse.World->SpawnActor<ARaidGameMode>();
+	TestNotNull(TEXT("raid end game mode is spawned"), GameMode);
+	if (GameMode)
+	{
+		DoublePulse.World->AddController(DoublePulse.PC);
+		GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
+		TestEqual(TEXT("RaidEnd clears left Pulse count"), DoublePulse.Drone->GetPulseAttackCountForTest(true), 0);
+		TestEqual(TEXT("RaidEnd clears right Pulse count"), DoublePulse.Drone->GetPulseAttackCountForTest(false), 0);
+	}
+
+	DestroyDroneSelectionTestContext(DoublePulse);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneFractureBurstCombatTest,
+	"DroneProto.D7.Drone.FractureBurstCombat",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneFractureBurstCombatTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneFractureBurstWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("fracture burst")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName FractureBurst = ADronePartInventory::GetFractureBurstPartID();
+	TestTrue(TEXT("single Fracture loadout applies"),
+		Context.Drone->ApplyLoadout(NAME_None, FractureBurst, NAME_None));
+	TestTrue(TEXT("single Fracture attack deals base plus shards"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 11.0f, 0.01f));
+
+	TestTrue(TEXT("Fracture plus Fracture with CORE_002 loadout applies"),
+		Context.Drone->ApplyLoadout(ADronePartInventory::GetCoreBoosterPartID(), FractureBurst, FractureBurst));
+	TestTrue(TEXT("Fracture plus Fracture sums to 22 before CORE_002 modifier and remains 20.90"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 20.90f, 0.01f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneZenithCoreCombatTest,
+	"DroneProto.D7.Drone.ZenithCoreCombat",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneZenithCoreCombatTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneZenithCoreWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("zenith core")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName ZenithCore = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("Zenith Pulse loadout applies"),
+		Context.Drone->ApplyLoadout(ZenithCore, PulseLaser, NAME_None));
+	TestTrue(TEXT("full HP Zenith applies 1.20 modifier"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 9.60f, 0.01f));
+
+	TestTrue(TEXT("Zenith Pulse loadout reapplies for half HP case"),
+		Context.Drone->ApplyLoadout(ZenithCore, PulseLaser, NAME_None));
+	Context.Drone->ApplyDamageForServer(50, FName(TEXT("Automation")));
+	TestEqual(TEXT("Zenith half HP setup reaches 50 HP"), Context.Drone->GetHealth(), 50);
+	TestTrue(TEXT("50 percent HP Zenith applies 1.10 modifier"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 8.80f, 0.01f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDrainCoreCombatTest,
+	"DroneProto.D7.Drone.DrainCoreCombat",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneDrainCoreWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("drain core")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName DrainCore = ADronePartInventory::GetCoreDrainPartID();
+	const FName FractureBurst = ADronePartInventory::GetFractureBurstPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+
+	TestTrue(TEXT("Drain Fracture plus Fracture loadout applies"),
+		Context.Drone->ApplyLoadout(DrainCore, FractureBurst, FractureBurst));
+	Context.Drone->ApplyDamageForServer(20, FName(TEXT("Automation")));
+	const float HPBeforeFractureDrain = Context.Drone->GetHealthValueForTest();
+	TestTrue(TEXT("Drain Fracture plus Fracture deals 18.70 damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 18.70f, 0.01f));
+	TestTrue(TEXT("Drain heals from total Fracture damage once per input"),
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.244f, 0.01f));
+
+	TestTrue(TEXT("Drain with empty weapons loadout applies"),
+		Context.Drone->ApplyLoadout(DrainCore, NAME_None, NAME_None));
+	Context.Drone->ApplyDamageForServer(10, FName(TEXT("Automation")));
+	const float HPBeforeZeroDamageDrain = Context.Drone->GetHealthValueForTest();
+	TestTrue(TEXT("Drain empty weapon attack deals zero damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 0.0f, 0.01f));
+	TestTrue(TEXT("zero damage Drain attack heals zero"),
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeZeroDamageDrain, 0.01f));
+
+	TestTrue(TEXT("Drain Pulse plus Pulse loadout applies"),
+		Context.Drone->ApplyLoadout(DrainCore, PulseLaser, PulseLaser));
+	Context.Drone->ApplyDamageForServer(50, FName(TEXT("Automation")));
+	AttackBossAndMeasureDamage(Context.Drone, Boss);
+	AttackBossAndMeasureDamage(Context.Drone, Boss);
+	const float HPBeforeStrongDrain = Context.Drone->GetHealthValueForTest();
+	TestTrue(TEXT("third Drain double Pulse attack deals capped-heal damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.60f, 0.01f));
+	TestTrue(TEXT("Drain heal is capped at 3 per attack input"),
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeStrongDrain + 3.0f, 0.01f));
+
+	TestTrue(TEXT("Drain max health cap loadout applies"),
+		Context.Drone->ApplyLoadout(DrainCore, FractureBurst, FractureBurst));
+	Context.Drone->ApplyDamageForServer(1, FName(TEXT("Automation")));
+	AttackBossAndMeasureDamage(Context.Drone, Boss);
+	TestTrue(TEXT("Drain never heals beyond MaxHealth"),
+		Context.Drone->GetHealthValueForTest() <= static_cast<float>(Context.Drone->GetMaxHealth()) + 0.01f);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneDeathReturnTest,
 	"DroneProto.D6.Drone.DeathReturnClearsEquippedSlots",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1202,6 +1462,14 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("TEXT(\"Dodge\")")));
 	TestTrue(TEXT("dead heal ignored marker exists"),
 		DroneSource.Contains(TEXT("TEXT(\"Heal\")")));
+	TestTrue(TEXT("Pulse attack summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] PulseAttack PC=")));
+	TestTrue(TEXT("Fracture attack summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] FractureAttack PC=")));
+	TestTrue(TEXT("Zenith bonus summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] ZenithBonus PC=")));
+	TestTrue(TEXT("Drain heal summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DrainHeal PC=")));
 	TestTrue(TEXT("timer text refresh interval marker exists"),
 		DronePartSelectWidgetSource.Contains(TEXT("TimerTextRefreshIntervalSeconds")));
 	TestTrue(TEXT("timer text refresh starts from the widget"),
