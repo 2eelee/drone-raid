@@ -58,6 +58,35 @@ FDroneSelectionTestContext CreateDroneSelectionTestContext(const TCHAR* WorldNam
 
 	return Context;
 }
+
+void DestroyDroneSelectionTestContext(FDroneSelectionTestContext& Context)
+{
+	if (Context.World)
+	{
+		Context.World->DestroyWorld(false);
+	}
+	Context = FDroneSelectionTestContext();
+}
+
+FDroneSelectionTestContext CreateDroneReturnTestContext(
+	const TCHAR* WorldName,
+	UDronePartReturnManager*& OutReturnManager)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(WorldName);
+	OutReturnManager = NewObject<UDronePartReturnManager>();
+
+	if (OutReturnManager && Context.Inventory)
+	{
+		OutReturnManager->Initialize(Context.Inventory);
+	}
+
+	if (Context.PC)
+	{
+		Context.PC->SetDronePartReturnManagerForTest(OutReturnManager);
+	}
+
+	return Context;
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -717,6 +746,297 @@ bool FDroneAttackBossTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDeathReturnTest,
+	"DroneProto.D6.Drone.DeathReturnClearsEquippedSlots",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* FullReturnManager = nullptr;
+	FDroneSelectionTestContext FullLoadout = CreateDroneReturnTestContext(TEXT("DroneDeathReturnFullLoadoutWorld"), FullReturnManager);
+	TestNotNull(TEXT("full loadout world is created"), FullLoadout.World);
+	TestNotNull(TEXT("full loadout inventory is spawned"), FullLoadout.Inventory);
+	TestNotNull(TEXT("full loadout player controller is spawned"), FullLoadout.PC);
+	TestNotNull(TEXT("full loadout drone is spawned"), FullLoadout.Drone);
+	TestNotNull(TEXT("full loadout return manager is created"), FullReturnManager);
+	if (!FullLoadout.World || !FullLoadout.Inventory || !FullLoadout.PC || !FullLoadout.Drone || !FullReturnManager)
+	{
+		DestroyDroneSelectionTestContext(FullLoadout);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	TestTrue(TEXT("full death test consumes selected core"), FullLoadout.Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("full death test consumes selected left weapon"), FullLoadout.Inventory->TryConsumePart(PulseLaser));
+	TestTrue(TEXT("full death test consumes selected right weapon"), FullLoadout.Inventory->TryConsumePart(VectorCannon));
+	FullLoadout.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	FullLoadout.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	FullLoadout.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+	FullLoadout.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("full loadout ready moves player to battle"),
+		FullLoadout.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("full loadout equips core before death"),
+		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		CoreZenith);
+	TestEqual(TEXT("full loadout equips left weapon before death"),
+		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		PulseLaser);
+	TestEqual(TEXT("full loadout equips right weapon before death"),
+		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		VectorCannon);
+
+	ARaidBoss* Boss = FullLoadout.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("boss is spawned for dead attack guard"), Boss);
+	if (Boss && FullLoadout.GameState)
+	{
+		FullLoadout.GameState->SetRaidBossForServer(Boss);
+	}
+
+	FullLoadout.Drone->ApplyDamageForServer(FullLoadout.Drone->GetMaxHealth() + 50, FName(TEXT("Automation")));
+
+	TestTrue(TEXT("lethal damage marks drone dead"), FullLoadout.Drone->IsDead());
+	TestEqual(TEXT("lethal damage clamps health to zero"), FullLoadout.Drone->GetHealth(), 0);
+	TestEqual(TEXT("death return clears equipped core slot"),
+		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("death return clears equipped left weapon slot"),
+		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("death return clears equipped right weapon slot"),
+		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("death return restores core stock"),
+		FullLoadout.Inventory->GetCurrentCount(CoreZenith),
+		FullLoadout.Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("death return restores left weapon stock"),
+		FullLoadout.Inventory->GetCurrentCount(PulseLaser),
+		FullLoadout.Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("death return restores right weapon stock"),
+		FullLoadout.Inventory->GetCurrentCount(VectorCannon),
+		FullLoadout.Inventory->GetMaxCount(VectorCannon));
+
+	const float BossHPAfterDeath = Boss ? Boss->GetCurrentHP() : 0.0f;
+	FullLoadout.Drone->RequestAttackBoss();
+	if (Boss)
+	{
+		TestTrue(TEXT("dead attack is ignored before boss damage"),
+			FMath::IsNearlyEqual(Boss->GetCurrentHP(), BossHPAfterDeath, 0.01f));
+	}
+	TestFalse(TEXT("dead dodge is ignored"), FullLoadout.Drone->RequestDodgeForServer());
+	TestFalse(TEXT("dead heal is ignored"), FullLoadout.Drone->HealForServer(50));
+	TestEqual(TEXT("dead heal does not revive the drone"), FullLoadout.Drone->GetHealth(), 0);
+
+	TestFalse(TEXT("logout after death skips because equipped slots were cleared"),
+		FullLoadout.PC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect));
+	TestEqual(TEXT("logout after death does not over-return core stock"),
+		FullLoadout.Inventory->GetCurrentCount(CoreZenith),
+		FullLoadout.Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("logout after death does not over-return left stock"),
+		FullLoadout.Inventory->GetCurrentCount(PulseLaser),
+		FullLoadout.Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("logout after death does not over-return right stock"),
+		FullLoadout.Inventory->GetCurrentCount(VectorCannon),
+		FullLoadout.Inventory->GetMaxCount(VectorCannon));
+	DestroyDroneSelectionTestContext(FullLoadout);
+
+	UDronePartReturnManager* EmptyReturnManager = nullptr;
+	FDroneSelectionTestContext EmptyLoadout = CreateDroneReturnTestContext(TEXT("DroneDeathReturnEmptyLoadoutWorld"), EmptyReturnManager);
+	TestNotNull(TEXT("empty loadout world is created"), EmptyLoadout.World);
+	TestNotNull(TEXT("empty loadout inventory is spawned"), EmptyLoadout.Inventory);
+	TestNotNull(TEXT("empty loadout player controller is spawned"), EmptyLoadout.PC);
+	TestNotNull(TEXT("empty loadout drone is spawned"), EmptyLoadout.Drone);
+	if (!EmptyLoadout.World || !EmptyLoadout.Inventory || !EmptyLoadout.PC || !EmptyLoadout.Drone)
+	{
+		DestroyDroneSelectionTestContext(EmptyLoadout);
+		return false;
+	}
+
+	const int32 EmptyPulseCountBeforeDeath = EmptyLoadout.Inventory->GetCurrentCount(PulseLaser);
+	EmptyLoadout.PC->Server_RequestReadyForRaid_Implementation();
+	EmptyLoadout.Drone->ApplyDamageForServer(999, FName(TEXT("Automation")));
+	TestTrue(TEXT("default drone can die without equipped parts"), EmptyLoadout.Drone->IsDead());
+	TestEqual(TEXT("default drone death does not change weapon stock"),
+		EmptyLoadout.Inventory->GetCurrentCount(PulseLaser),
+		EmptyPulseCountBeforeDeath);
+	TestFalse(TEXT("default drone death leaves equipped return as no-op"),
+		EmptyLoadout.PC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect));
+	DestroyDroneSelectionTestContext(EmptyLoadout);
+
+	UDronePartReturnManager* PartialReturnManager = nullptr;
+	FDroneSelectionTestContext PartialLoadout = CreateDroneReturnTestContext(TEXT("DroneDeathReturnPartialLoadoutWorld"), PartialReturnManager);
+	TestNotNull(TEXT("partial loadout world is created"), PartialLoadout.World);
+	TestNotNull(TEXT("partial loadout inventory is spawned"), PartialLoadout.Inventory);
+	TestNotNull(TEXT("partial loadout player controller is spawned"), PartialLoadout.PC);
+	TestNotNull(TEXT("partial loadout drone is spawned"), PartialLoadout.Drone);
+	if (!PartialLoadout.World || !PartialLoadout.Inventory || !PartialLoadout.PC || !PartialLoadout.Drone)
+	{
+		DestroyDroneSelectionTestContext(PartialLoadout);
+		return false;
+	}
+
+	TestTrue(TEXT("partial death test consumes one weapon"), PartialLoadout.Inventory->TryConsumePart(PulseLaser));
+	PartialLoadout.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	PartialLoadout.PC->Server_RequestReadyForRaid_Implementation();
+	PartialLoadout.Drone->ApplyDamageForServer(999, FName(TEXT("Automation")));
+	TestTrue(TEXT("partial loadout drone dies"), PartialLoadout.Drone->IsDead());
+	TestEqual(TEXT("partial death clears left weapon only"),
+		PartialLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("partial death leaves empty core slot empty"),
+		PartialLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("partial death restores the one equipped weapon"),
+		PartialLoadout.Inventory->GetCurrentCount(PulseLaser),
+		PartialLoadout.Inventory->GetMaxCount(PulseLaser));
+	DestroyDroneSelectionTestContext(PartialLoadout);
+
+	UDronePartReturnManager* DuplicateReturnManager = nullptr;
+	FDroneSelectionTestContext DuplicateLoadout = CreateDroneReturnTestContext(TEXT("DroneDeathReturnDuplicateWeaponWorld"), DuplicateReturnManager);
+	TestNotNull(TEXT("duplicate loadout world is created"), DuplicateLoadout.World);
+	TestNotNull(TEXT("duplicate loadout inventory is spawned"), DuplicateLoadout.Inventory);
+	TestNotNull(TEXT("duplicate loadout player controller is spawned"), DuplicateLoadout.PC);
+	TestNotNull(TEXT("duplicate loadout drone is spawned"), DuplicateLoadout.Drone);
+	if (!DuplicateLoadout.World || !DuplicateLoadout.Inventory || !DuplicateLoadout.PC || !DuplicateLoadout.Drone)
+	{
+		DestroyDroneSelectionTestContext(DuplicateLoadout);
+		return false;
+	}
+
+	TestTrue(TEXT("duplicate death test consumes first left/right weapon"), DuplicateLoadout.Inventory->TryConsumePart(PulseLaser));
+	TestTrue(TEXT("duplicate death test consumes second left/right weapon"), DuplicateLoadout.Inventory->TryConsumePart(PulseLaser));
+	DuplicateLoadout.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	DuplicateLoadout.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, PulseLaser);
+	DuplicateLoadout.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("duplicate weapons consume two stock entries before death"),
+		DuplicateLoadout.Inventory->GetCurrentCount(PulseLaser),
+		DuplicateLoadout.Inventory->GetMaxCount(PulseLaser) - 2);
+
+	DuplicateLoadout.Drone->ApplyDamageForServer(999, FName(TEXT("Automation")));
+	TestTrue(TEXT("duplicate weapon drone dies"), DuplicateLoadout.Drone->IsDead());
+	TestEqual(TEXT("duplicate death clears left duplicate weapon"),
+		DuplicateLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("duplicate death clears right duplicate weapon"),
+		DuplicateLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("duplicate left/right weapons return exactly two stock entries without exceeding max"),
+		DuplicateLoadout.Inventory->GetCurrentCount(PulseLaser),
+		DuplicateLoadout.Inventory->GetMaxCount(PulseLaser));
+	DestroyDroneSelectionTestContext(DuplicateLoadout);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEndReturnTest,
+	"DroneProto.D6.RaidGameMode.RaidEndReturnClearsInBattlePlayers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEndReturnTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("RaidEndReturnTestWorld")));
+	TestNotNull(TEXT("raid end test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
+	ARaidGameState* GameState = World->SpawnActor<ARaidGameState>();
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	ARaidPlayerController* BattlePC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* BattleDrone = World->SpawnActor<ADrone>();
+	ARaidPlayerController* SelectingPC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* SelectingDrone = World->SpawnActor<ADrone>();
+
+	TestNotNull(TEXT("raid end game mode is spawned"), GameMode);
+	TestNotNull(TEXT("raid end game state is spawned"), GameState);
+	TestNotNull(TEXT("raid end inventory is spawned"), Inventory);
+	TestNotNull(TEXT("battle player controller is spawned"), BattlePC);
+	TestNotNull(TEXT("battle drone is spawned"), BattleDrone);
+	TestNotNull(TEXT("selecting player controller is spawned"), SelectingPC);
+	TestNotNull(TEXT("selecting drone is spawned"), SelectingDrone);
+	if (!GameMode || !GameState || !Inventory || !BattlePC || !BattleDrone || !SelectingPC || !SelectingDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetDronePartInventory(Inventory);
+	World->AddController(BattlePC);
+	World->AddController(SelectingPC);
+	BattlePC->Possess(BattleDrone);
+	SelectingPC->Possess(SelectingDrone);
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	TestTrue(TEXT("battle raid end test consumes left weapon"), Inventory->TryConsumePart(PulseLaser));
+	TestTrue(TEXT("battle raid end test consumes right weapon"), Inventory->TryConsumePart(VectorCannon));
+	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+	BattlePC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("battle player is InBattle before RaidEnd"),
+		BattlePC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+
+	TestTrue(TEXT("selecting raid end test consumes selected core"), Inventory->TryConsumePart(CoreZenith));
+	SelectingPC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	TestEqual(TEXT("selecting player stays Selecting before RaidEnd"),
+		SelectingPC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+
+	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
+
+	TestEqual(TEXT("RaidEnd clears battle left weapon"),
+		BattlePC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd clears battle right weapon"),
+		BattlePC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd returns battle left weapon stock"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("RaidEnd returns battle right weapon stock"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon));
+	TestEqual(TEXT("RaidEnd does not return selecting player's selected core"),
+		Inventory->GetCurrentCount(CoreZenith),
+		Inventory->GetMaxCount(CoreZenith) - 1);
+	TestEqual(TEXT("RaidEnd leaves selecting player's selected core intact"),
+		SelectingPC->GetSelectedPartIDBySlot(EPartSlot::Core),
+		CoreZenith);
+
+	BattlePC->SetDronePartReturnManagerForTest(GameMode->GetDronePartReturnManager());
+	TestFalse(TEXT("logout after RaidEnd skips because equipped slots were cleared"),
+		BattlePC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect));
+	TestEqual(TEXT("logout after RaidEnd does not over-return left weapon"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("logout after RaidEnd does not over-return right weapon"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon));
+
+	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("AutomationRetry")));
+	TestEqual(TEXT("second RaidEnd does not over-return left weapon"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("second RaidEnd does not over-return right weapon"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon));
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneRaidSummaryLogSourceTest,
 	"DroneProto.D5.ManualSummaryLogs.SourceMarkers",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -757,7 +1077,7 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("ready summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] Ready PC=")));
 	TestTrue(TEXT("return summary log marker exists"),
-		DronePartReturnManagerSource.Contains(TEXT("[DR_SUMMARY] Return PC=")));
+		DronePartReturnManagerSource.Contains(TEXT("ToReturnSummaryLogName")));
 	TestTrue(TEXT("attack summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack PC=")));
 	TestTrue(TEXT("attack ignored summary log marker exists"),
@@ -773,7 +1093,27 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("ui refresh summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] UIRefresh PC=")));
 	TestTrue(TEXT("death return summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] DeathReturn PC=")));
+		DronePartReturnManagerSource.Contains(TEXT("DeathReturn")));
+	TestTrue(TEXT("drone damage summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DroneDamage PC=")));
+	TestTrue(TEXT("drone death summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DroneDeath PC=")));
+	TestTrue(TEXT("raid end summary log marker exists"),
+		RaidGameModeSource.Contains(TEXT("[DR_SUMMARY] RaidEnd Reason=")));
+	TestTrue(TEXT("raid end return summary log marker exists"),
+		DronePartReturnManagerSource.Contains(TEXT("RaidEndReturn")));
+	TestTrue(TEXT("return skipped summary log marker exists"),
+		DronePartReturnManagerSource.Contains(TEXT("[DR_SUMMARY] ReturnSkipped PC=")));
+	TestTrue(TEXT("dead input ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DeadInputIgnored PC=")));
+	TestTrue(TEXT("dead attack ignored marker exists"),
+		DroneSource.Contains(TEXT("TEXT(\"Attack\")")));
+	TestTrue(TEXT("dead move ignored marker exists"),
+		DroneSource.Contains(TEXT("TEXT(\"Move\")")));
+	TestTrue(TEXT("dead dodge ignored marker exists"),
+		DroneSource.Contains(TEXT("TEXT(\"Dodge\")")));
+	TestTrue(TEXT("dead heal ignored marker exists"),
+		DroneSource.Contains(TEXT("TEXT(\"Heal\")")));
 	TestTrue(TEXT("timer text refresh interval marker exists"),
 		DronePartSelectWidgetSource.Contains(TEXT("TimerTextRefreshIntervalSeconds")));
 	TestTrue(TEXT("timer text refresh starts from the widget"),

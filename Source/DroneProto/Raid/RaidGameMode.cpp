@@ -79,12 +79,7 @@ void ARaidGameMode::BeginPlay()
 		}
 	}
 
-	if (GS->GetDronePartInventory() && !DronePartReturnManager)
-	{
-		DronePartReturnManager = NewObject<UDronePartReturnManager>(this);
-		DronePartReturnManager->Initialize(GS->GetDronePartInventory());
-		UE_LOG(LogTemp, Log, TEXT("[Server] DronePartReturnManager initialized"));
-	}
+	EnsureDronePartReturnManagerForServer();
 
 	if (!GS->GetRaidBoss())
 	{
@@ -120,6 +115,33 @@ void ARaidGameMode::BeginPlay()
 			UE_LOG(LogTemp, Warning, TEXT("[Server] RaidBoss spawn failed"));
 		}
 	}
+}
+
+bool ARaidGameMode::EnsureDronePartReturnManagerForServer()
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	if (DronePartReturnManager)
+	{
+		return true;
+	}
+
+	UWorld* World = GetWorld();
+	ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	ADronePartInventory* Inventory = GS ? GS->GetDronePartInventory() : nullptr;
+	if (!Inventory)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] DronePartReturnManager init skipped: DronePartInventory is missing"));
+		return false;
+	}
+
+	DronePartReturnManager = NewObject<UDronePartReturnManager>(this);
+	DronePartReturnManager->Initialize(Inventory);
+	UE_LOG(LogTemp, Log, TEXT("[Server] DronePartReturnManager initialized"));
+	return true;
 }
 
 void ARaidGameMode::PostLogin(APlayerController* NewPlayer)
@@ -248,14 +270,14 @@ void ARaidGameMode::Logout(AController* Exiting)
 	Super::Logout(Exiting);
 }
 
-void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd()
+void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 {
 	if (!HasAuthority())
 	{
 		return;
 	}
 
-	if (!DronePartReturnManager)
+	if (!EnsureDronePartReturnManagerForServer())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Server] RaidEnd return skipped: DronePartReturnManager is missing"));
 		return;
@@ -267,16 +289,46 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd()
 		return;
 	}
 
+	const FString ReasonText = Reason.IsNone() ? TEXT("Manual") : Reason.ToString();
+	int32 EligiblePlayerCount = 0;
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
 		{
-			RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::RaidEnd);
+			const EPlayerSelectionState SelectionState = RaidPC->GetPlayerSelectionState();
+			if (SelectionState == EPlayerSelectionState::InBattle || SelectionState == EPlayerSelectionState::Locked)
+			{
+				EligiblePlayerCount++;
+			}
 		}
 	}
 
-	// TODO(D5 RaidEnd): call this from the final raid end state transition when that flow exists.
-	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd equipped part return completed"));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEnd Reason=%s PlayerCount=%d"),
+		*ReasonText,
+		EligiblePlayerCount);
+
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
+		{
+			const EPlayerSelectionState SelectionState = RaidPC->GetPlayerSelectionState();
+			if (SelectionState != EPlayerSelectionState::InBattle && SelectionState != EPlayerSelectionState::Locked)
+			{
+				continue;
+			}
+
+			DronePartReturnManager->ReturnEquippedParts(RaidPC, EDronePartReturnReason::RaidEnd);
+		}
+	}
+
+	if (ARaidGameState* GS = World->GetGameState<ARaidGameState>())
+	{
+		GS->SetRaidStateForServer(ERaidState::End);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd equipped part return completed Reason=%s PlayerCount=%d"),
+		*ReasonText,
+		EligiblePlayerCount);
 }
 
 UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const

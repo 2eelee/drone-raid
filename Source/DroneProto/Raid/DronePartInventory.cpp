@@ -79,7 +79,7 @@ bool ADronePartInventory::ReturnDronePart(FName PartID)
 		ForceNetUpdate();
 	}
 
-	return Stock->CurrentCount > PreviousCount;
+	return true;
 }
 
 void ADronePartInventory::ReturnPart(FName PartID)

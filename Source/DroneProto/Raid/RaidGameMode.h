@@ -21,11 +21,13 @@ public:
 	virtual void Logout(AController* Exiting) override;
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid")
-	void ReturnAllEquippedPartsForRaidEnd();
+	void ReturnAllEquippedPartsForRaidEnd(FName Reason);
 
 	UDronePartReturnManager* GetDronePartReturnManager() const;
 
 private:
 	UPROPERTY()
 	UDronePartReturnManager* DronePartReturnManager = nullptr;
+
+	bool EnsureDronePartReturnManagerForServer();
 };

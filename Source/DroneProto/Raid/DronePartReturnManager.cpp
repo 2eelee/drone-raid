@@ -41,6 +41,19 @@ const TCHAR* ToReturnReasonLogString(EDronePartReturnReason Reason)
 		return TEXT("Unknown");
 	}
 }
+
+const TCHAR* ToReturnSummaryLogName(EDronePartReturnReason Reason)
+{
+	switch (Reason)
+	{
+	case EDronePartReturnReason::Death:
+		return TEXT("DeathReturn");
+	case EDronePartReturnReason::RaidEnd:
+		return TEXT("RaidEndReturn");
+	default:
+		return TEXT("Return");
+	}
+}
 }
 
 void UDronePartReturnManager::Initialize(ADronePartInventory* InInventory)
@@ -73,6 +86,9 @@ bool UDronePartReturnManager::ReturnSingleSelectedPart(ARaidPlayerController* PC
 		UE_LOG(LogTemp, Log, TEXT("ReturnPart Skipped: Slot empty Slot=%s Reason=%s"),
 			ToReturnSlotLogString(Slot),
 			ToReturnReasonLogString(Reason));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnSkipped PC=%s Reason=AlreadyEmpty Slot=%s"),
+			*BuildPlayerID(PC),
+			ToReturnSlotLogString(Slot));
 		return false;
 	}
 
@@ -82,7 +98,8 @@ bool UDronePartReturnManager::ReturnSingleSelectedPart(ARaidPlayerController* PC
 		return false;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Return PC=%s Source=SelectedParts Part=%s Slot=%s Count=%d/%d Reason=%s"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] %s PC=%s Part=%s Slot=%s Count=%d/%d Result=Success Reason=%s"),
+		ToReturnSummaryLogName(Reason),
 		*BuildPlayerID(PC),
 		*PartID.ToString(),
 		ToReturnSlotLogString(Slot),
@@ -101,6 +118,9 @@ bool UDronePartReturnManager::ReturnSingleEquippedPart(ARaidPlayerController* PC
 		UE_LOG(LogTemp, Log, TEXT("ReturnPart Skipped: Slot empty Slot=%s Reason=%s"),
 			ToReturnSlotLogString(Slot),
 			ToReturnReasonLogString(Reason));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnSkipped PC=%s Reason=AlreadyEmpty Slot=%s"),
+			*BuildPlayerID(PC),
+			ToReturnSlotLogString(Slot));
 		return false;
 	}
 
@@ -110,7 +130,8 @@ bool UDronePartReturnManager::ReturnSingleEquippedPart(ARaidPlayerController* PC
 		return false;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Return PC=%s Source=EquippedParts Part=%s Slot=%s Count=%d/%d Reason=%s"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] %s PC=%s Part=%s Slot=%s Count=%d/%d Result=Success Reason=%s"),
+		ToReturnSummaryLogName(Reason),
 		*BuildPlayerID(PC),
 		*PartID.ToString(),
 		ToReturnSlotLogString(Slot),

@@ -25,6 +25,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
 	void RequestAttackBoss();
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
+	void ApplyDamageForServer(int32 DamageAmount, FName Reason);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
+	bool HealForServer(int32 HealAmount);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
+	bool RequestDodgeForServer();
+
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	int32 GetHealth() const;
 
@@ -33,6 +42,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	int32 GetAttackPower() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
+	bool IsDead() const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -59,10 +71,14 @@ private:
 	UPROPERTY(Replicated)
 	int32 AttackPower = 0;
 
+	UPROPERTY(ReplicatedUsing = OnRep_IsDead)
 	bool bIsDead = false;
 
 	UFUNCTION()
 	void OnRep_Health();
+
+	UFUNCTION()
+	void OnRep_IsDead();
 
 	// ---- Enhanced Input ----
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
@@ -102,6 +118,8 @@ private:
 	void RecalculateStats();
 	void HandleDeath();
 	void HandleAttackBossForServer();
+	void ClearEquippedPartsForServer();
+	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	float CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon);
 	float GetCoreAttackModifierForServer(FName CorePartID) const;
 	float GetCoreBonusAttackModifierForServer(FName CorePartID) const;

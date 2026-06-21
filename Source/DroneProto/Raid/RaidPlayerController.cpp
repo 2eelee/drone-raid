@@ -243,6 +243,16 @@ void ARaidPlayerController::RequestReadyForRaidFromUI()
 	Server_RequestReadyForRaid();
 }
 
+void ARaidPlayerController::RequestApplyTestDamageToDrone(int32 DamageAmount)
+{
+	Server_RequestApplyTestDamageToDrone(DamageAmount);
+}
+
+void ARaidPlayerController::RequestRaidEndReturnTest(FName Reason)
+{
+	Server_RequestRaidEndReturnTest(Reason);
+}
+
 FName ARaidPlayerController::GetSelectedCorePartID() const
 {
 	return SelectedCorePartID;
@@ -731,6 +741,44 @@ void ARaidPlayerController::Server_RequestStartSelectionTimer_Implementation()
 	StartSelectionTimerForServer();
 }
 
+void ARaidPlayerController::Server_RequestApplyTestDamageToDrone_Implementation(int32 DamageAmount)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (ADrone* ControlledDrone = Cast<ADrone>(GetPawn()))
+	{
+		ControlledDrone->ApplyDamageForServer(DamageAmount, FName(TEXT("D6Test")));
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] D6 test damage skipped: Player=%s Pawn is not ADrone"),
+			*BuildControllerLogString(this));
+	}
+}
+
+void ARaidPlayerController::Server_RequestRaidEndReturnTest_Implementation(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		if (ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>())
+		{
+			RaidGameMode->ReturnAllEquippedPartsForRaidEnd(Reason.IsNone() ? FName(TEXT("D6Test")) : Reason);
+			return;
+		}
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[Server] D6 raid end return skipped: RaidGameMode missing Player=%s"),
+		*BuildControllerLogString(this));
+}
+
 void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 	EPartSlot Slot,
 	FName PartID,
@@ -832,6 +880,18 @@ void ARaidPlayerController::D4CancelPart(FString SlotName)
 	Server_RequestCancelPart(Slot);
 }
 
+void ARaidPlayerController::D6KillDrone()
+{
+	Server_RequestApplyTestDamageToDrone(999999);
+}
+
+void ARaidPlayerController::D6RaidEndReturn(FString ReasonText)
+{
+	ReasonText.TrimStartAndEndInline();
+	const FName Reason = ReasonText.IsEmpty() ? FName(TEXT("Manual")) : FName(*ReasonText);
+	Server_RequestRaidEndReturnTest(Reason);
+}
+
 ADronePartInventory* ARaidPlayerController::GetDronePartInventory() const
 {
 	if (const UWorld* World = GetWorld())
@@ -878,6 +938,13 @@ ADronePartInventory* ARaidPlayerController::GetDronePartInventory() const
 
 UDronePartReturnManager* ARaidPlayerController::GetDronePartReturnManager() const
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestDronePartReturnManager)
+	{
+		return TestDronePartReturnManager;
+	}
+#endif
+
 	if (const UWorld* World = GetWorld())
 	{
 		if (ARaidGameMode* GM = World->GetAuthGameMode<ARaidGameMode>())
@@ -888,6 +955,13 @@ UDronePartReturnManager* ARaidPlayerController::GetDronePartReturnManager() cons
 
 	return nullptr;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+void ARaidPlayerController::SetDronePartReturnManagerForTest(UDronePartReturnManager* InReturnManager)
+{
+	TestDronePartReturnManager = InReturnManager;
+}
+#endif
 
 bool ARaidPlayerController::RefreshDronePartInventoryBinding()
 {

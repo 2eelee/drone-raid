@@ -159,6 +159,12 @@ void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 // autonomous proxy가 로컬에서 이동 (서버 권한 이동 없음 — TODO 참조)
 void ADrone::Move(const FInputActionValue& Value)
 {
+	if (bIsDead)
+	{
+		LogDeadInputIgnored(TEXT("Move"));
+		return;
+	}
+
 	const FVector2D Axis = Value.Get<FVector2D>();
 	if (!GetController())
 		return;
@@ -174,16 +180,100 @@ float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 	if (!HasAuthority())
 		return 0.f;
 
+	if (bIsDead)
+	{
+		return 0.f;
+	}
+
 	const float Applied = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
-	Health = FMath::Max(0, Health - FMath::RoundToInt(Applied));
-	UE_LOG(LogTemp, Log, TEXT("[Server] TakeDamage: Health=%d"), Health);
+	ApplyDamageForServer(FMath::RoundToInt(Applied), FName(TEXT("TakeDamage")));
+
+	return Applied;
+}
+
+void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ApplyDamageForServer rejected: server authority required"));
+		return;
+	}
+
+	if (bIsDead)
+	{
+		return;
+	}
+
+	const int32 AppliedDamage = FMath::Max(0, DamageAmount);
+	if (AppliedDamage <= 0)
+	{
+		return;
+	}
+
+	Health = FMath::Clamp(Health - AppliedDamage, 0, MaxHealth);
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDamage PC=%s Drone=%s Damage=%d HP=%d/%d"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		*GetName(),
+		AppliedDamage,
+		Health,
+		MaxHealth);
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] DroneDamage: Drone=%s Reason=%s Health=%d/%d"),
+		*GetName(),
+		Reason.IsNone() ? TEXT("None") : *Reason.ToString(),
+		Health,
+		MaxHealth);
 
 	if (Health <= 0)
 	{
 		HandleDeath();
 	}
+}
 
-	return Applied;
+bool ADrone::HealForServer(int32 HealAmount)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] HealForServer rejected: server authority required"));
+		return false;
+	}
+
+	if (bIsDead)
+	{
+		LogDeadInputIgnored(TEXT("Heal"));
+		return false;
+	}
+
+	const int32 AppliedHeal = FMath::Max(0, HealAmount);
+	if (AppliedHeal <= 0)
+	{
+		return false;
+	}
+
+	const int32 PreviousHealth = Health;
+	Health = FMath::Clamp(Health + AppliedHeal, 0, MaxHealth);
+	ForceNetUpdate();
+	return Health > PreviousHealth;
+}
+
+bool ADrone::RequestDodgeForServer()
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] RequestDodgeForServer rejected: server authority required"));
+		return false;
+	}
+
+	if (bIsDead)
+	{
+		LogDeadInputIgnored(TEXT("Dodge"));
+		return false;
+	}
+
+	UE_LOG(LogTemp, VeryVerbose, TEXT("[Server] Dodge request accepted for future implementation: Drone=%s"), *GetName());
+	return true;
 }
 
 bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID)
@@ -262,6 +352,8 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 	EquippedRightWeaponPartID = ResolvedRightWeaponPartID;
 	ResetCombatRuntimeStateForLoadout();
 	RecalculateStats();
+	bIsDead = false;
+	ForceNetUpdate();
 	UE_LOG(LogTemp, Log, TEXT("[Server] ApplyLoadout Success: Core=%s Left=%s Right=%s MaxHealth=%d AttackPower=%d"),
 		*EquippedCorePartID.ToString(),
 		*EquippedLeftWeaponPartID.ToString(),
@@ -303,6 +395,11 @@ int32 ADrone::GetAttackPower() const
 	return AttackPower;
 }
 
+bool ADrone::IsDead() const
+{
+	return bIsDead;
+}
+
 void ADrone::OnRep_Health()
 {
 	if (GEngine)
@@ -313,12 +410,22 @@ void ADrone::OnRep_Health()
 	}
 }
 
+void ADrone::OnRep_IsDead()
+{
+	if (GEngine && bIsDead)
+	{
+		GEngine->AddOnScreenDebugMessage(-1, 4.f, FColor::Red,
+			FString::Printf(TEXT("[Client] Drone dead: %s"), *GetName()));
+	}
+}
+
 void ADrone::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ADrone, Health);
 	DOREPLIFETIME(ADrone, MaxHealth);
 	DOREPLIFETIME(ADrone, AttackPower);
+	DOREPLIFETIME(ADrone, bIsDead);
 }
 
 void ADrone::ServerEquipPart(TSubclassOf<UDronePart> PartClass)
@@ -363,20 +470,33 @@ void ADrone::HandleDeath()
 	}
 
 	bIsDead = true;
+	Health = 0;
+	ForceNetUpdate();
 
 	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
 	{
 		const FName CorePartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::Core);
 		const FName LeftWeaponPartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon);
 		const FName RightWeaponPartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon);
-		const bool bReturnedAny = RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Death);
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DeathReturn PC=%s Source=EquippedParts Core=%s Left=%s Right=%s Result=%s"),
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDeath PC=%s Drone=%s Reason=HPZero Core=%s Left=%s Right=%s"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
 			*CorePartID.ToString(),
 			*LeftWeaponPartID.ToString(),
-			*RightWeaponPartID.ToString(),
-			bReturnedAny ? TEXT("Success") : TEXT("Skipped"));
+			*RightWeaponPartID.ToString());
+		RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Death);
 	}
+	else
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDeath PC=%s Drone=%s Reason=HPZero Core=%s Left=%s Right=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			*EquippedCorePartID.ToString(),
+			*EquippedLeftWeaponPartID.ToString(),
+			*EquippedRightWeaponPartID.ToString());
+	}
+
+	ClearEquippedPartsForServer();
 
 	// TODO(D5 UI): show drone death state when the combat death UI flow exists.
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone death handled: equipped parts returned"));
@@ -400,7 +520,7 @@ void ADrone::HandleAttackBossForServer()
 
 	if (bIsDead)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Server] Drone ZAttack rejected: Drone=%s Reason=Dead"), *GetName());
+		LogDeadInputIgnored(TEXT("Attack"));
 		return;
 	}
 
@@ -557,4 +677,27 @@ void ADrone::ResetCombatRuntimeStateForLoadout()
 	LeftPulseAttackCount = 0;
 	RightPulseAttackCount = 0;
 	AccumulatedMoveDistanceMeters = 0.0f;
+}
+
+void ADrone::ClearEquippedPartsForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	EquippedParts.Reset();
+	EquippedCorePartID = NAME_None;
+	EquippedLeftWeaponPartID = NAME_None;
+	EquippedRightWeaponPartID = NAME_None;
+	AttackPower = 0;
+	ResetCombatRuntimeStateForLoadout();
+	ForceNetUpdate();
+}
+
+void ADrone::LogDeadInputIgnored(const TCHAR* ActionName) const
+{
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DeadInputIgnored PC=%s Action=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		ActionName ? ActionName : TEXT("Unknown"));
 }

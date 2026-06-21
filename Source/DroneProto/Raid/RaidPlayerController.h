@@ -58,6 +58,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Drone Parts")
 	void RequestReadyForRaidFromUI();
 
+	UFUNCTION(BlueprintCallable, Category = "Raid|Test")
+	void RequestApplyTestDamageToDrone(int32 DamageAmount);
+
+	UFUNCTION(BlueprintCallable, Category = "Raid|Test")
+	void RequestRaidEndReturnTest(FName Reason);
+
 	UFUNCTION(BlueprintPure, Category = "Drone Parts")
 	FName GetSelectedCorePartID() const;
 
@@ -147,6 +153,10 @@ public:
 	bool ReturnSingleEquippedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	void HandleSelectionTimerExpiredForServer();
 
+#if WITH_DEV_AUTOMATION_TESTS
+	void SetDronePartReturnManagerForTest(UDronePartReturnManager* InReturnManager);
+#endif
+
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Drone Parts")
 	void Server_RequestSelectPart(EPartSlot Slot, FName NewPartID);
 
@@ -159,6 +169,12 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Raid")
 	void Server_RequestStartSelectionTimer();
 
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Raid|Test")
+	void Server_RequestApplyTestDamageToDrone(int32 DamageAmount);
+
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Raid|Test")
+	void Server_RequestRaidEndReturnTest(FName Reason);
+
 	UFUNCTION(Client, Reliable, Category = "Drone Parts")
 	void Client_NotifyPartSelectionResult(EPartSlot Slot, FName PartID, bool bSuccess, const FString& Reason);
 
@@ -170,6 +186,12 @@ public:
 
 	UFUNCTION(Exec)
 	void D4CancelPart(FString SlotName);
+
+	UFUNCTION(Exec)
+	void D6KillDrone();
+
+	UFUNCTION(Exec)
+	void D6RaidEndReturn(FString ReasonText);
 
 protected:
 	virtual void BeginPlay() override;
@@ -208,6 +230,10 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<ADronePartInventory> BoundDronePartInventory = nullptr;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	UDronePartReturnManager* TestDronePartReturnManager = nullptr;
+#endif
 
 	FTimerHandle SelectionTimerHandle;
 
