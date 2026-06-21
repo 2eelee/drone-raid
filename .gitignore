@@ -510,4 +510,6 @@ CLAUDE.md
 .claude/
 
 # 로컬 문서
-docs/
+docs/*
+!docs/DEVLOG.md
+!docs/D4_D5_SHARED_INVENTORY_TEST.md
