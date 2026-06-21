@@ -1088,6 +1088,238 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneServerMoveInputAuthorityTest,
+	"DroneProto.D8.Drone.ServerMoveInputAuthority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneServerMoveInputAuthorityTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneServerMoveInputAuthorityWorld"));
+	TestNotNull(TEXT("move input world is created"), Context.World);
+	TestNotNull(TEXT("move input player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("move input drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestEqual(TEXT("move input test starts Selecting"),
+		Context.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestFalse(TEXT("Selecting pawn move input is ignored by server"),
+		Context.Drone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("ignored move input keeps last accepted axis zero"),
+		Context.Drone->GetLastServerMoveInputForTest().IsNearlyZero());
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("ready player is InBattle before server move input"),
+		Context.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+
+	TestTrue(TEXT("InBattle alive pawn move input is accepted"),
+		Context.Drone->ApplyMoveInputForServerForTest(FVector2D(3.0f, 4.0f)));
+	TestTrue(TEXT("server clamps move input vector length to one"),
+		FMath::IsNearlyEqual(Context.Drone->GetLastServerMoveInputForTest().Size(), 1.0f, 0.001f));
+
+	Context.PC->UnPossess();
+	TestFalse(TEXT("unpossessed drone move input is ignored"),
+		Context.Drone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("unpossessed ignored input clears last server axis"),
+		Context.Drone->GetLastServerMoveInputForTest().IsNearlyZero());
+
+	Context.PC->Possess(Context.Drone);
+	Context.Drone->ApplyDamageForServer(Context.Drone->GetMaxHealth() + 10, FName(TEXT("Automation")));
+	TestTrue(TEXT("move input test drone is dead"), Context.Drone->IsDead());
+	TestFalse(TEXT("Dead pawn move input is ignored by server"),
+		Context.Drone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneMoveDistanceAccumulationTest,
+	"DroneProto.D8.Drone.MoveDistanceAccumulation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneMoveDistanceAccumulationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneMoveDistanceAccumulationWorld"));
+	TestNotNull(TEXT("move distance world is created"), Context.World);
+	TestNotNull(TEXT("move distance player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("move distance drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+	Context.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Spawn")));
+	Context.Drone->SetActorLocation(FVector(100.0f, 0.0f, 0.0f));
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	TestTrue(TEXT("first server location sample is ignored"),
+		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("Selecting movement is not accumulated"),
+		FMath::IsNearlyZero(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("move distance player is InBattle"),
+		Context.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	Context.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Possess")));
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	Context.Drone->SetActorLocation(FVector(100.0f, 0.0f, 0.0f));
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.10f);
+	TestTrue(TEXT("InBattle alive movement accumulates Vector meters"),
+		FMath::IsNearlyEqual(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 1.0f, 0.001f));
+	TestTrue(TEXT("InBattle alive movement accumulates Booster meters separately"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.0f, 0.001f));
+
+	Context.Drone->SetActorLocation(FVector(150.0f, 0.0f, 0.0f));
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.10f);
+	TestTrue(TEXT("second normal move adds to Vector total"),
+		FMath::IsNearlyEqual(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+	TestTrue(TEXT("second normal move adds to Booster total"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+
+	Context.Drone->SetActorLocation(FVector(100000.0f, 0.0f, 0.0f));
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	TestTrue(TEXT("TooLargeDelta is ignored for Vector total"),
+		FMath::IsNearlyEqual(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+	TestTrue(TEXT("TooLargeDelta is ignored for Booster total"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+
+	Context.Drone->SetActorLocation(FVector(100100.0f, 0.0f, 0.0f));
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.50f);
+	TestTrue(TEXT("hitch delta time is ignored for Vector total"),
+		FMath::IsNearlyEqual(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+	TestTrue(TEXT("hitch delta time is ignored for Booster total"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+
+	Context.Drone->ResetVectorMoveDistanceForServerForTest(FName(TEXT("VectorAttack")));
+	TestTrue(TEXT("Vector reset clears only Vector total"),
+		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("Vector reset does not clear Booster total"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.5f, 0.001f));
+
+	Context.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Loadout")));
+	TestTrue(TEXT("full move distance reset clears Vector total"),
+		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("full move distance reset clears Booster total"),
+		FMath::IsNearlyZero(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneMoveDistanceResetTest,
+	"DroneProto.D8.Drone.MoveDistanceReset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneMoveDistanceResetTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* DeathReturnManager = nullptr;
+	FDroneSelectionTestContext DeathContext = CreateDroneReturnTestContext(
+		TEXT("DroneMoveDistanceDeathResetWorld"),
+		DeathReturnManager);
+	TestNotNull(TEXT("death reset world is created"), DeathContext.World);
+	TestNotNull(TEXT("death reset player controller is spawned"), DeathContext.PC);
+	TestNotNull(TEXT("death reset drone is spawned"), DeathContext.Drone);
+	if (!DeathContext.World || !DeathContext.PC || !DeathContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(DeathContext);
+		return false;
+	}
+
+	DeathContext.PC->Server_RequestReadyForRaid_Implementation();
+	DeathContext.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Possess")));
+	DeathContext.Drone->SetActorLocation(FVector::ZeroVector);
+	DeathContext.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	DeathContext.Drone->SetActorLocation(FVector(200.0f, 0.0f, 0.0f));
+	DeathContext.Drone->UpdateMoveDistanceForServerForTest(0.10f);
+	TestTrue(TEXT("death reset setup accumulates movement"),
+		DeathContext.Drone->GetVectorAccumulatedMoveDistanceForTest() > 0.0f);
+	DeathContext.Drone->ApplyDamageForServer(DeathContext.Drone->GetMaxHealth() + 10, FName(TEXT("Automation")));
+	TestTrue(TEXT("death reset drone dies"), DeathContext.Drone->IsDead());
+	TestTrue(TEXT("death resets Vector movement distance"),
+		FMath::IsNearlyZero(DeathContext.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("death resets Booster movement distance"),
+		FMath::IsNearlyZero(DeathContext.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+	DestroyDroneSelectionTestContext(DeathContext);
+
+	UDronePartReturnManager* RaidEndReturnManager = nullptr;
+	FDroneSelectionTestContext RaidEndContext = CreateDroneReturnTestContext(
+		TEXT("DroneMoveDistanceRaidEndResetWorld"),
+		RaidEndReturnManager);
+	TestNotNull(TEXT("raid end reset world is created"), RaidEndContext.World);
+	TestNotNull(TEXT("raid end reset player controller is spawned"), RaidEndContext.PC);
+	TestNotNull(TEXT("raid end reset drone is spawned"), RaidEndContext.Drone);
+	if (!RaidEndContext.World || !RaidEndContext.PC || !RaidEndContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(RaidEndContext);
+		return false;
+	}
+
+	RaidEndContext.PC->Server_RequestReadyForRaid_Implementation();
+	RaidEndContext.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Possess")));
+	RaidEndContext.Drone->SetActorLocation(FVector::ZeroVector);
+	RaidEndContext.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	RaidEndContext.Drone->SetActorLocation(FVector(300.0f, 0.0f, 0.0f));
+	RaidEndContext.Drone->UpdateMoveDistanceForServerForTest(0.10f);
+	TestTrue(TEXT("raid end reset setup accumulates movement"),
+		RaidEndContext.Drone->GetBoosterAccumulatedMoveDistanceForTest() > 0.0f);
+	if (ARaidGameMode* GameMode = RaidEndContext.World->SpawnActor<ARaidGameMode>())
+	{
+		RaidEndContext.World->AddController(RaidEndContext.PC);
+		GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
+	}
+	TestTrue(TEXT("RaidEnd resets Vector movement distance"),
+		FMath::IsNearlyZero(RaidEndContext.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("RaidEnd resets Booster movement distance"),
+		FMath::IsNearlyZero(RaidEndContext.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+
+	RaidEndContext.Drone->SetActorLocation(FVector::ZeroVector);
+	RaidEndContext.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	RaidEndContext.Drone->SetActorLocation(FVector(100.0f, 0.0f, 0.0f));
+	RaidEndContext.Drone->UpdateMoveDistanceForServerForTest(0.10f);
+	TestTrue(TEXT("RaidEnd state keeps later movement from accumulating"),
+		FMath::IsNearlyZero(RaidEndContext.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	DestroyDroneSelectionTestContext(RaidEndContext);
+
+	FDroneSelectionTestContext LoadoutContext = CreateDroneSelectionTestContext(TEXT("DroneMoveDistanceLoadoutResetWorld"));
+	TestNotNull(TEXT("loadout reset world is created"), LoadoutContext.World);
+	TestNotNull(TEXT("loadout reset player controller is spawned"), LoadoutContext.PC);
+	TestNotNull(TEXT("loadout reset drone is spawned"), LoadoutContext.Drone);
+	if (!LoadoutContext.World || !LoadoutContext.PC || !LoadoutContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(LoadoutContext);
+		return false;
+	}
+
+	LoadoutContext.PC->Server_RequestReadyForRaid_Implementation();
+	LoadoutContext.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Possess")));
+	LoadoutContext.Drone->SetActorLocation(FVector::ZeroVector);
+	LoadoutContext.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	LoadoutContext.Drone->SetActorLocation(FVector(100.0f, 0.0f, 0.0f));
+	LoadoutContext.Drone->UpdateMoveDistanceForServerForTest(0.10f);
+	TestTrue(TEXT("new loadout reset setup accumulates movement"),
+		LoadoutContext.Drone->GetVectorAccumulatedMoveDistanceForTest() > 0.0f);
+	TestTrue(TEXT("reapplying loadout resets Vector movement distance"),
+		LoadoutContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetFractureBurstPartID(), NAME_None));
+	TestTrue(TEXT("new loadout resets Vector movement distance"),
+		FMath::IsNearlyZero(LoadoutContext.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("new loadout resets Booster movement distance"),
+		FMath::IsNearlyZero(LoadoutContext.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+
+	DestroyDroneSelectionTestContext(LoadoutContext);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneDeathReturnTest,
 	"DroneProto.D6.Drone.DeathReturnClearsEquippedSlots",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1470,6 +1702,18 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("[DR_SUMMARY] ZenithBonus PC=")));
 	TestTrue(TEXT("Drain heal summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] DrainHeal PC=")));
+	TestTrue(TEXT("move input summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveInput PC=")));
+	TestTrue(TEXT("move audit summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveAudit PC=")));
+	TestTrue(TEXT("move distance summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveDistance PC=")));
+	TestTrue(TEXT("move distance ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveDistanceIgnored PC=")));
+	TestTrue(TEXT("move distance reset summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveDistanceReset PC=")));
+	TestTrue(TEXT("drone movement replication is explicit"),
+		DroneSource.Contains(TEXT("SetReplicateMovement(true)")));
 	TestTrue(TEXT("timer text refresh interval marker exists"),
 		DronePartSelectWidgetSource.Contains(TEXT("TimerTextRefreshIntervalSeconds")));
 	TestTrue(TEXT("timer text refresh starts from the widget"),
