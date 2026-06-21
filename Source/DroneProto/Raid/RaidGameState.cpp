@@ -1,5 +1,6 @@
 #include "RaidGameState.h"
 #include "DronePartInventory.h"
+#include "RaidBoss.h"
 #include "RaidPlayerController.h"
 #include "Engine/World.h"
 #include "Net/UnrealNetwork.h"
@@ -47,6 +48,7 @@ ARaidGameState::ARaidGameState()
 	RaidState = ERaidState::Waiting;
 	CurrentPlayers = 0;
 	DronePartInventory = nullptr;
+	RaidBoss = nullptr;
 }
 
 void ARaidGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -55,11 +57,17 @@ void ARaidGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ARaidGameState, RaidState);
 	DOREPLIFETIME(ARaidGameState, CurrentPlayers);
 	DOREPLIFETIME(ARaidGameState, DronePartInventory);
+	DOREPLIFETIME(ARaidGameState, RaidBoss);
 }
 
 ADronePartInventory* ARaidGameState::GetDronePartInventory() const
 {
 	return DronePartInventory.Get();
+}
+
+ARaidBoss* ARaidGameState::GetRaidBoss() const
+{
+	return RaidBoss.Get();
 }
 
 void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
@@ -102,6 +110,25 @@ void ARaidGameState::SetDronePartInventory(ADronePartInventory* InDronePartInven
 		*BuildInventoryReplicationDebugString(DronePartInventory.Get()));
 }
 
+void ARaidGameState::SetRaidBossForServer(ARaidBoss* InRaidBoss)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetRaidBossForServer rejected: GameState has no authority"));
+		return;
+	}
+
+	RaidBoss = InRaidBoss;
+	if (RaidBoss)
+	{
+		RaidBoss->ForceNetUpdate();
+	}
+
+	ForceNetUpdate();
+	UE_LOG(LogTemp, Log, TEXT("[Server] RaidBoss assigned to GameState: %s"),
+		RaidBoss ? *RaidBoss->GetName() : TEXT("None"));
+}
+
 void ARaidGameState::OnRep_RaidState()
 {
 	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %d"), static_cast<int32>(RaidState));
@@ -116,6 +143,12 @@ void ARaidGameState::OnRep_DronePartInventory()
 
 	BindDronePartInventoryEvents();
 	NotifyLocalPartSelectUIRefresh(TEXT("GameState.OnRep_DronePartInventory"));
+}
+
+void ARaidGameState::OnRep_RaidBoss()
+{
+	UE_LOG(LogTemp, Log, TEXT("[Client] OnRep_RaidBoss: %s"),
+		RaidBoss ? *RaidBoss->GetName() : TEXT("None"));
 }
 
 void ARaidGameState::HandleDronePartStocksChanged()

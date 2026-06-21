@@ -130,32 +130,32 @@ bool ADronePartInventory::GetPartType(FName PartID, EDronePartType& OutType) con
 
 FName ADronePartInventory::GetCoreZenithPartID()
 {
-	return TEXT("CORE_ZENITH");
+	return TEXT("CORE_001");
 }
 
 FName ADronePartInventory::GetCoreBoosterPartID()
 {
-	return TEXT("CORE_BOOSTER");
+	return TEXT("CORE_002");
 }
 
 FName ADronePartInventory::GetCoreDrainPartID()
 {
-	return TEXT("CORE_DRAIN");
+	return TEXT("CORE_003");
 }
 
 FName ADronePartInventory::GetPulseLaserPartID()
 {
-	return TEXT("WPN_PULSE_LASER");
+	return TEXT("WEAPON_001");
 }
 
 FName ADronePartInventory::GetFractureBurstPartID()
 {
-	return TEXT("WPN_FRACTURE_BURST");
+	return TEXT("WEAPON_002");
 }
 
 FName ADronePartInventory::GetVectorCannonPartID()
 {
-	return TEXT("WPN_VECTOR_CANNON");
+	return TEXT("WEAPON_003");
 }
 
 void ADronePartInventory::OnRep_PartStocks()
@@ -179,12 +179,12 @@ void ADronePartInventory::OnRep_PartStocks()
 void ADronePartInventory::InitializeDefaultStocks()
 {
 	PartStocks = {
-		{ GetCoreZenithPartID(), EDronePartType::Core, 1, 1 },
-		{ GetCoreBoosterPartID(), EDronePartType::Core, 2, 2 },
-		{ GetCoreDrainPartID(), EDronePartType::Core, 2, 2 },
-		{ GetPulseLaserPartID(), EDronePartType::Weapon, 3, 3 },
-		{ GetFractureBurstPartID(), EDronePartType::Weapon, 3, 3 },
-		{ GetVectorCannonPartID(), EDronePartType::Weapon, 3, 3 }
+		{ GetCoreZenithPartID(), EDronePartType::Core, 5, 5 },
+		{ GetCoreBoosterPartID(), EDronePartType::Core, 6, 6 },
+		{ GetCoreDrainPartID(), EDronePartType::Core, 5, 5 },
+		{ GetPulseLaserPartID(), EDronePartType::Weapon, 11, 11 },
+		{ GetFractureBurstPartID(), EDronePartType::Weapon, 10, 10 },
+		{ GetVectorCannonPartID(), EDronePartType::Weapon, 11, 11 }
 	};
 }
 

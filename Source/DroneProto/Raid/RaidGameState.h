@@ -5,6 +5,7 @@
 #include "RaidGameState.generated.h"
 
 class ADronePartInventory;
+class ARaidBoss;
 
 UENUM(BlueprintType)
 enum class ERaidState : uint8
@@ -34,10 +35,17 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_DronePartInventory, BlueprintReadOnly, Category = "Raid")
 	TObjectPtr<ADronePartInventory> DronePartInventory;
 
+	UPROPERTY(ReplicatedUsing = OnRep_RaidBoss, BlueprintReadOnly, Category = "Raid")
+	TObjectPtr<ARaidBoss> RaidBoss;
+
 	UFUNCTION(BlueprintPure, Category = "Raid")
 	ADronePartInventory* GetDronePartInventory() const;
 
+	UFUNCTION(BlueprintPure, Category = "Raid")
+	ARaidBoss* GetRaidBoss() const;
+
 	void SetDronePartInventory(ADronePartInventory* InDronePartInventory);
+	void SetRaidBossForServer(ARaidBoss* InRaidBoss);
 	void SetRaidStateForServer(ERaidState NewRaidState);
 
 private:
@@ -46,6 +54,9 @@ private:
 
 	UFUNCTION()
 	void OnRep_DronePartInventory();
+
+	UFUNCTION()
+	void OnRep_RaidBoss();
 
 	UFUNCTION()
 	void HandleDronePartStocksChanged();

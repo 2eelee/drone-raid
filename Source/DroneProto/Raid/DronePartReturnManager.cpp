@@ -82,6 +82,14 @@ bool UDronePartReturnManager::ReturnSingleSelectedPart(ARaidPlayerController* PC
 		return false;
 	}
 
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Return PC=%s Source=SelectedParts Part=%s Slot=%s Count=%d/%d Reason=%s"),
+		*BuildPlayerID(PC),
+		*PartID.ToString(),
+		ToReturnSlotLogString(Slot),
+		Inventory ? Inventory->GetCurrentCount(PartID) : 0,
+		Inventory ? Inventory->GetMaxCount(PartID) : 0,
+		ToReturnReasonLogString(Reason));
+
 	PC->SetSelectedPartIDForSlotForServer(Slot, NAME_None);
 	return true;
 }
@@ -101,6 +109,14 @@ bool UDronePartReturnManager::ReturnSingleEquippedPart(ARaidPlayerController* PC
 	{
 		return false;
 	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Return PC=%s Source=EquippedParts Part=%s Slot=%s Count=%d/%d Reason=%s"),
+		*BuildPlayerID(PC),
+		*PartID.ToString(),
+		ToReturnSlotLogString(Slot),
+		Inventory ? Inventory->GetCurrentCount(PartID) : 0,
+		Inventory ? Inventory->GetMaxCount(PartID) : 0,
+		ToReturnReasonLogString(Reason));
 
 	PC->SetEquippedPartIDForSlotForServer(Slot, NAME_None);
 	return true;
@@ -214,15 +230,5 @@ void UDronePartReturnManager::SaveReturnLog(
 
 FString UDronePartReturnManager::BuildPlayerID(const ARaidPlayerController* PC) const
 {
-	if (!PC)
-	{
-		return TEXT("None");
-	}
-
-	if (const APlayerState* PS = PC->PlayerState)
-	{
-		return FString::Printf(TEXT("%s:%d"), *PS->GetPlayerName(), PS->GetPlayerId());
-	}
-
-	return PC->GetName();
+	return ARaidPlayerController::BuildStableControllerLogString(PC);
 }

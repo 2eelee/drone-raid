@@ -5,6 +5,7 @@
 #include "DronePartReturnManager.h"
 #include "Blueprint/UserWidget.h"
 #include "GameFramework/PlayerController.h"
+#include "TimerManager.h"
 #include "RaidPlayerController.generated.h"
 
 class ADronePartInventory;
@@ -15,6 +16,14 @@ class UDronePartReturnManager;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnPartSelectionResult, EPartSlot, Slot, FName, PartID, bool, bSuccess, FString, Reason);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSelectedPartsChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPartSelectUIRefreshRequested);
+
+UENUM(BlueprintType)
+enum class EPlayerSelectionState : uint8
+{
+	Selecting UMETA(DisplayName = "Selecting"),
+	Locked    UMETA(DisplayName = "Locked"),
+	InBattle  UMETA(DisplayName = "InBattle"),
+};
 
 UCLASS()
 class DRONEPROTO_API ARaidPlayerController : public APlayerController
@@ -71,6 +80,21 @@ public:
 	FName GetEquippedPartIDBySlot(EPartSlot Slot) const;
 
 	UFUNCTION(BlueprintPure, Category = "Drone Parts")
+	EPlayerSelectionState GetPlayerSelectionState() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone Parts")
+	EPlayerSelectionState GetCurrentSelectionState() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone Parts")
+	bool IsSelectionLocked() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone Parts")
+	float GetSelectionRemainingTime() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone Parts")
+	float GetSelectionEndServerTime() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone Parts")
 	TArray<FName> GetAvailablePartIDsForSlot(EDronePartSlot Slot) const;
 
 	UFUNCTION(BlueprintPure, Category = "Drone Parts")
@@ -94,6 +118,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UI")
 	int32 GetPartMaxCount(FName PartID) const;
 
+	static FString BuildStableControllerLogString(const AController* Controller);
+	static const TCHAR* SelectionStateToLogString(EPlayerSelectionState State);
+
 	UFUNCTION(BlueprintPure, Category = "Drone Parts")
 	ADronePartInventory* GetDronePartInventory() const;
 
@@ -109,12 +136,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void HideDronePartSelectUI();
 
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void RefreshSelectionUI();
+
 	void SetSelectedPartIDForSlotForServer(EPartSlot Slot, FName PartID);
 	void SetEquippedPartIDForSlotForServer(EPartSlot Slot, FName PartID);
 	bool ReturnSelectedPartsForServer(EDronePartReturnReason Reason);
 	bool ReturnEquippedPartsForServer(EDronePartReturnReason Reason);
 	bool ReturnSingleSelectedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	bool ReturnSingleEquippedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
+	void HandleSelectionTimerExpiredForServer();
 
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Drone Parts")
 	void Server_RequestSelectPart(EPartSlot Slot, FName NewPartID);
@@ -124,6 +155,9 @@ public:
 
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Raid")
 	void Server_RequestReadyForRaid();
+
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Raid")
+	void Server_RequestStartSelectionTimer();
 
 	UFUNCTION(Client, Reliable, Category = "Drone Parts")
 	void Client_NotifyPartSelectionResult(EPartSlot Slot, FName PartID, bool bSuccess, const FString& Reason);
@@ -139,8 +173,18 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 private:
+	static constexpr float SelectionDurationSeconds = 15.0f;
+
+	UPROPERTY(ReplicatedUsing = OnRep_PlayerSelectionState, VisibleInstanceOnly, BlueprintReadOnly, Category = "Drone Parts", meta = (AllowPrivateAccess = "true"))
+	EPlayerSelectionState PlayerSelectionState = EPlayerSelectionState::Selecting;
+
+	UPROPERTY(ReplicatedUsing = OnRep_SelectionEndServerTime, VisibleInstanceOnly, BlueprintReadOnly, Category = "Drone Parts", meta = (AllowPrivateAccess = "true"))
+	float SelectionEndServerTime = 0.0f;
+
 	UPROPERTY(VisibleInstanceOnly, Category = "Drone Parts")
 	FName SelectedCorePartID = NAME_None;
 
@@ -165,6 +209,8 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<ADronePartInventory> BoundDronePartInventory = nullptr;
 
+	FTimerHandle SelectionTimerHandle;
+
 	FName* GetSelectedPartIDForSlot(EPartSlot Slot);
 	const FName* GetSelectedPartIDForSlot(EPartSlot Slot) const;
 	FName* GetEquippedPartIDForSlot(EPartSlot Slot);
@@ -175,7 +221,18 @@ private:
 	bool TryParsePartSlot(const FString& SlotName, EPartSlot& OutSlot) const;
 	bool ValidateSelectedLoadoutForServer(FString& OutReason) const;
 	void MoveSelectedPartsToEquippedForServer();
+	void SetPlayerSelectionStateForServer(EPlayerSelectionState NewState);
+	float GetSelectionServerTimeSeconds() const;
+	void StartSelectionTimerForServer();
+	void StopSelectionTimerForServer(const FString& Reason, bool bLogSummary);
+	bool ProcessReadyForRaidForServer(bool bAutoReady);
 
 	UFUNCTION()
 	void HandleDronePartStocksChanged();
+
+	UFUNCTION()
+	void OnRep_PlayerSelectionState();
+
+	UFUNCTION()
+	void OnRep_SelectionEndServerTime();
 };

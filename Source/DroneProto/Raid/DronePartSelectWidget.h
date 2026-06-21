@@ -2,11 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "DronePart.h"
+#include "RaidPlayerController.h"
 #include "Blueprint/UserWidget.h"
 #include "TimerManager.h"
 #include "DronePartSelectWidget.generated.h"
 
-class ARaidPlayerController;
 class UButton;
 class UImage;
 class UTextBlock;
@@ -41,6 +41,24 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void CancelFocusedPart();
 
+	UFUNCTION(BlueprintPure, Category = "UI")
+	float GetSelectionRemainingTime() const;
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	EPlayerSelectionState GetCurrentSelectionState() const;
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FName GetSelectedCorePartID() const;
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FName GetSelectedLeftWeaponPartID() const;
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	FName GetSelectedRightWeaponPartID() const;
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	bool IsSelectionLocked() const;
+
 	UFUNCTION(BlueprintImplementableEvent, Category = "UI")
 	void OnPartStockChangedForUI();
 
@@ -52,6 +70,9 @@ protected:
 private:
 	UFUNCTION()
 	void HandlePartSelectUIRefreshRequested();
+
+	UFUNCTION()
+	void HandlePartSelectionResult(EPartSlot PartSlot, FName PartID, bool bSuccess, FString Reason);
 
 	UFUNCTION()
 	void RetryRefreshFromController();
@@ -102,6 +123,21 @@ private:
 	TObjectPtr<UTextBlock> Text_FocusedSlot = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> TimerText = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> CoreSelectedText = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> LeftWeaponSelectedText = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> RightWeaponSelectedText = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ResultText = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UImage> Image_Core = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
@@ -143,14 +179,20 @@ private:
 	TArray<FName> WeaponPartIDs;
 
 	FTimerHandle RefreshRetryTimerHandle;
+	FTimerHandle TimerTextRefreshTimerHandle;
 	int32 RefreshRetryCount = 0;
 	static constexpr int32 MaxRefreshRetryCount = 10;
 	static constexpr float RefreshRetryDelaySeconds = 0.2f;
+	static constexpr float TimerTextRefreshIntervalSeconds = 0.1f;
 
 	void InitializeCandidatesFromController();
 	void SyncPreviewIndicesToSelection();
 	void BindButtonEvents();
 	void UnbindButtonEvents();
+	void StartTimerTextRefresh();
+	void StopTimerTextRefresh();
+	void RefreshTimerText();
+	bool ShouldRefreshTimerText() const;
 	void SetFocusedSlot(EDronePartSlot NewFocusedSlot);
 	void RefreshSlot(EDronePartSlot PartSlot, FName PartID, UTextBlock* DescriptionText, UTextBlock* CountText, UImage* Image) const;
 	int32& GetMutablePreviewIndexForSlot(EDronePartSlot PartSlot);

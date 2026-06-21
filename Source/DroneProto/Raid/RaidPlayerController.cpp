@@ -4,7 +4,9 @@
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
 #include "Engine/World.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
+#include "Net/UnrealNetwork.h"
 
 namespace
 {
@@ -21,6 +23,35 @@ const TCHAR* ToSelectionSlotLogString(EPartSlot Slot)
 	default:
 		return TEXT("Unknown");
 	}
+}
+
+const TCHAR* ToPlayerSelectionStateLogString(EPlayerSelectionState State)
+{
+	return ARaidPlayerController::SelectionStateToLogString(State);
+}
+
+const TCHAR* ToRaidStateLogString(ERaidState State)
+{
+	switch (State)
+	{
+	case ERaidState::Waiting:
+		return TEXT("Waiting");
+	case ERaidState::Drafting:
+		return TEXT("Drafting");
+	case ERaidState::Battle:
+		return TEXT("Battle");
+	case ERaidState::End:
+		return TEXT("End");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+FString GetRaidStateLogString(const APlayerController* PC)
+{
+	const UWorld* World = PC ? PC->GetWorld() : nullptr;
+	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	return RaidGameState ? ToRaidStateLogString(RaidGameState->RaidState) : TEXT("None");
 }
 
 const TCHAR* ToNetModeLogString(ENetMode NetMode)
@@ -59,17 +90,7 @@ const TCHAR* ToRaidPCNetRoleLogString(ENetRole Role)
 
 FString BuildControllerLogString(const APlayerController* PC)
 {
-	if (!PC)
-	{
-		return TEXT("None");
-	}
-
-	if (const APlayerState* PS = PC->PlayerState)
-	{
-		return FString::Printf(TEXT("%s:%d"), *PS->GetPlayerName(), PS->GetPlayerId());
-	}
-
-	return PC->GetName();
+	return ARaidPlayerController::BuildStableControllerLogString(PC);
 }
 
 FString BuildInventoryLookupDebugString(const ADronePartInventory* Inventory)
@@ -179,10 +200,32 @@ void ARaidPlayerController::BeginPlay()
 	//   URaidSessionSubsystem* SS = GI ? GI->GetSubsystem<URaidSessionSubsystem>() : nullptr;
 	//   if (LoadTimedOut || !GetPawn()) { if (SS) SS->ShowLoadFailed(); ReturnToLobby(); }   // TODO
 
+	if (HasAuthority())
+	{
+		StartSelectionTimerForServer();
+	}
+
 	if (bAutoShowDronePartSelectUI)
 	{
 		ShowDronePartSelectUI();
 	}
+}
+
+void ARaidPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (HasAuthority())
+	{
+		StopSelectionTimerForServer(TEXT("EndPlay"), false);
+	}
+
+	Super::EndPlay(EndPlayReason);
+}
+
+void ARaidPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ARaidPlayerController, PlayerSelectionState);
+	DOREPLIFETIME_CONDITION(ARaidPlayerController, SelectionEndServerTime, COND_OwnerOnly);
 }
 
 void ARaidPlayerController::RequestSelectPartFromUI(EDronePartSlot Slot, FName PartID)
@@ -243,6 +286,37 @@ FName ARaidPlayerController::GetEquippedPartIDBySlot(EPartSlot Slot) const
 	}
 
 	return NAME_None;
+}
+
+EPlayerSelectionState ARaidPlayerController::GetPlayerSelectionState() const
+{
+	return PlayerSelectionState;
+}
+
+EPlayerSelectionState ARaidPlayerController::GetCurrentSelectionState() const
+{
+	return PlayerSelectionState;
+}
+
+bool ARaidPlayerController::IsSelectionLocked() const
+{
+	return PlayerSelectionState != EPlayerSelectionState::Selecting;
+}
+
+float ARaidPlayerController::GetSelectionRemainingTime() const
+{
+	if (PlayerSelectionState != EPlayerSelectionState::Selecting || SelectionEndServerTime <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	const float RemainingTime = SelectionEndServerTime - GetSelectionServerTimeSeconds();
+	return FMath::Clamp(RemainingTime, 0.0f, SelectionDurationSeconds);
+}
+
+float ARaidPlayerController::GetSelectionEndServerTime() const
+{
+	return SelectionEndServerTime;
 }
 
 TArray<FName> ARaidPlayerController::GetAvailablePartIDsForSlot(EDronePartSlot Slot) const
@@ -317,6 +391,42 @@ int32 ARaidPlayerController::GetPartMaxCount(FName PartID) const
 	return 0;
 }
 
+FString ARaidPlayerController::BuildStableControllerLogString(const AController* Controller)
+{
+	if (!Controller)
+	{
+		return TEXT("None");
+	}
+
+	const FString ControllerName = GetNameSafe(Controller);
+	if (const APlayerState* PS = Controller->PlayerState)
+	{
+		FString PlayerName = PS->GetPlayerName();
+		PlayerName.TrimStartAndEndInline();
+		if (!PlayerName.IsEmpty())
+		{
+			return FString::Printf(TEXT("%s:%d"), *PlayerName, PS->GetPlayerId());
+		}
+	}
+
+	return ControllerName.IsEmpty() ? Controller->GetPathName() : ControllerName;
+}
+
+const TCHAR* ARaidPlayerController::SelectionStateToLogString(EPlayerSelectionState State)
+{
+	switch (State)
+	{
+	case EPlayerSelectionState::Selecting:
+		return TEXT("Selecting");
+	case EPlayerSelectionState::Locked:
+		return TEXT("Locked");
+	case EPlayerSelectionState::InBattle:
+		return TEXT("InBattle");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
 void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Slot, FName NewPartID)
 {
 	if (!HasAuthority())
@@ -325,12 +435,47 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 	}
 
 	const FString PlayerLog = BuildControllerLogString(this);
+	const FString RaidStateLog = GetRaidStateLogString(this);
+	const auto LogSelectSummary = [this, Slot, &PlayerLog, &RaidStateLog](FName PartID, bool bSuccess, const FString& Reason)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Select PC=%s Slot=%s Part=%s Result=%s Reason=%s Count=%d/%d SelectionState=%s RaidState=%s"),
+			*PlayerLog,
+			ToSelectionSlotLogString(Slot),
+			*PartID.ToString(),
+			bSuccess ? TEXT("Success") : TEXT("Fail"),
+			*Reason,
+			GetPartCurrentCount(PartID),
+			GetPartMaxCount(PartID),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*RaidStateLog);
+	};
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] SelectPart Request: Player=%s Slot=%s NewPart=%s PlayerSelectionState=%s RaidState=%s"),
+		*PlayerLog,
+		ToSelectionSlotLogString(Slot),
+		*NewPartID.ToString(),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*RaidStateLog);
+
+	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] SelectPart Failed: Player=%s Slot=%s NewPart=%s Reason=Selection locked PlayerSelectionState=%s RaidState=%s"),
+			*PlayerLog,
+			ToSelectionSlotLogString(Slot),
+			*NewPartID.ToString(),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*RaidStateLog);
+		LogSelectSummary(NewPartID, false, TEXT("Selection locked"));
+		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Selection locked"));
+		return;
+	}
 
 	if (NewPartID.IsNone())
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Server] SelectPart Failed: Player=%s Slot=%s PreviousPart=None NewPart=None Reason=PartID is None"),
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot));
+		LogSelectSummary(NewPartID, false, TEXT("PartID is None. Use cancel."));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("PartID is None. Use cancel."));
 		return;
 	}
@@ -342,6 +487,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot),
 			*NewPartID.ToString());
+		LogSelectSummary(NewPartID, false, TEXT("Invalid slot"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Invalid slot"));
 		return;
 	}
@@ -356,6 +502,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			*NewPartID.ToString(),
 			GetPartCurrentCount(NewPartID),
 			GetPartMaxCount(NewPartID));
+		LogSelectSummary(NewPartID, true, TEXT("Already selected"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, true, TEXT("Already selected"));
 		return;
 	}
@@ -368,6 +515,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString());
+		LogSelectSummary(NewPartID, false, TEXT("Inventory not ready"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Inventory not ready"));
 		return;
 	}
@@ -380,6 +528,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString());
+		LogSelectSummary(NewPartID, false, TEXT("Unknown part"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Unknown part"));
 		return;
 	}
@@ -391,6 +540,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString());
+		LogSelectSummary(NewPartID, false, TEXT("Part type does not match slot"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Part type does not match slot"));
 		return;
 	}
@@ -403,6 +553,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString());
+		LogSelectSummary(NewPartID, false, TEXT("Return manager not ready"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Return manager not ready"));
 		return;
 	}
@@ -417,6 +568,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			Inventory->GetCurrentCount(NewPartID),
 			Inventory->GetMaxCount(NewPartID));
 
+		LogSelectSummary(NewPartID, false, TEXT("Out of stock"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Out of stock"));
 		return;
 	}
@@ -430,6 +582,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 				ToSelectionSlotLogString(Slot),
 				*PreviousPartID.ToString(),
 				*NewPartID.ToString());
+			LogSelectSummary(NewPartID, false, TEXT("Failed to return previous part"));
 			Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Failed to return previous part"));
 			return;
 		}
@@ -450,6 +603,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			SetSelectedPartIDForSlotForServer(Slot, PreviousPartID);
 		}
 
+		LogSelectSummary(NewPartID, false, TEXT("Out of stock"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Out of stock"));
 		return;
 	}
@@ -464,6 +618,7 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 		Inventory->GetCurrentCount(NewPartID),
 		Inventory->GetMaxCount(NewPartID));
 
+	LogSelectSummary(NewPartID, true, PreviousPartID.IsNone() ? TEXT("Selected") : TEXT("Replaced"));
 	Client_NotifyPartSelectionResult(Slot, NewPartID, true, PreviousPartID.IsNone() ? TEXT("Selected") : TEXT("Replaced"));
 }
 
@@ -475,6 +630,35 @@ void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Sl
 	}
 
 	const FString PlayerLog = BuildControllerLogString(this);
+	const FString RaidStateLog = GetRaidStateLogString(this);
+	const auto LogCancelSummary = [this, Slot, &PlayerLog](FName PartID, bool bSuccess)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Cancel PC=%s Slot=%s Part=%s Result=%s Count=%d/%d"),
+			*PlayerLog,
+			ToSelectionSlotLogString(Slot),
+			*PartID.ToString(),
+			bSuccess ? TEXT("Success") : TEXT("Fail"),
+			GetPartCurrentCount(PartID),
+			GetPartMaxCount(PartID));
+	};
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] CancelPart Request: Player=%s Slot=%s PlayerSelectionState=%s RaidState=%s"),
+		*PlayerLog,
+		ToSelectionSlotLogString(Slot),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*RaidStateLog);
+
+	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] CancelPart Failed: Player=%s Slot=%s Reason=Selection locked PlayerSelectionState=%s RaidState=%s"),
+			*PlayerLog,
+			ToSelectionSlotLogString(Slot),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*RaidStateLog);
+		LogCancelSummary(NAME_None, false);
+		Client_NotifyPartSelectionResult(Slot, NAME_None, false, TEXT("Selection locked"));
+		return;
+	}
 
 	FName* SelectedPartID = GetSelectedPartIDForSlot(Slot);
 	if (!SelectedPartID)
@@ -482,6 +666,7 @@ void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Sl
 		UE_LOG(LogTemp, Warning, TEXT("[Server] CancelPart Failed: Player=%s Slot=%s PreviousPart=None Reason=Invalid slot"),
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot));
+		LogCancelSummary(NAME_None, false);
 		Client_NotifyPartSelectionResult(Slot, NAME_None, false, TEXT("Invalid slot"));
 		return;
 	}
@@ -491,6 +676,7 @@ void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Sl
 		UE_LOG(LogTemp, Log, TEXT("[Server] CancelPart NoOp: Player=%s Slot=%s PreviousPart=None Reason=Already empty"),
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot));
+		LogCancelSummary(NAME_None, true);
 		Client_NotifyPartSelectionResult(Slot, NAME_None, true, TEXT("Already empty"));
 		return;
 	}
@@ -502,6 +688,7 @@ void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Sl
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot),
 			*SelectedPartID->ToString());
+		LogCancelSummary(*SelectedPartID, false);
 		Client_NotifyPartSelectionResult(Slot, *SelectedPartID, false, TEXT("Return manager not ready"));
 		return;
 	}
@@ -513,6 +700,7 @@ void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Sl
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot),
 			*ReturnedPartID.ToString());
+		LogCancelSummary(ReturnedPartID, false);
 		Client_NotifyPartSelectionResult(Slot, ReturnedPartID, false, TEXT("Return failed"));
 		return;
 	}
@@ -524,74 +712,23 @@ void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Sl
 		GetPartCurrentCount(ReturnedPartID),
 		GetPartMaxCount(ReturnedPartID));
 
+	LogCancelSummary(ReturnedPartID, true);
 	Client_NotifyPartSelectionResult(Slot, ReturnedPartID, true, TEXT("Cancelled"));
 }
 
 void ARaidPlayerController::Server_RequestReadyForRaid_Implementation()
+{
+	ProcessReadyForRaidForServer(false);
+}
+
+void ARaidPlayerController::Server_RequestStartSelectionTimer_Implementation()
 {
 	if (!HasAuthority())
 	{
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[Server] RequestReadyForRaid received: Player=%s Core=%s Left=%s Right=%s"),
-		*BuildControllerLogString(this),
-		*SelectedCorePartID.ToString(),
-		*SelectedLeftWeaponPartID.ToString(),
-		*SelectedRightWeaponPartID.ToString());
-
-	FString FailureReason;
-	if (!ValidateSelectedLoadoutForServer(FailureReason))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Reason=%s Core=%s Left=%s Right=%s"),
-			*BuildControllerLogString(this),
-			*FailureReason,
-			*SelectedCorePartID.ToString(),
-			*SelectedLeftWeaponPartID.ToString(),
-			*SelectedRightWeaponPartID.ToString());
-		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
-		return;
-	}
-
-	ADrone* ControlledDrone = Cast<ADrone>(GetPawn());
-	if (!ControlledDrone)
-	{
-		FailureReason = TEXT("Controlled pawn is not ADrone");
-		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Reason=%s"),
-			*BuildControllerLogString(this),
-			*FailureReason);
-		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
-		return;
-	}
-
-	const FName ReadyCorePartID = SelectedCorePartID;
-	const FName ReadyLeftWeaponPartID = SelectedLeftWeaponPartID;
-	const FName ReadyRightWeaponPartID = SelectedRightWeaponPartID;
-
-	if (!ControlledDrone->ApplyLoadout(ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID))
-	{
-		FailureReason = TEXT("Drone ApplyLoadout failed");
-		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Reason=%s"),
-			*BuildControllerLogString(this),
-			*FailureReason);
-		Client_NotifyRaidReadyResult(false, FailureReason, ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
-		return;
-	}
-
-	MoveSelectedPartsToEquippedForServer();
-
-	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
-	{
-		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
-	}
-
-	UE_LOG(LogTemp, Log, TEXT("[Server] RequestReadyForRaid Success: Player=%s Core=%s Left=%s Right=%s RaidState=Battle"),
-		*BuildControllerLogString(this),
-		*ReadyCorePartID.ToString(),
-		*ReadyLeftWeaponPartID.ToString(),
-		*ReadyRightWeaponPartID.ToString());
-
-	Client_NotifyRaidReadyResult(true, TEXT("Battle started"), ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
+	StartSelectionTimerForServer();
 }
 
 void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
@@ -626,7 +763,7 @@ void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 			ToSelectionSlotLogString(Slot),
 			*PartID.ToString(),
 			*Reason);
-		OnPartSelectUIRefreshRequested.Broadcast();
+		RefreshSelectionUI();
 	}
 
 	OnPartSelectionResult.Broadcast(Slot, PartID, bSuccess, Reason);
@@ -651,6 +788,7 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 		return;
 	}
 
+	PlayerSelectionState = EPlayerSelectionState::InBattle;
 	SetEquippedPartIDForSlot(EPartSlot::Core, CorePartID);
 	SetEquippedPartIDForSlot(EPartSlot::LeftWeapon, LeftWeaponPartID);
 	SetEquippedPartIDForSlot(EPartSlot::RightWeapon, RightWeaponPartID);
@@ -658,6 +796,7 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 	SetSelectedPartIDForSlot(EPartSlot::LeftWeapon, NAME_None);
 	SetSelectedPartIDForSlot(EPartSlot::RightWeapon, NAME_None);
 	OnSelectedPartsChanged.Broadcast();
+	RefreshSelectionUI();
 
 	HideDronePartSelectUI();
 }
@@ -773,7 +912,7 @@ bool ARaidPlayerController::RefreshDronePartInventoryBinding()
 	BoundDronePartInventory->OnPartStocksChanged.AddDynamic(this, &ARaidPlayerController::HandleDronePartStocksChanged);
 	UE_LOG(LogTemp, VeryVerbose, TEXT("[Client] UI Refresh Requested: Player=%s Source=InventoryBinding"),
 		*BuildControllerLogString(this));
-	OnPartSelectUIRefreshRequested.Broadcast();
+	RefreshSelectionUI();
 	return true;
 }
 
@@ -816,6 +955,7 @@ void ARaidPlayerController::ShowDronePartSelectUI()
 		InputMode.SetWidgetToFocus(DronePartSelectWidget->TakeWidget());
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		SetInputMode(InputMode);
+		Server_RequestStartSelectionTimer();
 
 		UE_LOG(LogTemp, Log, TEXT("[Client] Drone part select UI shown"));
 	}
@@ -849,6 +989,27 @@ void ARaidPlayerController::HideDronePartSelectUI()
 	SetInputMode(InputMode);
 
 	UE_LOG(LogTemp, Log, TEXT("[Client] Drone part select UI hidden"));
+}
+
+void ARaidPlayerController::RefreshSelectionUI()
+{
+	const bool bUseEquippedParts = PlayerSelectionState != EPlayerSelectionState::Selecting;
+	const FName SummaryCorePartID = bUseEquippedParts ? EquippedCorePartID : SelectedCorePartID;
+	const FName SummaryLeftWeaponPartID = bUseEquippedParts ? EquippedLeftWeaponPartID : SelectedLeftWeaponPartID;
+	const FName SummaryRightWeaponPartID = bUseEquippedParts ? EquippedRightWeaponPartID : SelectedRightWeaponPartID;
+
+	if (IsLocalController())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh PC=%s TimeLeft=%.2f State=%s Core=%s Left=%s Right=%s"),
+			*BuildControllerLogString(this),
+			GetSelectionRemainingTime(),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*SummaryCorePartID.ToString(),
+			*SummaryLeftWeaponPartID.ToString(),
+			*SummaryRightWeaponPartID.ToString());
+	}
+
+	OnPartSelectUIRefreshRequested.Broadcast();
 }
 
 FName* ARaidPlayerController::GetSelectedPartIDForSlot(EPartSlot Slot)
@@ -951,6 +1112,325 @@ void ARaidPlayerController::SetEquippedPartIDForSlotForServer(EPartSlot Slot, FN
 	}
 
 	SetEquippedPartIDForSlot(Slot, PartID);
+}
+
+void ARaidPlayerController::SetPlayerSelectionStateForServer(EPlayerSelectionState NewState)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetPlayerSelectionStateForServer rejected: NewState=%s"),
+			ToPlayerSelectionStateLogString(NewState));
+		return;
+	}
+
+	if (PlayerSelectionState == NewState)
+	{
+		return;
+	}
+
+	const EPlayerSelectionState PreviousState = PlayerSelectionState;
+	PlayerSelectionState = NewState;
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] PlayerSelectionState changed: Player=%s Previous=%s New=%s RaidState=%s"),
+		*BuildControllerLogString(this),
+		ToPlayerSelectionStateLogString(PreviousState),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*GetRaidStateLogString(this));
+}
+
+float ARaidPlayerController::GetSelectionServerTimeSeconds() const
+{
+	if (const UWorld* World = GetWorld())
+	{
+		if (const AGameStateBase* GameState = World->GetGameState())
+		{
+			return GameState->GetServerWorldTimeSeconds();
+		}
+
+		return World->GetTimeSeconds();
+	}
+
+	return 0.0f;
+}
+
+void ARaidPlayerController::StartSelectionTimerForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[Server] SelectTimerStart ignored: Player=%s PlayerSelectionState=%s RaidState=%s"),
+			*BuildControllerLogString(this),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*GetRaidStateLogString(this));
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] SelectTimerStart failed: Player=%s Reason=World missing"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	if (World->GetTimerManager().IsTimerActive(SelectionTimerHandle) && SelectionEndServerTime > GetSelectionServerTimeSeconds())
+	{
+		return;
+	}
+
+	SelectionEndServerTime = GetSelectionServerTimeSeconds() + SelectionDurationSeconds;
+	World->GetTimerManager().SetTimer(
+		SelectionTimerHandle,
+		this,
+		&ARaidPlayerController::HandleSelectionTimerExpiredForServer,
+		SelectionDurationSeconds,
+		false);
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SelectTimerStart PC=%s Duration=%.2f SelectionState=%s RaidState=%s"),
+		*BuildControllerLogString(this),
+		SelectionDurationSeconds,
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*GetRaidStateLogString(this));
+	RefreshSelectionUI();
+}
+
+void ARaidPlayerController::StopSelectionTimerForServer(const FString& Reason, bool bLogSummary)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SelectionTimerHandle);
+	}
+
+	SelectionEndServerTime = 0.0f;
+	ForceNetUpdate();
+
+	if (bLogSummary)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SelectTimerStop PC=%s Reason=%s"),
+			*BuildControllerLogString(this),
+			*Reason);
+	}
+
+	RefreshSelectionUI();
+}
+
+void ARaidPlayerController::HandleSelectionTimerExpiredForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
+	{
+		const FString IgnoreReason = PlayerSelectionState == EPlayerSelectionState::InBattle
+			? TEXT("AlreadyInBattle")
+			: TEXT("SelectionLocked");
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=%s SelectionState=%s"),
+			*BuildControllerLogString(this),
+			*IgnoreReason,
+			ToPlayerSelectionStateLogString(PlayerSelectionState));
+		StopSelectionTimerForServer(TEXT("AutoReadyIgnored"), false);
+		return;
+	}
+
+	if (!ProcessReadyForRaidForServer(true))
+	{
+		StopSelectionTimerForServer(TEXT("AutoReadyFailed"), false);
+	}
+}
+
+bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	const FString PlayerLog = BuildControllerLogString(this);
+	const FString RaidStateLog = GetRaidStateLogString(this);
+	const EPlayerSelectionState PreviousSelectionState = PlayerSelectionState;
+	const auto LogReadySummary = [&PlayerLog, PreviousSelectionState](
+		bool bSuccess,
+		const FString& Reason,
+		EPlayerSelectionState NewSelectionState,
+		FName CorePartID,
+		FName LeftWeaponPartID,
+		FName RightWeaponPartID,
+		const ADrone* ControlledDrone)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Ready PC=%s Result=%s Reason=%s SelectionState=%s->%s Core=%s Left=%s Right=%s AttackPower=%d"),
+			*PlayerLog,
+			bSuccess ? TEXT("Success") : TEXT("Fail"),
+			*Reason,
+			ToPlayerSelectionStateLogString(PreviousSelectionState),
+			ToPlayerSelectionStateLogString(NewSelectionState),
+			*CorePartID.ToString(),
+			*LeftWeaponPartID.ToString(),
+			*RightWeaponPartID.ToString(),
+			ControlledDrone ? ControlledDrone->GetAttackPower() : 0);
+	};
+	const auto LogAutoReadyFailure = [&PlayerLog, PreviousSelectionState](const FString& Reason)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Fail Reason=%s SelectionState=%s"),
+			*PlayerLog,
+			*Reason,
+			ToPlayerSelectionStateLogString(PreviousSelectionState));
+	};
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] RequestReadyForRaid received: Player=%s Source=%s PlayerSelectionState=%s RaidState=%s Core=%s Left=%s Right=%s"),
+		*PlayerLog,
+		bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*RaidStateLog,
+		*SelectedCorePartID.ToString(),
+		*SelectedLeftWeaponPartID.ToString(),
+		*SelectedRightWeaponPartID.ToString());
+
+	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
+	{
+		const FString FailureReason = TEXT("Selection locked");
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s PlayerSelectionState=%s RaidState=%s"),
+			*PlayerLog,
+			bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+			*FailureReason,
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*RaidStateLog);
+
+		if (bAutoReady)
+		{
+			const FString IgnoreReason = PlayerSelectionState == EPlayerSelectionState::InBattle
+				? TEXT("AlreadyInBattle")
+				: TEXT("SelectionLocked");
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=%s SelectionState=%s"),
+				*PlayerLog,
+				*IgnoreReason,
+				ToPlayerSelectionStateLogString(PlayerSelectionState));
+		}
+		else
+		{
+			LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+			Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		}
+		return false;
+	}
+
+	FString FailureReason;
+	if (!ValidateSelectedLoadoutForServer(FailureReason))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s Core=%s Left=%s Right=%s"),
+			*PlayerLog,
+			bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+			*FailureReason,
+			*SelectedCorePartID.ToString(),
+			*SelectedLeftWeaponPartID.ToString(),
+			*SelectedRightWeaponPartID.ToString());
+		if (bAutoReady)
+		{
+			LogAutoReadyFailure(FailureReason);
+		}
+		else
+		{
+			LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+		}
+		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		return false;
+	}
+
+	ADrone* ControlledDrone = Cast<ADrone>(GetPawn());
+	if (!ControlledDrone)
+	{
+		FailureReason = TEXT("Controlled pawn is not ADrone");
+		APawn* CurrentPawn = GetPawn();
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s CurrentPawn=%s CurrentPawnClass=%s"),
+			*PlayerLog,
+			bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+			*FailureReason,
+			CurrentPawn ? *CurrentPawn->GetName() : TEXT("None"),
+			CurrentPawn ? *CurrentPawn->GetClass()->GetName() : TEXT("None"));
+		if (bAutoReady)
+		{
+			LogAutoReadyFailure(FailureReason);
+		}
+		else
+		{
+			LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+		}
+		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		return false;
+	}
+
+	const FName ReadyCorePartID = SelectedCorePartID;
+	const FName ReadyLeftWeaponPartID = SelectedLeftWeaponPartID;
+	const FName ReadyRightWeaponPartID = SelectedRightWeaponPartID;
+
+	if (!ControlledDrone->ApplyLoadout(ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID))
+	{
+		FailureReason = TEXT("Drone ApplyLoadout failed");
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s"),
+			*PlayerLog,
+			bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+			*FailureReason);
+		if (bAutoReady)
+		{
+			LogAutoReadyFailure(FailureReason);
+		}
+		else
+		{
+			LogReadySummary(false, FailureReason, PlayerSelectionState, ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID, ControlledDrone);
+		}
+		Client_NotifyRaidReadyResult(false, FailureReason, ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
+		return false;
+	}
+
+	MoveSelectedPartsToEquippedForServer();
+	SetPlayerSelectionStateForServer(EPlayerSelectionState::InBattle);
+
+	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+	}
+
+	StopSelectionTimerForServer(bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"), !bAutoReady);
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] RequestReadyForRaid Success: Player=%s Source=%s PlayerSelectionState=%s Core=%s Left=%s Right=%s RaidState=%s"),
+		*PlayerLog,
+		bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*ReadyCorePartID.ToString(),
+		*ReadyLeftWeaponPartID.ToString(),
+		*ReadyRightWeaponPartID.ToString(),
+		*GetRaidStateLogString(this));
+
+	if (bAutoReady)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Success SelectionState=%s->%s Core=%s Left=%s Right=%s AttackPower=%d"),
+			*PlayerLog,
+			ToPlayerSelectionStateLogString(PreviousSelectionState),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*ReadyCorePartID.ToString(),
+			*ReadyLeftWeaponPartID.ToString(),
+			*ReadyRightWeaponPartID.ToString(),
+			ControlledDrone->GetAttackPower());
+	}
+	else
+	{
+		LogReadySummary(true, TEXT("Battle started"), PlayerSelectionState, ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID, ControlledDrone);
+	}
+
+	Client_NotifyRaidReadyResult(true, bAutoReady ? TEXT("Auto ready") : TEXT("Battle started"), ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
+	return true;
 }
 
 bool ARaidPlayerController::ReturnSelectedPartsForServer(EDronePartReturnReason Reason)
@@ -1062,31 +1542,31 @@ bool ARaidPlayerController::ValidateSelectedLoadoutForServer(FString& OutReason)
 		return false;
 	}
 
-	if (SelectedCorePartID.IsNone())
-	{
-		OutReason = TEXT("Core part is not selected");
-		return false;
-	}
-	if (SelectedLeftWeaponPartID.IsNone())
-	{
-		OutReason = TEXT("Left weapon part is not selected");
-		return false;
-	}
-	if (SelectedRightWeaponPartID.IsNone())
-	{
-		OutReason = TEXT("Right weapon part is not selected");
-		return false;
-	}
+	const bool bHasAnySelectedPart =
+		!SelectedCorePartID.IsNone()
+		|| !SelectedLeftWeaponPartID.IsNone()
+		|| !SelectedRightWeaponPartID.IsNone();
 
 	const ADronePartInventory* Inventory = GetDronePartInventory();
-	if (!Inventory)
+	if (bHasAnySelectedPart && !Inventory)
 	{
 		OutReason = TEXT("DronePartInventory is missing");
 		return false;
 	}
 
+	if (!bHasAnySelectedPart)
+	{
+		OutReason.Reset();
+		return true;
+	}
+
 	const auto ValidatePartForSlot = [Inventory, &OutReason](FName PartID, EPartSlot Slot) -> bool
 	{
+		if (PartID.IsNone())
+		{
+			return true;
+		}
+
 		EDronePartType PartType = EDronePartType::Core;
 		if (!Inventory->GetPartType(PartID, PartType))
 		{
@@ -1139,5 +1619,19 @@ void ARaidPlayerController::HandleDronePartStocksChanged()
 {
 	UE_LOG(LogTemp, VeryVerbose, TEXT("[Client] UI Refresh Requested: Player=%s Source=PartStocksChanged"),
 		*BuildControllerLogString(this));
-	OnPartSelectUIRefreshRequested.Broadcast();
+	RefreshSelectionUI();
+}
+
+void ARaidPlayerController::OnRep_PlayerSelectionState()
+{
+	UE_LOG(LogTemp, Log, TEXT("[Client] PlayerSelectionState replicated: Player=%s State=%s RaidState=%s"),
+		*BuildControllerLogString(this),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*GetRaidStateLogString(this));
+	RefreshSelectionUI();
+}
+
+void ARaidPlayerController::OnRep_SelectionEndServerTime()
+{
+	RefreshSelectionUI();
 }

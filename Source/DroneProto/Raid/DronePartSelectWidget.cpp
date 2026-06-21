@@ -25,6 +25,12 @@ void UDronePartSelectWidget::NativeConstruct()
 		CachedRaidPlayerController->OnPartSelectUIRefreshRequested.AddDynamic(
 			this,
 			&UDronePartSelectWidget::HandlePartSelectUIRefreshRequested);
+		CachedRaidPlayerController->OnPartSelectionResult.RemoveDynamic(
+			this,
+			&UDronePartSelectWidget::HandlePartSelectionResult);
+		CachedRaidPlayerController->OnPartSelectionResult.AddDynamic(
+			this,
+			&UDronePartSelectWidget::HandlePartSelectionResult);
 		CachedRaidPlayerController->RefreshDronePartInventoryBinding();
 	}
 	else
@@ -34,11 +40,13 @@ void UDronePartSelectWidget::NativeConstruct()
 
 	BindButtonEvents();
 	RefreshFromController();
+	StartTimerTextRefresh();
 	SetKeyboardFocus();
 }
 
 void UDronePartSelectWidget::NativeDestruct()
 {
+	StopTimerTextRefresh();
 	UnbindButtonEvents();
 	ClearRefreshRetry();
 
@@ -47,6 +55,9 @@ void UDronePartSelectWidget::NativeDestruct()
 		CachedRaidPlayerController->OnPartSelectUIRefreshRequested.RemoveDynamic(
 			this,
 			&UDronePartSelectWidget::HandlePartSelectUIRefreshRequested);
+		CachedRaidPlayerController->OnPartSelectionResult.RemoveDynamic(
+			this,
+			&UDronePartSelectWidget::HandlePartSelectionResult);
 	}
 
 	CachedRaidPlayerController = nullptr;
@@ -147,6 +158,31 @@ void UDronePartSelectWidget::RefreshFromController()
 		Text_FocusedSlot->SetText(FText::Format(
 			FText::FromString(TEXT("현재 선택: {0}")),
 			GetSlotDisplayText(FocusedSlot)));
+	}
+
+	if (TimerText)
+	{
+		RefreshTimerText();
+	}
+
+	if (CoreSelectedText)
+	{
+		CoreSelectedText->SetText(FText::FromString(FString::Printf(TEXT("Core: %s"), *GetSelectedCorePartID().ToString())));
+	}
+
+	if (LeftWeaponSelectedText)
+	{
+		LeftWeaponSelectedText->SetText(FText::FromString(FString::Printf(TEXT("Left: %s"), *GetSelectedLeftWeaponPartID().ToString())));
+	}
+
+	if (RightWeaponSelectedText)
+	{
+		RightWeaponSelectedText->SetText(FText::FromString(FString::Printf(TEXT("Right: %s"), *GetSelectedRightWeaponPartID().ToString())));
+	}
+
+	if (ResultText)
+	{
+		ResultText->SetText(FText::FromString(FString::Printf(TEXT("State: %s"), IsSelectionLocked() ? TEXT("Locked") : TEXT("Selecting"))));
 	}
 
 	RefreshSlot(
@@ -268,9 +304,52 @@ void UDronePartSelectWidget::CancelFocusedPart()
 	CachedRaidPlayerController->RequestCancelPartFromUI(FocusedSlot);
 }
 
+float UDronePartSelectWidget::GetSelectionRemainingTime() const
+{
+	return CachedRaidPlayerController ? CachedRaidPlayerController->GetSelectionRemainingTime() : 0.0f;
+}
+
+EPlayerSelectionState UDronePartSelectWidget::GetCurrentSelectionState() const
+{
+	return CachedRaidPlayerController ? CachedRaidPlayerController->GetCurrentSelectionState() : EPlayerSelectionState::Selecting;
+}
+
+FName UDronePartSelectWidget::GetSelectedCorePartID() const
+{
+	return CachedRaidPlayerController ? CachedRaidPlayerController->GetSelectedCorePartID() : NAME_None;
+}
+
+FName UDronePartSelectWidget::GetSelectedLeftWeaponPartID() const
+{
+	return CachedRaidPlayerController ? CachedRaidPlayerController->GetSelectedLeftWeaponPartID() : NAME_None;
+}
+
+FName UDronePartSelectWidget::GetSelectedRightWeaponPartID() const
+{
+	return CachedRaidPlayerController ? CachedRaidPlayerController->GetSelectedRightWeaponPartID() : NAME_None;
+}
+
+bool UDronePartSelectWidget::IsSelectionLocked() const
+{
+	return CachedRaidPlayerController ? CachedRaidPlayerController->IsSelectionLocked() : false;
+}
+
 void UDronePartSelectWidget::HandlePartSelectUIRefreshRequested()
 {
 	RefreshFromController();
+	StartTimerTextRefresh();
+}
+
+void UDronePartSelectWidget::HandlePartSelectionResult(EPartSlot PartSlot, FName PartID, bool bSuccess, FString Reason)
+{
+	if (ResultText)
+	{
+		ResultText->SetText(FText::FromString(FString::Printf(
+			TEXT("%s %s: %s"),
+			bSuccess ? TEXT("Success") : TEXT("Fail"),
+			*PartID.ToString(),
+			*Reason)));
+	}
 }
 
 void UDronePartSelectWidget::RetryRefreshFromController()
@@ -433,6 +512,84 @@ void UDronePartSelectWidget::UnbindButtonEvents()
 	{
 		Button_CombatStart->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleCombatStartClicked);
 	}
+}
+
+void UDronePartSelectWidget::StartTimerTextRefresh()
+{
+	if (!CachedRaidPlayerController)
+	{
+		CachedRaidPlayerController = GetOwningRaidPlayerController();
+	}
+
+	RefreshTimerText();
+
+	UWorld* World = GetWorld();
+	if (!World || !ShouldRefreshTimerText())
+	{
+		return;
+	}
+
+	if (World->GetTimerManager().IsTimerActive(TimerTextRefreshTimerHandle))
+	{
+		return;
+	}
+
+	World->GetTimerManager().SetTimer(
+		TimerTextRefreshTimerHandle,
+		this,
+		&UDronePartSelectWidget::RefreshTimerText,
+		TimerTextRefreshIntervalSeconds,
+		true);
+}
+
+void UDronePartSelectWidget::StopTimerTextRefresh()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(TimerTextRefreshTimerHandle);
+	}
+	TimerTextRefreshTimerHandle.Invalidate();
+}
+
+void UDronePartSelectWidget::RefreshTimerText()
+{
+	if (!CachedRaidPlayerController)
+	{
+		CachedRaidPlayerController = GetOwningRaidPlayerController();
+	}
+
+	const bool bShouldRefresh = ShouldRefreshTimerText();
+	const float RemainingTime = bShouldRefresh && CachedRaidPlayerController
+		? FMath::Max(0.0f, CachedRaidPlayerController->GetSelectionRemainingTime())
+		: 0.0f;
+
+	if (TimerText)
+	{
+		TimerText->SetText(FText::FromString(FString::Printf(TEXT("Timer: %.1fs"), RemainingTime)));
+	}
+
+	if (!bShouldRefresh)
+	{
+		StopTimerTextRefresh();
+	}
+}
+
+bool UDronePartSelectWidget::ShouldRefreshTimerText() const
+{
+	if (!TimerText || !CachedRaidPlayerController)
+	{
+		return false;
+	}
+
+	if (CachedRaidPlayerController->GetCurrentSelectionState() != EPlayerSelectionState::Selecting)
+	{
+		return false;
+	}
+
+	const ESlateVisibility CurrentVisibility = GetVisibility();
+	return CurrentVisibility == ESlateVisibility::Visible
+		|| CurrentVisibility == ESlateVisibility::SelfHitTestInvisible
+		|| CurrentVisibility == ESlateVisibility::HitTestInvisible;
 }
 
 void UDronePartSelectWidget::SetFocusedSlot(EDronePartSlot NewFocusedSlot)

@@ -6,10 +6,16 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "InputCoreTypes.h"
+#include "GameFramework/Controller.h"
 #include "Engine/LocalPlayer.h"
+#include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/Engine.h"
+#include "EngineUtils.h"
 #include "Raid/DronePartInventory.h"
+#include "Raid/RaidBoss.h"
+#include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
 
 namespace
@@ -22,20 +28,20 @@ bool TryGetStatsForPartID(FName PartID, EPartSlot Slot, FDronePartStats& OutStat
 	{
 		if (PartID == ADronePartInventory::GetCoreZenithPartID())
 		{
-			OutStats.HealthBonus = 100;
+			OutStats.HealthBonus = 0;
 			OutStats.AttackBonus = 0;
 			return true;
 		}
 		if (PartID == ADronePartInventory::GetCoreBoosterPartID())
 		{
-			OutStats.HealthBonus = 60;
-			OutStats.AttackBonus = 5;
+			OutStats.HealthBonus = 0;
+			OutStats.AttackBonus = 0;
 			return true;
 		}
 		if (PartID == ADronePartInventory::GetCoreDrainPartID())
 		{
-			OutStats.HealthBonus = 30;
-			OutStats.AttackBonus = 15;
+			OutStats.HealthBonus = 0;
+			OutStats.AttackBonus = 0;
 			return true;
 		}
 		return false;
@@ -44,19 +50,19 @@ bool TryGetStatsForPartID(FName PartID, EPartSlot Slot, FDronePartStats& OutStat
 	if (PartID == ADronePartInventory::GetPulseLaserPartID())
 	{
 		OutStats.HealthBonus = 0;
-		OutStats.AttackBonus = 20;
+		OutStats.AttackBonus = 8;
 		return true;
 	}
 	if (PartID == ADronePartInventory::GetFractureBurstPartID())
 	{
 		OutStats.HealthBonus = 0;
-		OutStats.AttackBonus = 25;
+		OutStats.AttackBonus = 11;
 		return true;
 	}
 	if (PartID == ADronePartInventory::GetVectorCannonPartID())
 	{
-		OutStats.HealthBonus = 20;
-		OutStats.AttackBonus = 15;
+		OutStats.HealthBonus = 0;
+		OutStats.AttackBonus = 7;
 		return true;
 	}
 
@@ -88,6 +94,11 @@ UDronePart* CreateLoadoutPart(UObject* Outer, FName PartID, EPartSlot Slot, cons
 	}
 
 	return NewPart;
+}
+
+FString BuildDroneControllerLogString(const AController* Controller)
+{
+	return ARaidPlayerController::BuildStableControllerLogString(Controller);
 }
 }
 
@@ -141,6 +152,8 @@ void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 		if (MoveAction)
 			EIC->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ADrone::Move);
 	}
+
+	PlayerInputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ADrone::RequestAttackBoss);
 }
 
 // autonomous proxy가 로컬에서 이동 (서버 권한 이동 없음 — TODO 참조)
@@ -181,53 +194,98 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 		return false;
 	}
 
-	if (CorePartID.IsNone() || LeftWeaponPartID.IsNone() || RightWeaponPartID.IsNone())
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout Failed: Core=%s Left=%s Right=%s Reason=Missing selected part"),
-			*CorePartID.ToString(),
-			*LeftWeaponPartID.ToString(),
-			*RightWeaponPartID.ToString());
-		return false;
-	}
-
 	FDronePartStats CoreStats;
 	FDronePartStats LeftStats;
 	FDronePartStats RightStats;
-	if (!TryGetStatsForPartID(CorePartID, EPartSlot::Core, CoreStats)
-		|| !TryGetStatsForPartID(LeftWeaponPartID, EPartSlot::LeftWeapon, LeftStats)
-		|| !TryGetStatsForPartID(RightWeaponPartID, EPartSlot::RightWeapon, RightStats))
+	FName ResolvedCorePartID = CorePartID;
+	FName ResolvedLeftWeaponPartID = LeftWeaponPartID;
+	FName ResolvedRightWeaponPartID = RightWeaponPartID;
+
+	const auto ResolvePart = [this](FName RequestedPartID, EPartSlot Slot, FDronePartStats& OutStats, FName& OutResolvedPartID) -> bool
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout Failed: Core=%s Left=%s Right=%s Reason=Unknown or mismatched PartID"),
-			*CorePartID.ToString(),
-			*LeftWeaponPartID.ToString(),
-			*RightWeaponPartID.ToString());
-		return false;
-	}
+		OutStats = FDronePartStats();
+		OutResolvedPartID = RequestedPartID;
+
+		if (RequestedPartID.IsNone())
+		{
+			return true;
+		}
+
+		if (TryGetStatsForPartID(RequestedPartID, Slot, OutStats))
+		{
+			return true;
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout MissingData: Slot=%d Part=%s treated as empty"),
+			static_cast<int32>(Slot),
+			*RequestedPartID.ToString());
+		OutResolvedPartID = NAME_None;
+		return true;
+	};
+
+	ResolvePart(CorePartID, EPartSlot::Core, CoreStats, ResolvedCorePartID);
+	ResolvePart(LeftWeaponPartID, EPartSlot::LeftWeapon, LeftStats, ResolvedLeftWeaponPartID);
+	ResolvePart(RightWeaponPartID, EPartSlot::RightWeapon, RightStats, ResolvedRightWeaponPartID);
+
+	const auto AddLoadoutPart = [this](FName PartID, EPartSlot Slot, const FDronePartStats& Stats) -> bool
+	{
+		if (PartID.IsNone())
+		{
+			return true;
+		}
+
+		UDronePart* NewPart = CreateLoadoutPart(this, PartID, Slot, Stats);
+		if (!NewPart)
+		{
+			return false;
+		}
+
+		EquippedParts.Add(NewPart);
+		return true;
+	};
 
 	EquippedParts.Reset();
-	EquippedParts.Add(CreateLoadoutPart(this, CorePartID, EPartSlot::Core, CoreStats));
-	EquippedParts.Add(CreateLoadoutPart(this, LeftWeaponPartID, EPartSlot::LeftWeapon, LeftStats));
-	EquippedParts.Add(CreateLoadoutPart(this, RightWeaponPartID, EPartSlot::RightWeapon, RightStats));
-
-	if (EquippedParts.Contains(nullptr))
+	if (!AddLoadoutPart(ResolvedCorePartID, EPartSlot::Core, CoreStats)
+		|| !AddLoadoutPart(ResolvedLeftWeaponPartID, EPartSlot::LeftWeapon, LeftStats)
+		|| !AddLoadoutPart(ResolvedRightWeaponPartID, EPartSlot::RightWeapon, RightStats))
 	{
 		EquippedParts.Reset();
 		UE_LOG(LogTemp, Warning, TEXT("[Server] ApplyLoadout Failed: Core=%s Left=%s Right=%s Reason=Part object creation failed"),
-			*CorePartID.ToString(),
-			*LeftWeaponPartID.ToString(),
-			*RightWeaponPartID.ToString());
+			*ResolvedCorePartID.ToString(),
+			*ResolvedLeftWeaponPartID.ToString(),
+			*ResolvedRightWeaponPartID.ToString());
 		return false;
 	}
 
+	EquippedCorePartID = ResolvedCorePartID;
+	EquippedLeftWeaponPartID = ResolvedLeftWeaponPartID;
+	EquippedRightWeaponPartID = ResolvedRightWeaponPartID;
+	ResetCombatRuntimeStateForLoadout();
 	RecalculateStats();
 	UE_LOG(LogTemp, Log, TEXT("[Server] ApplyLoadout Success: Core=%s Left=%s Right=%s MaxHealth=%d AttackPower=%d"),
-		*CorePartID.ToString(),
-		*LeftWeaponPartID.ToString(),
-		*RightWeaponPartID.ToString(),
+		*EquippedCorePartID.ToString(),
+		*EquippedLeftWeaponPartID.ToString(),
+		*EquippedRightWeaponPartID.ToString(),
 		MaxHealth,
 		AttackPower);
 
 	return true;
+}
+
+void ADrone::RequestAttackBoss()
+{
+	if (HasAuthority())
+	{
+		HandleAttackBossForServer();
+		return;
+	}
+
+	Server_RequestAttackBoss();
+}
+
+void ADrone::Server_RequestAttackBoss_Implementation()
+{
+	HandleAttackBossForServer();
 }
 
 int32 ADrone::GetHealth() const
@@ -308,9 +366,195 @@ void ADrone::HandleDeath()
 
 	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
 	{
-		RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Death);
+		const FName CorePartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::Core);
+		const FName LeftWeaponPartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon);
+		const FName RightWeaponPartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon);
+		const bool bReturnedAny = RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Death);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DeathReturn PC=%s Source=EquippedParts Core=%s Left=%s Right=%s Result=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*CorePartID.ToString(),
+			*LeftWeaponPartID.ToString(),
+			*RightWeaponPartID.ToString(),
+			bReturnedAny ? TEXT("Success") : TEXT("Skipped"));
 	}
 
 	// TODO(D5 UI): show drone death state when the combat death UI flow exists.
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone death handled: equipped parts returned"));
+}
+
+void ADrone::HandleAttackBossForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (RaidPC && RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=NotInBattle SelectionState=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()));
+		return;
+	}
+
+	if (bIsDead)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] Drone ZAttack rejected: Drone=%s Reason=Dead"), *GetName());
+		return;
+	}
+
+	ARaidBoss* Boss = FindRaidBossForServer();
+	if (!Boss)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] Drone ZAttack failed: Drone=%s Reason=RaidBoss missing"), *GetName());
+		return;
+	}
+
+	const float LeftWeaponDamage = CalculateWeaponDamageForServer(EquippedLeftWeaponPartID, true);
+	const float RightWeaponDamage = CalculateWeaponDamageForServer(EquippedRightWeaponPartID, false);
+	const float TotalWeaponDamage = LeftWeaponDamage + RightWeaponDamage;
+	const float CoreAttackModifier = GetCoreAttackModifierForServer(EquippedCorePartID);
+	const float CoreBonusAttackModifier = GetCoreBonusAttackModifierForServer(EquippedCorePartID);
+	const float FinalDamage = TotalWeaponDamage * CoreAttackModifier * CoreBonusAttackModifier;
+
+	Boss->ApplyDamageForServer(FinalDamage, Cast<AController>(GetController()), this);
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] Drone ZAttack: Drone=%s CorePartID=%s LeftWeaponPartID=%s RightWeaponPartID=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreAttackModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f BossHP=%.2f/%.2f"),
+		*GetName(),
+		*EquippedCorePartID.ToString(),
+		*EquippedLeftWeaponPartID.ToString(),
+		*EquippedRightWeaponPartID.ToString(),
+		LeftWeaponDamage,
+		RightWeaponDamage,
+		TotalWeaponDamage,
+		CoreAttackModifier,
+		CoreBonusAttackModifier,
+		FinalDamage,
+		Boss->GetCurrentHP(),
+		Boss->GetMaxHP());
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack PC=%s Drone=%s Core=%s Left=%s Right=%s Damage=%.2f BossHP=%.2f/%.2f"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		*GetName(),
+		*EquippedCorePartID.ToString(),
+		*EquippedLeftWeaponPartID.ToString(),
+		*EquippedRightWeaponPartID.ToString(),
+		FinalDamage,
+		Boss->GetCurrentHP(),
+		Boss->GetMaxHP());
+}
+
+float ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon)
+{
+	if (WeaponPartID.IsNone())
+	{
+		return 0.0f;
+	}
+
+	if (WeaponPartID == ADronePartInventory::GetPulseLaserPartID())
+	{
+		int32& PulseAttackCount = bIsLeftWeapon ? LeftPulseAttackCount : RightPulseAttackCount;
+		PulseAttackCount++;
+		if (PulseAttackCount >= 3)
+		{
+			PulseAttackCount = 0;
+			return 18.0f;
+		}
+
+		return 8.0f;
+	}
+
+	if (WeaponPartID == ADronePartInventory::GetFractureBurstPartID())
+	{
+		return 5.0f + (3.0f * 2.0f);
+	}
+
+	if (WeaponPartID == ADronePartInventory::GetVectorCannonPartID())
+	{
+		const int32 VectorBonusCount = FMath::FloorToInt(AccumulatedMoveDistanceMeters / 5.0f);
+		const float VectorBonusDamage = FMath::Min(static_cast<float>(VectorBonusCount), 8.0f);
+		AccumulatedMoveDistanceMeters = 0.0f;
+		return 7.0f + VectorBonusDamage;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[Server] Weapon damage missing data: Part=%s treated as 0"), *WeaponPartID.ToString());
+	return 0.0f;
+}
+
+float ADrone::GetCoreAttackModifierForServer(FName CorePartID) const
+{
+	if (CorePartID.IsNone())
+	{
+		return 1.0f;
+	}
+
+	if (CorePartID == ADronePartInventory::GetCoreZenithPartID())
+	{
+		return 1.0f;
+	}
+
+	if (CorePartID == ADronePartInventory::GetCoreBoosterPartID())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Booster Core: movement speed bonus to attack conversion not implemented yet"));
+		return 0.95f;
+	}
+
+	if (CorePartID == ADronePartInventory::GetCoreDrainPartID())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Drain Core: damage-to-heal effect not implemented yet"));
+		return 0.85f;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("[Server] Core modifier missing data: Part=%s treated as no core"), *CorePartID.ToString());
+	return 1.0f;
+}
+
+float ADrone::GetCoreBonusAttackModifierForServer(FName CorePartID) const
+{
+	if (CorePartID == ADronePartInventory::GetCoreZenithPartID())
+	{
+		const float CurrentHPRatio = MaxHealth > 0 ? static_cast<float>(Health) / static_cast<float>(MaxHealth) : 0.0f;
+		const float ZenithBonus = FMath::Min(FMath::FloorToFloat(CurrentHPRatio / 0.1f) * 0.02f, 0.20f);
+		return 1.0f + ZenithBonus;
+	}
+
+	if (CorePartID == ADronePartInventory::GetCoreBoosterPartID())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Booster Core: accumulated movement distance bonus currently returns 0"));
+		return 1.0f;
+	}
+
+	return 1.0f;
+}
+
+ARaidBoss* ADrone::FindRaidBossForServer() const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	if (const ARaidGameState* RaidGameState = World->GetGameState<ARaidGameState>())
+	{
+		if (ARaidBoss* Boss = RaidGameState->GetRaidBoss())
+		{
+			return Boss;
+		}
+	}
+
+	for (TActorIterator<ARaidBoss> It(World); It; ++It)
+	{
+		return *It;
+	}
+
+	return nullptr;
+}
+
+void ADrone::ResetCombatRuntimeStateForLoadout()
+{
+	LeftPulseAttackCount = 0;
+	RightPulseAttackCount = 0;
+	AccumulatedMoveDistanceMeters = 0.0f;
 }

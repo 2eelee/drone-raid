@@ -9,6 +9,7 @@ class UFloatingPawnMovement;
 class UInputMappingContext;
 class UInputAction;
 class UDronePart;
+class ARaidBoss;
 
 UCLASS()
 class DRONEPROTO_API ADrone : public APawn
@@ -20,6 +21,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
 	bool ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID);
+
+	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
+	void RequestAttackBoss();
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	int32 GetHealth() const;
@@ -67,13 +71,40 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	UInputAction* MoveAction;
 
+	UFUNCTION(Server, Reliable)
+	void Server_RequestAttackBoss();
+
 	void Move(const FInputActionValue& Value);
 
 	// ---- 장착 부품 (서버 전용, 복제 안 함) ----
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UDronePart>> EquippedParts;
 
+	UPROPERTY(Transient)
+	FName EquippedCorePartID = NAME_None;
+
+	UPROPERTY(Transient)
+	FName EquippedLeftWeaponPartID = NAME_None;
+
+	UPROPERTY(Transient)
+	FName EquippedRightWeaponPartID = NAME_None;
+
+	UPROPERTY(Transient)
+	int32 LeftPulseAttackCount = 0;
+
+	UPROPERTY(Transient)
+	int32 RightPulseAttackCount = 0;
+
+	UPROPERTY(Transient)
+	float AccumulatedMoveDistanceMeters = 0.0f;
+
 	void ServerEquipPart(TSubclassOf<UDronePart> PartClass);
 	void RecalculateStats();
 	void HandleDeath();
+	void HandleAttackBossForServer();
+	float CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon);
+	float GetCoreAttackModifierForServer(FName CorePartID) const;
+	float GetCoreBonusAttackModifierForServer(FName CorePartID) const;
+	ARaidBoss* FindRaidBossForServer() const;
+	void ResetCombatRuntimeStateForLoadout();
 };
