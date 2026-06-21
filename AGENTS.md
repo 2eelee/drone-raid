@@ -37,10 +37,11 @@
 - `RecalculateStats`는 드래프팅(전투 전)에서만 호출 — 전투 중 호출 시 Health=MaxHealth로 풀피 회복 버그
 
 ## 현재 상태 / 다음 단계
-- 현재: D5 완료. TestMap PIE 2 Players에서 `BP_Drone_C` possess, 공유 재고 선택/취소/반환, 15초 AutoReady, 수동 Ready, Selecting 공격 차단, InBattle Z 공격으로 Boss HP 감소까지 확인.
-- 검증: `Build.bat DroneProtoEditor Win64 Development -NoLiveCoding` 성공, `Automation RunTests DroneProto` 전체 12개 성공.
-- 마지막 D5 확인: PIE 종료 시 EquippedParts 반환 summary와 Count Max 초과 여부만 최종 확인.
-- 다음: D6 — 보스 더미 시각화/HP UI 또는 드론 사망 반환 검증 중 하나를 선택해 좁게 진행.
+- 현재: D6/D6-1 완료. D5 선택/Ready/AutoReady 구조를 유지한 상태에서 서버 권한 Drone HP/Dead 상태, DeathReturn, RaidEndReturn, Dead 상태 Ready/AutoReady 차단까지 구현.
+- TestMap PIE 2 Players 기준 D5 흐름은 유지: `BP_Drone_C` possess, 공유 재고 선택/취소/반환, 15초 AutoReady, 수동 Ready, Selecting 공격 차단, InBattle Z 공격으로 Boss HP 감소.
+- D6 테스트 경로: `D6KillDrone`은 현재 콘솔/owning PlayerController의 Pawn을 사망 처리하고, `D6RaidEndReturn`은 레이드 종료 반환 경로를 실행한다. 에디터/서버 콘솔에서는 서버 쪽 PC가 대상이 될 수 있으므로 `[DR_SUMMARY] D6KillDrone RequestPC=... TargetPC=... TargetDrone=...` 로그로 대상 확인.
+- 검증: `Build.bat DroneProtoEditor Win64 Development -NoLiveCoding` 성공, `Automation RunTests DroneProto` 전체 15개 성공.
+- 다음: D6 이후 보이는 보스/HP UI 또는 전투/리포트 계층을 별도 범위로 진행. UMG 에셋/보스 패턴/ContributionManager/DroneReport/DataTable 전환은 아직 미구현.
 
 ## 보류 (D11)
 - 팝업 위젯 클래스 지정 + `IsSlotEnabled`(현재 dead) 정리
@@ -50,8 +51,6 @@
 ## 보류 (D6 이후)
 - UMG 배치/디자인/아이콘 polish.
 - 보이는 보스 액터/HP UI.
-- 드론 사망 플로우 전체 검증.
-- 레이드 종료 시 전체 플레이어 EquippedParts 반환.
 - Booster Core 이동거리 보너스, Drain Core 흡혈, Vector Cannon 이동거리 피해 보너스.
 - ContributionManager / DroneReport / DataTable 전환 / 보스 패턴 / VFX.
 - FloatingPawnMovement 이동 동기화: autonomous proxy 로컬 이동만 → 서버 Pawn 제자리 → rubber-banding. Server RPC로 입력 전달 vs 클라 위치 보고 방식 결정 필요. (`Drone.cpp` 생성자 TODO 참조)

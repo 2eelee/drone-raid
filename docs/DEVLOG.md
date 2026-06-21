@@ -4,6 +4,52 @@
 
 ---
 
+## 2026-06-21 — D6 드론 사망/레이드 종료 부품 환원 + Dead Ready 차단
+
+### 구현
+
+- `ADrone`에 서버 권한 HP/Dead 상태를 명확히 두고 `Health`, `MaxHealth`, `bIsDead`를 Replicated/OnRep 경로로 정리.
+- HP 감소/회복/사망 판정은 서버 함수에서만 처리하고, Dead 상태에서는 Attack/Move/Dodge/Heal을 무시하도록 차단.
+- HP가 0 이하가 되면 `HandleDeath`가 1회만 실행되고, `DronePartReturnManager`를 통해 Equipped Core/LeftWeapon/RightWeapon만 DeathReturn 처리.
+- DeathReturn 성공/skip 후 Equipped 슬롯을 비워 Logout/Disconnect 재진입 시 중복 반환되지 않도록 정리.
+- `ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(Reason)`를 추가해 InBattle/Locked 플레이어의 EquippedParts만 RaidEndReturn 처리.
+- RaidEndReturn 후 Equipped 슬롯을 비워 RaidEnd 재호출/Logout에서도 MaxCount 초과 반환이 일어나지 않게 유지.
+- 빈 슬롯 반환은 실패성 에러가 아니라 `[DR_SUMMARY] ReturnSkipped ... Reason=AlreadyEmpty` no-op 로그로 남김.
+- `D6KillDrone`, `D6RaidEndReturn` 테스트용 경로를 추가하되, 결과창/UMG/DroneReport 전환은 구현하지 않음.
+- D6-1 수동 PIE 회귀: Dead Pawn이 Ready/AutoReady로 `Selecting->InBattle` 되는 상태 버그를 `ProcessReadyForRaidForServer` 공통 경로에서 차단.
+- Dead Ready/AutoReady 무시 시 재고, SelectedParts, EquippedParts를 건드리지 않고 아래 summary 로그만 남김.
+  - `[DR_SUMMARY] ReadyIgnored PC=... Reason=DeadPawn SelectionState=...`
+  - `[DR_SUMMARY] AutoReady PC=... Result=Ignored Reason=DeadPawn SelectionState=...`
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -NoLiveCoding` 성공.
+- 신규/확장 자동화 포함 `Automation RunTests DroneProto` 전체 15개 성공.
+- 추가된 핵심 테스트:
+  - `DroneProto.D6.Drone.DeathReturnClearsEquippedSlots`
+  - `DroneProto.D6.RaidGameMode.RaidEndReturnClearsInBattlePlayers`
+  - `DroneProto.D6.RaidPlayerController.DeadPawnReadyAndAutoReadyIgnored`
+- D6-1 테스트는 RED 단계에서 Dead Pawn이 Ready/AutoReady 성공으로 InBattle이 되는 실패를 확인한 뒤, guard 추가 후 GREEN으로 전환.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] D6KillDrone RequestPC=`
+- `[DR_SUMMARY] DroneDamage PC=`
+- `[DR_SUMMARY] DroneDeath PC=`
+- `[DR_SUMMARY] DeathReturn PC=`
+- `[DR_SUMMARY] RaidEnd Reason=`
+- `[DR_SUMMARY] RaidEndReturn PC=`
+- `[DR_SUMMARY] ReadyIgnored PC=`
+- `Result=Ignored Reason=DeadPawn`
+- `[DR_SUMMARY] DeadInputIgnored PC=`
+
+### 범위 제외
+
+- Pulse/Drain/Vector/Booster 세부 효과, 보스 패턴, VFX, ContributionManager, DroneReport, DataTable 전환, UMG 에셋 생성/배치는 D6/D6-1 범위에서 제외.
+- D5의 선택/Ready/AutoReady/PlayerSelectionState 구조는 유지하고, Dead Pawn 차단만 Ready 공통 경로에 추가.
+
+---
+
 ## 2026-06-21 — D5 드론 부품 선택/AutoReady/전투 Vertical Slice 완료 정리
 
 ### 완료 기준
