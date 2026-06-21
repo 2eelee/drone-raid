@@ -517,6 +517,88 @@ bool FDroneSelectionTimerDuplicateReadyTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDeadReadyGuardTest,
+	"DroneProto.D6.RaidPlayerController.DeadPawnReadyAndAutoReadyIgnored",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDeadReadyGuardTest::RunTest(const FString& Parameters)
+{
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	FDroneSelectionTestContext ManualReady = CreateDroneSelectionTestContext(TEXT("DroneDeadManualReadyGuardWorld"));
+	TestNotNull(TEXT("manual ready world is created"), ManualReady.World);
+	TestNotNull(TEXT("manual ready inventory actor is spawned"), ManualReady.Inventory);
+	TestNotNull(TEXT("manual ready player controller is spawned"), ManualReady.PC);
+	TestNotNull(TEXT("manual ready drone is spawned"), ManualReady.Drone);
+	if (!ManualReady.World || !ManualReady.Inventory || !ManualReady.PC || !ManualReady.Drone)
+	{
+		DestroyDroneSelectionTestContext(ManualReady);
+		return false;
+	}
+
+	TestTrue(TEXT("manual ready dead guard consumes selected weapon"),
+		ManualReady.Inventory->TryConsumePart(PulseLaser));
+	ManualReady.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	const int32 ManualPulseCountBeforeReady = ManualReady.Inventory->GetCurrentCount(PulseLaser);
+
+	ManualReady.Drone->ApplyDamageForServer(ManualReady.Drone->GetMaxHealth() + 1, FName(TEXT("Automation")));
+	TestTrue(TEXT("manual ready guard starts from a dead drone"), ManualReady.Drone->IsDead());
+	ManualReady.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("dead manual ready keeps player Selecting"),
+		ManualReady.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestEqual(TEXT("dead manual ready keeps selected weapon"),
+		ManualReady.PC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon),
+		PulseLaser);
+	TestEqual(TEXT("dead manual ready does not equip selected weapon"),
+		ManualReady.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("dead manual ready does not change selected weapon stock"),
+		ManualReady.Inventory->GetCurrentCount(PulseLaser),
+		ManualPulseCountBeforeReady);
+	DestroyDroneSelectionTestContext(ManualReady);
+
+	FDroneSelectionTestContext AutoReady = CreateDroneSelectionTestContext(TEXT("DroneDeadAutoReadyGuardWorld"));
+	TestNotNull(TEXT("auto ready world is created"), AutoReady.World);
+	TestNotNull(TEXT("auto ready inventory actor is spawned"), AutoReady.Inventory);
+	TestNotNull(TEXT("auto ready player controller is spawned"), AutoReady.PC);
+	TestNotNull(TEXT("auto ready drone is spawned"), AutoReady.Drone);
+	if (!AutoReady.World || !AutoReady.Inventory || !AutoReady.PC || !AutoReady.Drone)
+	{
+		DestroyDroneSelectionTestContext(AutoReady);
+		return false;
+	}
+
+	TestTrue(TEXT("auto ready dead guard consumes selected weapon"),
+		AutoReady.Inventory->TryConsumePart(VectorCannon));
+	AutoReady.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+	AutoReady.PC->Server_RequestStartSelectionTimer_Implementation();
+	const int32 AutoVectorCountBeforeReady = AutoReady.Inventory->GetCurrentCount(VectorCannon);
+
+	AutoReady.Drone->ApplyDamageForServer(AutoReady.Drone->GetMaxHealth() + 1, FName(TEXT("Automation")));
+	TestTrue(TEXT("auto ready guard starts from a dead drone"), AutoReady.Drone->IsDead());
+	AutoReady.PC->HandleSelectionTimerExpiredForServer();
+
+	TestEqual(TEXT("dead auto ready keeps player Selecting"),
+		AutoReady.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestEqual(TEXT("dead auto ready keeps selected weapon"),
+		AutoReady.PC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		VectorCannon);
+	TestEqual(TEXT("dead auto ready does not equip selected weapon"),
+		AutoReady.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("dead auto ready does not change selected weapon stock"),
+		AutoReady.Inventory->GetCurrentCount(VectorCannon),
+		AutoVectorCountBeforeReady);
+	DestroyDroneSelectionTestContext(AutoReady);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneSelectionLockedRequestRegressionTest,
 	"DroneProto.D5.RaidPlayerController.LockedRequestsDoNotChangeStock",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -1076,6 +1158,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] Cancel PC=")));
 	TestTrue(TEXT("ready summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] Ready PC=")));
+	TestTrue(TEXT("ready ignored dead pawn summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReadyIgnored PC=")));
 	TestTrue(TEXT("return summary log marker exists"),
 		DronePartReturnManagerSource.Contains(TEXT("ToReturnSummaryLogName")));
 	TestTrue(TEXT("attack summary log marker exists"),
@@ -1090,6 +1174,10 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] SelectTimerStop PC=")));
 	TestTrue(TEXT("auto ready summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] AutoReady PC=")));
+	TestTrue(TEXT("auto ready dead pawn ignored reason marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("Result=Ignored Reason=DeadPawn")));
+	TestTrue(TEXT("D6 kill drone target summary marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] D6KillDrone RequestPC=")));
 	TestTrue(TEXT("ui refresh summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] UIRefresh PC=")));
 	TestTrue(TEXT("death return summary log marker exists"),

@@ -748,7 +748,13 @@ void ARaidPlayerController::Server_RequestApplyTestDamageToDrone_Implementation(
 		return;
 	}
 
-	if (ADrone* ControlledDrone = Cast<ADrone>(GetPawn()))
+	ADrone* ControlledDrone = Cast<ADrone>(GetPawn());
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] D6KillDrone RequestPC=%s TargetPC=%s TargetDrone=%s"),
+		*BuildControllerLogString(this),
+		*BuildControllerLogString(this),
+		ControlledDrone ? *ControlledDrone->GetName() : TEXT("None"));
+
+	if (ControlledDrone)
 	{
 		ControlledDrone->ApplyDamageForServer(DamageAmount, FName(TEXT("D6Test")));
 	}
@@ -882,6 +888,7 @@ void ARaidPlayerController::D4CancelPart(FString SlotName)
 
 void ARaidPlayerController::D6KillDrone()
 {
+	// Exec uses the console-owning PlayerController; an editor/server console can therefore target the server-side PC.
 	Server_RequestApplyTestDamageToDrone(999999);
 }
 
@@ -1442,6 +1449,32 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 			LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
 		}
 		Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		return false;
+	}
+
+	if (ControlledDrone->IsDead())
+	{
+		FailureReason = TEXT("DeadPawn");
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Ignored: Player=%s Source=%s Reason=%s PlayerSelectionState=%s RaidState=%s"),
+			*PlayerLog,
+			bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+			*FailureReason,
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*RaidStateLog);
+
+		if (bAutoReady)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=DeadPawn SelectionState=%s"),
+				*PlayerLog,
+				ToPlayerSelectionStateLogString(PlayerSelectionState));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReadyIgnored PC=%s Reason=DeadPawn SelectionState=%s"),
+				*PlayerLog,
+				ToPlayerSelectionStateLogString(PlayerSelectionState));
+			Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+		}
 		return false;
 	}
 
