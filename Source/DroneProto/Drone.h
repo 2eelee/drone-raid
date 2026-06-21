@@ -34,6 +34,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
 	bool RequestDodgeForServer();
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
+	void ResetCombatRuntimeStateForServer();
+
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	int32 GetHealth() const;
 
@@ -45,6 +48,11 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	bool IsDead() const;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 GetPulseAttackCountForTest(bool bIsLeftWeapon) const;
+	float GetHealthValueForTest() const;
+#endif
 
 protected:
 	virtual void BeginPlay() override;
@@ -63,7 +71,7 @@ private:
 
 	// ---- Replicated Stats (부품 합산 결과만 복제) ----
 	UPROPERTY(ReplicatedUsing = OnRep_Health)
-	int32 Health = 100;
+	float Health = 100.0f;
 
 	UPROPERTY(Replicated)
 	int32 MaxHealth = 100;
@@ -124,5 +132,6 @@ private:
 	float GetCoreAttackModifierForServer(FName CorePartID) const;
 	float GetCoreBonusAttackModifierForServer(FName CorePartID) const;
 	ARaidBoss* FindRaidBossForServer() const;
+	void ApplyDrainHealForServer(float DamageDealt);
 	void ResetCombatRuntimeStateForLoadout();
 };

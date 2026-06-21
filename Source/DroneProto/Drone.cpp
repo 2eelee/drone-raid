@@ -100,6 +100,11 @@ FString BuildDroneControllerLogString(const AController* Controller)
 {
 	return ARaidPlayerController::BuildStableControllerLogString(Controller);
 }
+
+const TCHAR* ToWeaponSlotLogString(bool bIsLeftWeapon)
+{
+	return bIsLeftWeapon ? TEXT("Left") : TEXT("Right");
+}
 }
 
 ADrone::ADrone()
@@ -210,23 +215,23 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 		return;
 	}
 
-	Health = FMath::Clamp(Health - AppliedDamage, 0, MaxHealth);
+	Health = FMath::Clamp(Health - static_cast<float>(AppliedDamage), 0.0f, static_cast<float>(MaxHealth));
 	ForceNetUpdate();
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDamage PC=%s Drone=%s Damage=%d HP=%d/%d"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDamage PC=%s Drone=%s Damage=%d HP=%.2f/%d"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
 		*GetName(),
 		AppliedDamage,
 		Health,
 		MaxHealth);
 
-	UE_LOG(LogTemp, Log, TEXT("[Server] DroneDamage: Drone=%s Reason=%s Health=%d/%d"),
+	UE_LOG(LogTemp, Log, TEXT("[Server] DroneDamage: Drone=%s Reason=%s Health=%.2f/%d"),
 		*GetName(),
 		Reason.IsNone() ? TEXT("None") : *Reason.ToString(),
 		Health,
 		MaxHealth);
 
-	if (Health <= 0)
+	if (Health <= 0.0f)
 	{
 		HandleDeath();
 	}
@@ -252,10 +257,10 @@ bool ADrone::HealForServer(int32 HealAmount)
 		return false;
 	}
 
-	const int32 PreviousHealth = Health;
-	Health = FMath::Clamp(Health + AppliedHeal, 0, MaxHealth);
+	const float PreviousHealth = Health;
+	Health = FMath::Clamp(Health + static_cast<float>(AppliedHeal), 0.0f, static_cast<float>(MaxHealth));
 	ForceNetUpdate();
-	return Health > PreviousHealth;
+	return Health > PreviousHealth + KINDA_SMALL_NUMBER;
 }
 
 bool ADrone::RequestDodgeForServer()
@@ -274,6 +279,17 @@ bool ADrone::RequestDodgeForServer()
 
 	UE_LOG(LogTemp, VeryVerbose, TEXT("[Server] Dodge request accepted for future implementation: Drone=%s"), *GetName());
 	return true;
+}
+
+void ADrone::ResetCombatRuntimeStateForServer()
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ResetCombatRuntimeStateForServer rejected: server authority required"));
+		return;
+	}
+
+	ResetCombatRuntimeStateForLoadout();
 }
 
 bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID)
@@ -382,7 +398,7 @@ void ADrone::Server_RequestAttackBoss_Implementation()
 
 int32 ADrone::GetHealth() const
 {
-	return Health;
+	return FMath::RoundToInt(Health);
 }
 
 int32 ADrone::GetMaxHealth() const
@@ -400,12 +416,24 @@ bool ADrone::IsDead() const
 	return bIsDead;
 }
 
+#if WITH_DEV_AUTOMATION_TESTS
+int32 ADrone::GetPulseAttackCountForTest(bool bIsLeftWeapon) const
+{
+	return bIsLeftWeapon ? LeftPulseAttackCount : RightPulseAttackCount;
+}
+
+float ADrone::GetHealthValueForTest() const
+{
+	return Health;
+}
+#endif
+
 void ADrone::OnRep_Health()
 {
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(-1, 4.f, FColor::Cyan,
-			FString::Printf(TEXT("[Client] Health=%d  MaxHealth=%d  AttackPower=%d"),
+			FString::Printf(TEXT("[Client] Health=%.2f  MaxHealth=%d  AttackPower=%d"),
 				Health, MaxHealth, AttackPower));
 	}
 }
@@ -470,7 +498,7 @@ void ADrone::HandleDeath()
 	}
 
 	bIsDead = true;
-	Health = 0;
+	Health = 0.0f;
 	ForceNetUpdate();
 
 	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
@@ -538,7 +566,13 @@ void ADrone::HandleAttackBossForServer()
 	const float CoreBonusAttackModifier = GetCoreBonusAttackModifierForServer(EquippedCorePartID);
 	const float FinalDamage = TotalWeaponDamage * CoreAttackModifier * CoreBonusAttackModifier;
 
+	const float BossHPBeforeAttack = Boss->GetCurrentHP();
 	Boss->ApplyDamageForServer(FinalDamage, Cast<AController>(GetController()), this);
+	const float DamageDealt = FMath::Max(0.0f, BossHPBeforeAttack - Boss->GetCurrentHP());
+	if (EquippedCorePartID == ADronePartInventory::GetCoreDrainPartID())
+	{
+		ApplyDrainHealForServer(DamageDealt);
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone ZAttack: Drone=%s CorePartID=%s LeftWeaponPartID=%s RightWeaponPartID=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreAttackModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f BossHP=%.2f/%.2f"),
 		*GetName(),
@@ -578,16 +612,32 @@ float ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWea
 		PulseAttackCount++;
 		if (PulseAttackCount >= 3)
 		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] PulseAttack PC=%s Slot=%s Count=3 Damage=18 Reset=true"),
+				*BuildDroneControllerLogString(Cast<AController>(GetController())),
+				ToWeaponSlotLogString(bIsLeftWeapon));
 			PulseAttackCount = 0;
 			return 18.0f;
 		}
 
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] PulseAttack PC=%s Slot=%s Count=%d Damage=8 Reset=false"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			ToWeaponSlotLogString(bIsLeftWeapon),
+			PulseAttackCount);
 		return 8.0f;
 	}
 
 	if (WeaponPartID == ADronePartInventory::GetFractureBurstPartID())
 	{
-		return 5.0f + (3.0f * 2.0f);
+		constexpr float BaseDamage = 5.0f;
+		constexpr int32 ShardCount = 3;
+		constexpr float ShardDamage = 2.0f;
+		constexpr int32 HitCount = 1 + ShardCount;
+		const float Damage = BaseDamage + (static_cast<float>(ShardCount) * ShardDamage);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] FractureAttack PC=%s Slot=%s Base=5 Shards=3 ShardDamage=2 Damage=11 HitCount=%d"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			ToWeaponSlotLogString(bIsLeftWeapon),
+			HitCount);
+		return Damage;
 	}
 
 	if (WeaponPartID == ADronePartInventory::GetVectorCannonPartID())
@@ -622,7 +672,6 @@ float ADrone::GetCoreAttackModifierForServer(FName CorePartID) const
 
 	if (CorePartID == ADronePartInventory::GetCoreDrainPartID())
 	{
-		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Drain Core: damage-to-heal effect not implemented yet"));
 		return 0.85f;
 	}
 
@@ -634,9 +683,21 @@ float ADrone::GetCoreBonusAttackModifierForServer(FName CorePartID) const
 {
 	if (CorePartID == ADronePartInventory::GetCoreZenithPartID())
 	{
-		const float CurrentHPRatio = MaxHealth > 0 ? static_cast<float>(Health) / static_cast<float>(MaxHealth) : 0.0f;
+		float CurrentHPRatio = MaxHealth > 0 ? Health / static_cast<float>(MaxHealth) : 0.0f;
+		if (!FMath::IsFinite(CurrentHPRatio))
+		{
+			CurrentHPRatio = 0.0f;
+		}
+
+		CurrentHPRatio = FMath::Clamp(CurrentHPRatio, 0.0f, 1.0f);
 		const float ZenithBonus = FMath::Min(FMath::FloorToFloat(CurrentHPRatio / 0.1f) * 0.02f, 0.20f);
-		return 1.0f + ZenithBonus;
+		const float Modifier = 1.0f + ZenithBonus;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ZenithBonus PC=%s HPRatio=%.2f Bonus=%.2f Modifier=%.2f"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			CurrentHPRatio,
+			ZenithBonus,
+			Modifier);
+		return Modifier;
 	}
 
 	if (CorePartID == ADronePartInventory::GetCoreBoosterPartID())
@@ -670,6 +731,42 @@ ARaidBoss* ADrone::FindRaidBossForServer() const
 	}
 
 	return nullptr;
+}
+
+void ADrone::ApplyDrainHealForServer(float DamageDealt)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (bIsDead)
+	{
+		LogDeadInputIgnored(TEXT("Heal"));
+		return;
+	}
+
+	const float SafeDamageDealt = FMath::Max(0.0f, DamageDealt);
+	const float RawHealAmount = SafeDamageDealt * 0.12f;
+	const float CappedHealAmount = FMath::Min(RawHealAmount, 3.0f);
+	const float PreviousHealth = Health;
+	Health = FMath::Clamp(Health + CappedHealAmount, 0.0f, static_cast<float>(MaxHealth));
+	const float AppliedHealAmount = FMath::Max(0.0f, Health - PreviousHealth);
+	const bool bCapped = RawHealAmount > CappedHealAmount + KINDA_SMALL_NUMBER
+		|| AppliedHealAmount + KINDA_SMALL_NUMBER < RawHealAmount;
+
+	if (AppliedHealAmount > KINDA_SMALL_NUMBER)
+	{
+		ForceNetUpdate();
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DrainHeal PC=%s DamageDealt=%.2f Heal=%.2f HP=%.2f/%d Capped=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		SafeDamageDealt,
+		AppliedHealAmount,
+		Health,
+		MaxHealth,
+		bCapped ? TEXT("true") : TEXT("false"));
 }
 
 void ADrone::ResetCombatRuntimeStateForLoadout()

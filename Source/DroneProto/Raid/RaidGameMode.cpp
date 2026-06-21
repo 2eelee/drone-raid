@@ -318,6 +318,10 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 			}
 
 			DronePartReturnManager->ReturnEquippedParts(RaidPC, EDronePartReturnReason::RaidEnd);
+			if (ADrone* Drone = Cast<ADrone>(RaidPC->GetPawn()))
+			{
+				Drone->ResetCombatRuntimeStateForServer();
+			}
 		}
 	}
 
