@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DroneCombatTypes.h"
 #include "GameFramework/GameModeBase.h"
 #include "RaidGameMode.generated.h"
 
@@ -22,6 +23,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid")
 	void ReturnAllEquippedPartsForRaidEnd(FName Reason);
+
+	void HandleBossDefeatedForServer();
 
 	UDronePartReturnManager* GetDronePartReturnManager() const;
 

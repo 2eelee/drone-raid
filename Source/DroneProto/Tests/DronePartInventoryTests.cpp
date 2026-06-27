@@ -7,7 +7,9 @@
 #include "Drone.h"
 #include "DronePart.h"
 #include "Raid/DronePartInventory.h"
+#include "Raid/DroneCombatTypes.h"
 #include "Raid/DronePartReturnManager.h"
+#include "Raid/DroneReportWidget.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
@@ -129,6 +131,200 @@ float AttackBossAndMeasureDamage(ADrone* Drone, const ARaidBoss* Boss)
 	Drone->RequestAttackBoss();
 	return HPBeforeAttack - Boss->GetCurrentHP();
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCombatFormulaTest,
+	"DroneProto.D9.DroneCombat.Formulas",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCombatFormulaTest::RunTest(const FString& Parameters)
+{
+	FDroneWeaponCalculationInput PulseInput;
+	PulseInput.WeaponType = EDroneCombatWeaponType::PulseLaser;
+	PulseInput.PulseAttackCount = 2;
+	const FDroneWeaponCalculationResult PulseResult = FDroneCombatRules::CalculateWeaponDamage(PulseInput);
+	TestTrue(TEXT("third Pulse hit uses strong damage"),
+		FMath::IsNearlyEqual(PulseResult.WeaponDamage, 18.0f, 0.01f));
+	TestEqual(TEXT("third Pulse hit resets the slot-local counter"), PulseResult.PulseAttackCount, 0);
+
+	FDroneWeaponCalculationInput FractureInput;
+	FractureInput.WeaponType = EDroneCombatWeaponType::FractureBurst;
+	const FDroneWeaponCalculationResult FractureResult = FDroneCombatRules::CalculateWeaponDamage(FractureInput);
+	TestTrue(TEXT("Fracture Burst calculates 5 + 3 * 2 damage"),
+		FMath::IsNearlyEqual(FractureResult.WeaponDamage, 11.0f, 0.01f));
+	TestEqual(TEXT("Fracture Burst exposes four total hit events for reporting"), FractureResult.HitCount, 4);
+
+	FDroneWeaponCalculationInput VectorInput;
+	VectorInput.WeaponType = EDroneCombatWeaponType::VectorCannon;
+	VectorInput.VectorAccumulatedMoveDistanceMeters = 43.0f;
+	const FDroneWeaponCalculationResult VectorResult = FDroneCombatRules::CalculateWeaponDamage(VectorInput);
+	TestTrue(TEXT("Vector Cannon caps movement bonus at 8"),
+		FMath::IsNearlyEqual(VectorResult.WeaponDamage, 15.0f, 0.01f));
+	TestTrue(TEXT("Vector Cannon requests attack-time vector distance reset"), VectorResult.bResetVectorDistance);
+
+	FDroneCoreCalculationInput ZenithInput;
+	ZenithInput.CoreType = EDroneCombatCoreType::Zenith;
+	ZenithInput.CurrentHP = 50.0f;
+	ZenithInput.MaxHP = 100.0f;
+	const FDroneCoreCalculationResult ZenithResult = FDroneCombatRules::CalculateCoreBonus(ZenithInput);
+	TestTrue(TEXT("Zenith at 50 percent HP gives 1.10 bonus modifier"),
+		FMath::IsNearlyEqual(ZenithResult.CoreBonusAttackModifier, 1.10f, 0.01f));
+
+	FDroneCoreCalculationInput BoosterInput;
+	BoosterInput.CoreType = EDroneCombatCoreType::Booster;
+	BoosterInput.AccumulatedMoveDistanceMeters = 210.0f;
+	const FDroneCoreCalculationResult BoosterResult = FDroneCombatRules::CalculateCoreBonus(BoosterInput);
+	TestTrue(TEXT("Booster speed bonus caps at 0.30"),
+		FMath::IsNearlyEqual(BoosterResult.MoveSpeedBonus, 0.30f, 0.01f));
+	TestTrue(TEXT("Booster attack bonus is half of speed bonus"),
+		FMath::IsNearlyEqual(BoosterResult.CoreBonusAttackModifier, 1.15f, 0.01f));
+
+	TestTrue(TEXT("Drain heal is 12 percent of dealt damage"),
+		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(11.0f), 1.32f, 0.01f));
+	TestTrue(TEXT("Drain heal caps once per attack input"),
+		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(100.0f), 3.0f, 0.01f));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportFormulaTest,
+	"DroneProto.D10.DroneReport.Formulas",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
+{
+	FDroneCombatRecord CappedBaseRecord;
+	CappedBaseRecord.SurvivalTime = 240.0f;
+	CappedBaseRecord.BossDamage = 80.0f;
+	CappedBaseRecord.BossMaxHP = 1000.0f;
+	CappedBaseRecord.BossHPOnJoin = 1000.0f;
+	CappedBaseRecord.MoveDistance = 600.0f;
+	CappedBaseRecord.HealAmount = 60.0f;
+	CappedBaseRecord.DamageTakenCount = 1;
+	CappedBaseRecord.CombatStartTime = 0.0f;
+	CappedBaseRecord.CombatEndTime = 20.0f;
+	CappedBaseRecord.bIsAliveAtReport = true;
+	const FDroneReportData CappedBaseReport = FDroneReportRules::BuildReportData(CappedBaseRecord, false);
+	TestTrue(TEXT("Survival, boss damage, move, and heal base scores cap at 750 total"),
+		FMath::IsNearlyEqual(CappedBaseReport.ReportScore, 750.0f, 0.01f));
+	TestTrue(TEXT("BossDamageRatio is stored for UI"),
+		FMath::IsNearlyEqual(CappedBaseReport.BossDamageRatio, 0.08f, 0.001f));
+	TestEqual(TEXT("750 score maps to grade A"), CappedBaseReport.Grade, EDroneReportGrade::A);
+
+	FDroneCombatRecord LowDamageRecord = CappedBaseRecord;
+	LowDamageRecord.BossDamage = 5.0f;
+	LowDamageRecord.MoveDistance = 600.0f;
+	LowDamageRecord.HealAmount = 60.0f;
+	const FDroneReportData LowDamageReport = FDroneReportRules::BuildReportData(LowDamageRecord, false);
+	TestTrue(TEXT("BossDamageRatio under 1 percent zeros move and heal score"),
+		FMath::IsNearlyEqual(LowDamageReport.ReportScore, 221.875f, 0.01f));
+	TestEqual(TEXT("Low contribution report has no bonuses"), LowDamageReport.BonusScore, 0);
+
+	FDroneCombatRecord AllBonusRecord = CappedBaseRecord;
+	AllBonusRecord.BossDamage = 120.0f;
+	AllBonusRecord.MoveDistance = 900.0f;
+	AllBonusRecord.HealAmount = 70.0f;
+	AllBonusRecord.DamageTakenCount = 0;
+	AllBonusRecord.CombatEndTime = 180.0f;
+	const FDroneReportData AllBonusReport = FDroneReportRules::BuildReportData(AllBonusRecord, true);
+	TestEqual(TEXT("BonusScore caps at 250"), AllBonusReport.BonusScore, 250);
+	TestEqual(TEXT("All five bonus types are listed before cap"), AllBonusReport.AchievedBonusList.Num(), 5);
+
+	FDroneCombatRecord BossSlayerRecord = CappedBaseRecord;
+	BossSlayerRecord.BossDamage = 30.0f;
+	BossSlayerRecord.MoveDistance = 0.0f;
+	BossSlayerRecord.HealAmount = 0.0f;
+	BossSlayerRecord.DamageTakenCount = 1;
+	BossSlayerRecord.CombatEndTime = 180.0f;
+	const FDroneReportData BossSlayerReport = FDroneReportRules::BuildReportData(BossSlayerRecord, true);
+	TestEqual(TEXT("BossSlayer basic bonus grants 80"), BossSlayerReport.BonusScore, 80);
+	TestTrue(TEXT("BossSlayer bonus type is listed"),
+		BossSlayerReport.AchievedBonusList.Contains(EDroneReportBonusType::BossSlayer));
+
+	FDroneCombatRecord LateJoinRecord = BossSlayerRecord;
+	LateJoinRecord.BossDamage = 10.0f;
+	LateJoinRecord.BossHPOnJoin = 250.0f;
+	LateJoinRecord.CombatEndTime = 30.0f;
+	const FDroneReportData LateJoinReport = FDroneReportRules::BuildReportData(LateJoinRecord, true);
+	TestEqual(TEXT("Late join BossSlayer bonus is limited to 40"), LateJoinReport.BonusScore, 40);
+
+	FDroneCombatRecord TooShortRecord = AllBonusRecord;
+	TooShortRecord.CombatEndTime = 29.0f;
+	const FDroneReportData TooShortReport = FDroneReportRules::BuildReportData(TooShortRecord, true);
+	TestEqual(TEXT("CombatDuration under 30 seconds blocks bonuses"), TooShortReport.BonusScore, 0);
+
+	TestEqual(TEXT("850 score maps to S"), FDroneReportRules::CalculateGrade(850.0f), EDroneReportGrade::S);
+	TestEqual(TEXT("650 score maps to A"), FDroneReportRules::CalculateGrade(650.0f), EDroneReportGrade::A);
+	TestEqual(TEXT("400 score maps to B"), FDroneReportRules::CalculateGrade(400.0f), EDroneReportGrade::B);
+	TestEqual(TEXT("399 score maps to C"), FDroneReportRules::CalculateGrade(399.0f), EDroneReportGrade::C);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportDuplicateGenerationTest,
+	"DroneProto.D10.DroneReport.DuplicateGeneration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportDuplicateGenerationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneReportDuplicateWorld"));
+	TestNotNull(TEXT("test player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("test drone is spawned"), Context.Drone);
+	if (!Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.Drone->ApplyDamageForServer(Context.Drone->GetMaxHealth() + 10, FName(TEXT("Automation")));
+	TestTrue(TEXT("death creates exactly one server-held report"), Context.PC->HasDroneReportGeneratedForTest());
+	const FDroneReportData FirstReport = Context.PC->GetLastDroneReportDataForTest();
+	TestTrue(TEXT("created report is marked generated"), FirstReport.bIsReportGenerated);
+
+	TestFalse(TEXT("second report request is ignored"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	const FDroneReportData DuplicateAttemptReport = Context.PC->GetLastDroneReportDataForTest();
+	TestTrue(TEXT("duplicate attempt does not clear the existing report"),
+		DuplicateAttemptReport.bIsReportGenerated);
+	TestTrue(TEXT("duplicate attempt preserves the first report score"),
+		FMath::IsNearlyEqual(DuplicateAttemptReport.ReportScore, FirstReport.ReportScore, 0.01f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportWidgetTextTest,
+	"DroneProto.D11.DroneReport.WidgetTextHelpers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportWidgetTextTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("BossSlayer bonus display name"),
+		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::BossSlayer).ToString(),
+		FString(TEXT("Boss Slayer")));
+	TestEqual(TEXT("HighDPS bonus display name"),
+		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::HighDPS).ToString(),
+		FString(TEXT("High DPS")));
+	TestEqual(TEXT("NoDamage bonus display name"),
+		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::NoDamage).ToString(),
+		FString(TEXT("NO DAMAGE")));
+	TestEqual(TEXT("KeepMoving bonus display name"),
+		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::KeepMoving).ToString(),
+		FString(TEXT("Keep Moving")));
+	TestEqual(TEXT("HighRecovery bonus display name"),
+		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::HighRecovery).ToString(),
+		FString(TEXT("High Recovery")));
+
+	TestEqual(TEXT("S grade display text"), UDroneReportWidget::GetGradeDisplayText(EDroneReportGrade::S).ToString(), FString(TEXT("S")));
+	TestEqual(TEXT("A grade display text"), UDroneReportWidget::GetGradeDisplayText(EDroneReportGrade::A).ToString(), FString(TEXT("A")));
+	TestEqual(TEXT("B grade display text"), UDroneReportWidget::GetGradeDisplayText(EDroneReportGrade::B).ToString(), FString(TEXT("B")));
+	TestEqual(TEXT("C grade display text"), UDroneReportWidget::GetGradeDisplayText(EDroneReportGrade::C).ToString(), FString(TEXT("C")));
+
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -962,6 +1158,28 @@ bool FDronePulseLaserCombatTest::RunTest(const FString& Parameters)
 	}
 
 	DestroyDroneSelectionTestContext(DoublePulse);
+
+	FDroneSelectionTestContext DeadBossPulse = CreateDroneSelectionTestContext(TEXT("DronePulseDeadBossWorld"));
+	ARaidBoss* DeadBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DeadBossPulse, DeadBoss, TEXT("dead boss pulse")))
+	{
+		DestroyDroneSelectionTestContext(DeadBossPulse);
+		return false;
+	}
+
+	TestTrue(TEXT("dead boss Pulse loadout applies"),
+		DeadBossPulse.Drone->ApplyLoadout(NAME_None, PulseLaser, NAME_None));
+	DeadBoss->ApplyDamageForServer(DeadBoss->GetMaxHP() + 100.0f, DeadBossPulse.PC, DeadBossPulse.Drone);
+	TestTrue(TEXT("dead boss setup reaches zero HP"),
+		FMath::IsNearlyZero(DeadBoss->GetCurrentHP(), 0.01f));
+	DeadBossPulse.Drone->RequestAttackBoss();
+	TestEqual(TEXT("BossDead attack does not advance Pulse counter"),
+		DeadBossPulse.Drone->GetPulseAttackCountForTest(true),
+		0);
+	TestTrue(TEXT("BossDead attack keeps boss HP at zero"),
+		FMath::IsNearlyZero(DeadBoss->GetCurrentHP(), 0.01f));
+	DestroyDroneSelectionTestContext(DeadBossPulse);
+
 	return true;
 }
 
@@ -988,8 +1206,8 @@ bool FDroneFractureBurstCombatTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Fracture plus Fracture with CORE_002 loadout applies"),
 		Context.Drone->ApplyLoadout(ADronePartInventory::GetCoreBoosterPartID(), FractureBurst, FractureBurst));
-	TestTrue(TEXT("Fracture plus Fracture sums to 22 before CORE_002 modifier and remains 20.90"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 20.90f, 0.01f));
+	TestTrue(TEXT("Fracture plus Fracture with no movement keeps base 22 damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 22.0f, 0.01f));
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -1051,10 +1269,10 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 		Context.Drone->ApplyLoadout(DrainCore, FractureBurst, FractureBurst));
 	Context.Drone->ApplyDamageForServer(20, FName(TEXT("Automation")));
 	const float HPBeforeFractureDrain = Context.Drone->GetHealthValueForTest();
-	TestTrue(TEXT("Drain Fracture plus Fracture deals 18.70 damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 18.70f, 0.01f));
+	TestTrue(TEXT("Drain Fracture plus Fracture deals unmodified 22 damage"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 22.0f, 0.01f));
 	TestTrue(TEXT("Drain heals from total Fracture damage once per input"),
-		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.244f, 0.01f));
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.64f, 0.01f));
 
 	TestTrue(TEXT("Drain with empty weapons loadout applies"),
 		Context.Drone->ApplyLoadout(DrainCore, NAME_None, NAME_None));
@@ -1072,7 +1290,7 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 	AttackBossAndMeasureDamage(Context.Drone, Boss);
 	const float HPBeforeStrongDrain = Context.Drone->GetHealthValueForTest();
 	TestTrue(TEXT("third Drain double Pulse attack deals capped-heal damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.60f, 0.01f));
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 36.0f, 0.01f));
 	TestTrue(TEXT("Drain heal is capped at 3 per attack input"),
 		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeStrongDrain + 3.0f, 0.01f));
 
@@ -1082,6 +1300,64 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 	AttackBossAndMeasureDamage(Context.Drone, Boss);
 	TestTrue(TEXT("Drain never heals beyond MaxHealth"),
 		Context.Drone->GetHealthValueForTest() <= static_cast<float>(Context.Drone->GetMaxHealth()) + 0.01f);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneVectorBoosterCombatRecordTest,
+	"DroneProto.D9.Drone.VectorBoosterCombatRecord",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneVectorBoosterCombatRecordWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("vector booster record")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName BoosterCore = ADronePartInventory::GetCoreBoosterPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+	TestTrue(TEXT("Booster double Vector loadout applies"),
+		Context.Drone->ApplyLoadout(BoosterCore, VectorCannon, VectorCannon));
+
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+	Context.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Automation")));
+	Context.Drone->UpdateMoveDistanceForServerForTest(0.016f);
+	for (int32 Step = 1; Step <= 8; ++Step)
+	{
+		Context.Drone->SetActorLocation(FVector(static_cast<float>(Step) * 500.0f, 0.0f, 0.0f));
+		Context.Drone->UpdateMoveDistanceForServerForTest(0.25f);
+	}
+
+	TestTrue(TEXT("movement setup accumulates 40 meters for Vector"),
+		FMath::IsNearlyEqual(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 40.0f, 0.01f));
+	TestTrue(TEXT("movement setup accumulates 40 meters for Booster"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 40.0f, 0.01f));
+	TestTrue(TEXT("double Vector uses capped damage and Booster attack bonus"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.9f, 0.01f));
+	TestTrue(TEXT("Vector attack resets Vector distance only"),
+		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("Vector attack keeps Booster distance"),
+		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 40.0f, 0.01f));
+
+	const FDroneCombatRecord Record = Context.Drone->GetCombatRecordForTest();
+	TestTrue(TEXT("CombatRecord accumulates boss damage"),
+		FMath::IsNearlyEqual(Record.BossDamage, 30.9f, 0.01f));
+	TestTrue(TEXT("CombatRecord accumulates move distance"),
+		FMath::IsNearlyEqual(Record.MoveDistance, 40.0f, 0.01f));
+	TestTrue(TEXT("CombatRecord stores boss max HP for ratio calculation"),
+		FMath::IsNearlyEqual(Record.BossMaxHP, Boss->GetMaxHP(), 0.01f));
+	TestTrue(TEXT("CombatRecord stores boss HP on join"),
+		Record.BossHPOnJoin > 0.0f);
+
+	Context.Drone->ApplyDamageForServer(10, FName(TEXT("Automation")));
+	const FDroneCombatRecord DamagedRecord = Context.Drone->GetCombatRecordForTest();
+	TestEqual(TEXT("CombatRecord increments damage taken count"), DamagedRecord.DamageTakenCount, 1);
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -1121,6 +1397,14 @@ bool FDroneServerMoveInputAuthorityTest::RunTest(const FString& Parameters)
 		Context.Drone->ApplyMoveInputForServerForTest(FVector2D(3.0f, 4.0f)));
 	TestTrue(TEXT("server clamps move input vector length to one"),
 		FMath::IsNearlyEqual(Context.Drone->GetLastServerMoveInputForTest().Size(), 1.0f, 0.001f));
+	const FVector LocationBeforeServerMove = Context.Drone->GetActorLocation();
+	TestTrue(TEXT("pending accepted server move input is applied"),
+		Context.Drone->ApplyPendingServerMoveInputForTest(0.10f));
+	const FVector LocationAfterServerMove = Context.Drone->GetActorLocation();
+	TestTrue(TEXT("accepted server move input changes drone location on server tick"),
+		!LocationAfterServerMove.Equals(LocationBeforeServerMove, 0.1f));
+	TestTrue(TEXT("accepted server move input is consumed after server tick"),
+		Context.Drone->GetLastServerMoveInputForTest().IsNearlyZero());
 
 	Context.PC->UnPossess();
 	TestFalse(TEXT("unpossessed drone move input is ignored"),
@@ -1557,6 +1841,12 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
 	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
 	BattlePC->Server_RequestReadyForRaid_Implementation();
+	ARaidBoss* Boss = World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("raid end boss is spawned"), Boss);
+	if (Boss)
+	{
+		GameState->SetRaidBossForServer(Boss);
+	}
 	TestEqual(TEXT("battle player is InBattle before RaidEnd"),
 		BattlePC->GetCurrentSelectionState(),
 		EPlayerSelectionState::InBattle);
@@ -1575,6 +1865,8 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("RaidEnd clears battle right weapon"),
 		BattlePC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
 		NAME_None);
+	TestTrue(TEXT("RaidEnd moves battle player out of InBattle"),
+		BattlePC->GetCurrentSelectionState() != EPlayerSelectionState::InBattle);
 	TestEqual(TEXT("RaidEnd returns battle left weapon stock"),
 		Inventory->GetCurrentCount(PulseLaser),
 		Inventory->GetMaxCount(PulseLaser));
@@ -1587,6 +1879,22 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("RaidEnd leaves selecting player's selected core intact"),
 		SelectingPC->GetSelectedPartIDBySlot(EPartSlot::Core),
 		CoreZenith);
+
+	if (Boss)
+	{
+		const float BossHPAfterRaidEnd = Boss->GetCurrentHP();
+		BattleDrone->RequestAttackBoss();
+		TestTrue(TEXT("RaidEnd attack input does not damage boss"),
+			FMath::IsNearlyEqual(Boss->GetCurrentHP(), BossHPAfterRaidEnd, 0.01f));
+	}
+
+	TestFalse(TEXT("RaidEnd move input is ignored before server movement"),
+		BattleDrone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
+	const FVector BattleLocationAfterRaidEnd = BattleDrone->GetActorLocation();
+	TestFalse(TEXT("RaidEnd pending move is not applied"),
+		BattleDrone->ApplyPendingServerMoveInputForTest(0.10f));
+	TestTrue(TEXT("RaidEnd pending move leaves location unchanged"),
+		BattleDrone->GetActorLocation().Equals(BattleLocationAfterRaidEnd, 0.1f));
 
 	BattlePC->SetDronePartReturnManagerForTest(GameMode->GetDronePartReturnManager());
 	TestFalse(TEXT("logout after RaidEnd skips because equipped slots were cleared"),
@@ -1631,13 +1939,17 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	FString RaidPlayerControllerSource;
 	FString DronePartReturnManagerSource;
 	FString DronePartSelectWidgetSource;
+	FString DroneReportWidgetSource;
 	FString DroneSource;
+	FString RaidBossSource;
 
 	if (!LoadSourceFile(TEXT("Raid/RaidGameMode.cpp"), RaidGameModeSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidPlayerController.cpp"), RaidPlayerControllerSource)
 		|| !LoadSourceFile(TEXT("Raid/DronePartReturnManager.cpp"), DronePartReturnManagerSource)
 		|| !LoadSourceFile(TEXT("Raid/DronePartSelectWidget.cpp"), DronePartSelectWidgetSource)
-		|| !LoadSourceFile(TEXT("Drone.cpp"), DroneSource))
+		|| !LoadSourceFile(TEXT("Raid/DroneReportWidget.cpp"), DroneReportWidgetSource)
+		|| !LoadSourceFile(TEXT("Drone.cpp"), DroneSource)
+		|| !LoadSourceFile(TEXT("Raid/RaidBoss.cpp"), RaidBossSource))
 	{
 		return false;
 	}
@@ -1654,12 +1966,32 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReadyIgnored PC=")));
 	TestTrue(TEXT("return summary log marker exists"),
 		DronePartReturnManagerSource.Contains(TEXT("ToReturnSummaryLogName")));
-	TestTrue(TEXT("attack summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack PC=")));
+	TestTrue(TEXT("attack calculation summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] AttackCalc Player=")));
+	TestTrue(TEXT("attack accepted summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Accepted: Player=")));
 	TestTrue(TEXT("attack ignored summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] AttackIgnored PC=")));
+	TestTrue(TEXT("not in battle attack ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=NotInBattle")));
+	TestTrue(TEXT("raid end attack ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=RaidEnd")));
+	TestTrue(TEXT("boss dead attack ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=BossDead")));
+	TestTrue(TEXT("no boss attack failed summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Failed: Reason=NoBoss")));
+	TestTrue(TEXT("invalid pawn attack failed summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Failed: Reason=InvalidPawn")));
 	TestTrue(TEXT("attack path checks PlayerSelectionState"),
 		DroneSource.Contains(TEXT("GetPlayerSelectionState()")));
+	TestTrue(TEXT("boss damage summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDamage: OldHP=")));
+	TestTrue(TEXT("boss death summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDeath:")));
+	TestTrue(TEXT("dead boss damage ignored summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=BossDead")));
+	TestTrue(TEXT("boss max HP is replicated with current HP"),
+		RaidBossSource.Contains(TEXT("DOREPLIFETIME(ARaidBoss, MaxHP)")));
 	TestTrue(TEXT("selection timer start summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] SelectTimerStart PC=")));
 	TestTrue(TEXT("selection timer stop summary log marker exists"),
@@ -1694,16 +2026,57 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("TEXT(\"Dodge\")")));
 	TestTrue(TEXT("dead heal ignored marker exists"),
 		DroneSource.Contains(TEXT("TEXT(\"Heal\")")));
-	TestTrue(TEXT("Pulse attack summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] PulseAttack PC=")));
-	TestTrue(TEXT("Fracture attack summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] FractureAttack PC=")));
-	TestTrue(TEXT("Zenith bonus summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] ZenithBonus PC=")));
+	TestTrue(TEXT("weapon calculation summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] WeaponCalc Player=")));
+	TestTrue(TEXT("core calculation summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] CoreCalc Player=")));
 	TestTrue(TEXT("Drain heal summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] DrainHeal PC=")));
+	TestTrue(TEXT("combat record summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] CombatRecord Player=")));
+	TestTrue(TEXT("report created summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportCreated Player=")));
+	TestTrue(TEXT("bonus calculation summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] BonusCalc Player=")));
+	TestTrue(TEXT("grade calculation summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] GradeCalc Player=")));
+	TestTrue(TEXT("report duplicate summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportDuplicateIgnored Player=")));
+	TestTrue(TEXT("report client received summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportClientReceived Player=")));
+	TestTrue(TEXT("report widget shown summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetShown Player=")));
+	TestTrue(TEXT("report widget refreshed summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetRefreshed Player=")));
+	TestTrue(TEXT("report widget missing class summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetMissingClass Player=")));
+	TestTrue(TEXT("report widget hidden summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetHidden Player=")));
+	TestFalse(TEXT("report widget does not expose ReportScore getter"),
+		DroneReportWidgetSource.Contains(TEXT("GetReportScoreText")));
+	TestTrue(TEXT("return after report summary log marker exists"),
+		RaidGameModeSource.Contains(TEXT("[DR_SUMMARY] ReturnAfterReport Player="))
+		&& DroneSource.Contains(TEXT("[DR_SUMMARY] ReturnAfterReport Player=")));
 	TestTrue(TEXT("move input summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveInput PC=")));
+	TestTrue(TEXT("server move applied summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] ServerMoveApplied PC=")));
+	TestTrue(TEXT("server move ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] ServerMoveIgnored PC=")));
+	TestTrue(TEXT("owner-only move sync is registered"),
+		DroneSource.Contains(TEXT("DOREPLIFETIME_CONDITION(ADrone, OwnerMoveSync, COND_OwnerOnly)")));
+	TestTrue(TEXT("owner move sync sent summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] OwnerMoveSyncSent PC=")));
+	TestTrue(TEXT("owner move corrected summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] OwnerMoveCorrected PC=")));
+	TestTrue(TEXT("replicated location summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] ReplicatedLocation PC=")));
+	TestTrue(TEXT("view target result summary marker exists"),
+		DroneSource.Contains(TEXT("ViewTargetResult=")));
+	TestTrue(TEXT("view target matched pawn result marker exists"),
+		DroneSource.Contains(TEXT("ViewTargetMatchesPawn")));
+	TestTrue(TEXT("simulated proxy view target result marker exists"),
+		DroneSource.Contains(TEXT("SimProxyObserved")));
 	TestTrue(TEXT("move audit summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveAudit PC=")));
 	TestTrue(TEXT("move distance summary log marker exists"),
@@ -1732,6 +2105,12 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("BuildStableControllerLogString")));
 	TestTrue(TEXT("return logs use stable controller naming"),
 		DronePartReturnManagerSource.Contains(TEXT("BuildStableControllerLogString")));
+	TestTrue(TEXT("raid end duplicate skip summary log marker exists"),
+		RaidGameModeSource.Contains(TEXT("[DR_SUMMARY] RaidEndSkipped Reason=AlreadyEnded")));
+	TestTrue(TEXT("raid end server state cleanup summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] RaidEndStateCleaned Player=")));
+	TestTrue(TEXT("raid end client refresh summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] RaidEndClientRefresh Player=")));
 	TestTrue(TEXT("in battle UI summary reports equipped parts"),
 		RaidPlayerControllerSource.Contains(TEXT("SummaryCorePartID")));
 

@@ -189,6 +189,7 @@ private:
 	void SyncPreviewIndicesToSelection();
 	void BindButtonEvents();
 	void UnbindButtonEvents();
+	void LogOptionalWidgetBindings() const;
 	void StartTimerTextRefresh();
 	void StopTimerTextRefresh();
 	void RefreshTimerText();

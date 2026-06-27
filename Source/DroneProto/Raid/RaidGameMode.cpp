@@ -27,6 +27,28 @@ void LogControllerPawnState(const TCHAR* Source, const AController* Controller)
 		Pawn ? *Pawn->GetClass()->GetName() : TEXT("None"),
 		Pawn && Pawn->IsA<ADrone>() ? TEXT("true") : TEXT("false"));
 }
+
+EDroneReportTrigger ResolveReportTriggerForRaidEndReason(FName Reason)
+{
+	return Reason == FName(TEXT("BossDefeated"))
+		? EDroneReportTrigger::BossDefeated
+		: EDroneReportTrigger::RaidTimeLimit;
+}
+
+const TCHAR* ToReportTriggerLogString(EDroneReportTrigger Trigger)
+{
+	switch (Trigger)
+	{
+	case EDroneReportTrigger::Death:
+		return TEXT("Death");
+	case EDroneReportTrigger::BossDefeated:
+		return TEXT("BossDefeated");
+	case EDroneReportTrigger::RaidTimeLimit:
+		return TEXT("RaidTimeLimit");
+	default:
+		return TEXT("Unknown");
+	}
+}
 }
 
 ARaidGameMode::ARaidGameMode()
@@ -289,7 +311,17 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 		return;
 	}
 
+	ARaidGameState* GS = World->GetGameState<ARaidGameState>();
+	if (GS && GS->RaidState == ERaidState::End)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEndSkipped Reason=AlreadyEnded RequestedReason=%s"),
+			Reason.IsNone() ? TEXT("Manual") : *Reason.ToString());
+		return;
+	}
+
 	const FString ReasonText = Reason.IsNone() ? TEXT("Manual") : Reason.ToString();
+	const EDroneReportTrigger ReportTrigger = ResolveReportTriggerForRaidEndReason(Reason);
+	const bool bBossDefeated = ReportTrigger == EDroneReportTrigger::BossDefeated;
 	int32 EligiblePlayerCount = 0;
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
@@ -307,6 +339,11 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 		*ReasonText,
 		EligiblePlayerCount);
 
+	if (GS)
+	{
+		GS->SetRaidStateForServer(ERaidState::End);
+	}
+
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
@@ -317,22 +354,33 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 				continue;
 			}
 
+			RaidPC->TryCreateDroneReportForServer(ReportTrigger, bBossDefeated);
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnAfterReport Player=%s Trigger=%s"),
+				*BuildRaidGameModeControllerLogString(RaidPC),
+				ToReportTriggerLogString(ReportTrigger));
+
 			DronePartReturnManager->ReturnEquippedParts(RaidPC, EDronePartReturnReason::RaidEnd);
 			if (ADrone* Drone = Cast<ADrone>(RaidPC->GetPawn()))
 			{
 				Drone->ResetCombatRuntimeStateForServer();
 			}
+			RaidPC->FinalizeRaidEndForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 		}
-	}
-
-	if (ARaidGameState* GS = World->GetGameState<ARaidGameState>())
-	{
-		GS->SetRaidStateForServer(ERaidState::End);
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd equipped part return completed Reason=%s PlayerCount=%d"),
 		*ReasonText,
 		EligiblePlayerCount);
+}
+
+void ARaidGameMode::HandleBossDefeatedForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ReturnAllEquippedPartsForRaidEnd(FName(TEXT("BossDefeated")));
 }
 
 UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const

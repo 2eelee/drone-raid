@@ -23,11 +23,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss")
 	float GetMaxHP() const;
 
+	UFUNCTION(BlueprintPure, Category = "Raid|Boss")
+	bool IsDefeated() const;
+
 protected:
 	virtual void BeginPlay() override;
 
 private:
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(Replicated, EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))
 	float MaxHP = 1000.0f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentHP, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))

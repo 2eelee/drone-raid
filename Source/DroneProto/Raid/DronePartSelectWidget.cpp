@@ -7,12 +7,15 @@
 #include "RaidGameState.h"
 #include "RaidPlayerController.h"
 #include "Engine/World.h"
+#include "UObject/FieldIterator.h"
+#include "UObject/UnrealType.h"
 
 void UDronePartSelectWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
 	SetIsFocusable(true);
+	LogOptionalWidgetBindings();
 	CachedRaidPlayerController = GetOwningRaidPlayerController();
 	if (CachedRaidPlayerController)
 	{
@@ -511,6 +514,31 @@ void UDronePartSelectWidget::UnbindButtonEvents()
 	if (Button_CombatStart)
 	{
 		Button_CombatStart->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleCombatStartClicked);
+	}
+}
+
+void UDronePartSelectWidget::LogOptionalWidgetBindings() const
+{
+	for (TFieldIterator<FObjectProperty> PropertyIt(GetClass(), EFieldIteratorFlags::ExcludeSuper); PropertyIt; ++PropertyIt)
+	{
+		const FObjectProperty* Property = *PropertyIt;
+		if (!Property || !Property->HasMetaData(TEXT("BindWidgetOptional")))
+		{
+			continue;
+		}
+
+		const UObject* BoundWidget = Property->GetObjectPropertyValue_InContainer(this);
+		if (BoundWidget)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] WidgetBind Bound: WidgetName=%s WidgetClass=%s"),
+				*Property->GetName(),
+				*BoundWidget->GetClass()->GetName());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] WidgetBind Missing: WidgetName=%s"),
+				*Property->GetName());
+		}
 	}
 }
 

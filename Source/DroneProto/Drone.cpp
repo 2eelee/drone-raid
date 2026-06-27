@@ -8,6 +8,7 @@
 #include "InputActionValue.h"
 #include "InputCoreTypes.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/PlayerController.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
@@ -15,6 +16,7 @@
 #include "EngineUtils.h"
 #include "Raid/DronePartInventory.h"
 #include "Raid/RaidBoss.h"
+#include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
 
@@ -114,6 +116,57 @@ constexpr float MoveDistanceExpectedDeltaSlackMeters = 3.0f;
 constexpr float MoveInputSummaryLogIntervalSeconds = 0.50f;
 constexpr float MoveDistanceSummaryLogIntervalSeconds = 0.50f;
 constexpr float MoveDistanceIgnoredLogIntervalSeconds = 1.00f;
+constexpr float OwnerMoveCorrectionThresholdCm = 5.0f;
+
+const TCHAR* ToCombatCoreTypeLogString(EDroneCombatCoreType CoreType)
+{
+	switch (CoreType)
+	{
+	case EDroneCombatCoreType::Zenith:
+		return TEXT("Zenith");
+	case EDroneCombatCoreType::Booster:
+		return TEXT("Booster");
+	case EDroneCombatCoreType::Drain:
+		return TEXT("Drain");
+	default:
+		return TEXT("None");
+	}
+}
+
+const TCHAR* ToCombatWeaponTypeLogString(EDroneCombatWeaponType WeaponType)
+{
+	switch (WeaponType)
+	{
+	case EDroneCombatWeaponType::PulseLaser:
+		return TEXT("PulseLaser");
+	case EDroneCombatWeaponType::FractureBurst:
+		return TEXT("FractureBurst");
+	case EDroneCombatWeaponType::VectorCannon:
+		return TEXT("VectorCannon");
+	default:
+		return TEXT("None");
+	}
+}
+
+const TCHAR* BuildLocalViewTargetResult(const APlayerController* PC, const APawn* Pawn, const AActor* ViewTarget)
+{
+	if (!PC || !PC->IsLocalController())
+	{
+		return TEXT("NotLocalController");
+	}
+
+	if (!Pawn)
+	{
+		return TEXT("PawnNull");
+	}
+
+	if (!ViewTarget)
+	{
+		return TEXT("ViewTargetNull");
+	}
+
+	return ViewTarget == Pawn ? TEXT("ViewTargetMatchesPawn") : TEXT("ViewTargetMismatch");
+}
 }
 
 ADrone::ADrone()
@@ -128,6 +181,10 @@ ADrone::ADrone()
 	SetRootComponent(Root);
 
 	FloatingMovement = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("FloatingMovement"));
+	if (FloatingMovement)
+	{
+		BaseMoveSpeedCmPerSecond = FloatingMovement->MaxSpeed;
+	}
 
 	MuzzlePoint = CreateDefaultSubobject<USceneComponent>(TEXT("MuzzlePoint"));
 	MuzzlePoint->SetupAttachment(RootComponent);
@@ -140,6 +197,10 @@ void ADrone::BeginPlay()
 
 	if (HasAuthority())
 	{
+		if (FloatingMovement && BaseMoveSpeedCmPerSecond <= KINDA_SMALL_NUMBER)
+		{
+			BaseMoveSpeedCmPerSecond = FloatingMovement->MaxSpeed;
+		}
 		ResetMoveDistanceForServer(FName(TEXT("Spawn")));
 	}
 
@@ -168,6 +229,7 @@ void ADrone::Tick(float DeltaSeconds)
 
 	if (HasAuthority())
 	{
+		ApplyPendingServerMoveInputForServer(DeltaSeconds);
 		UpdateMoveDistanceForServer(DeltaSeconds);
 	}
 }
@@ -247,6 +309,10 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 	}
 
 	Health = FMath::Clamp(Health - static_cast<float>(AppliedDamage), 0.0f, static_cast<float>(MaxHealth));
+	if (bCombatRecordActive)
+	{
+		CombatRecord.DamageTakenCount++;
+	}
 	ForceNetUpdate();
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDamage PC=%s Drone=%s Damage=%d HP=%.2f/%d"),
@@ -290,6 +356,8 @@ bool ADrone::HealForServer(int32 HealAmount)
 
 	const float PreviousHealth = Health;
 	Health = FMath::Clamp(Health + static_cast<float>(AppliedHeal), 0.0f, static_cast<float>(MaxHealth));
+	const float AppliedHealAmount = FMath::Max(0.0f, Health - PreviousHealth);
+	AddHealToCombatRecordForServer(AppliedHealAmount);
 	ForceNetUpdate();
 	return Health > PreviousHealth + KINDA_SMALL_NUMBER;
 }
@@ -321,6 +389,17 @@ void ADrone::ResetCombatRuntimeStateForServer()
 	}
 
 	ResetCombatRuntimeStateForReason(FName(TEXT("RaidEnd")));
+}
+
+FDroneCombatRecord ADrone::GetCombatRecordForServer() const
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] GetCombatRecordForServer rejected: server authority required"));
+		return FDroneCombatRecord();
+	}
+
+	return BuildCombatRecordSnapshotForServer();
 }
 
 bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID)
@@ -400,6 +479,8 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 	ResetCombatRuntimeStateForReason(FName(TEXT("Loadout")));
 	RecalculateStats();
 	bIsDead = false;
+	StartCombatRecordForServer();
+	RefreshMoveSpeedForServer();
 	ForceNetUpdate();
 	UE_LOG(LogTemp, Log, TEXT("[Server] ApplyLoadout Success: Core=%s Left=%s Right=%s MaxHealth=%d AttackPower=%d"),
 		*EquippedCorePartID.ToString(),
@@ -468,6 +549,11 @@ bool ADrone::ApplyMoveInputForServerForTest(FVector2D RawAxis)
 	return ApplyMoveInputForServer(RawAxis);
 }
 
+bool ADrone::ApplyPendingServerMoveInputForTest(float DeltaSeconds)
+{
+	return ApplyPendingServerMoveInputForServer(DeltaSeconds);
+}
+
 void ADrone::UpdateMoveDistanceForServerForTest(float DeltaSeconds)
 {
 	UpdateMoveDistanceForServer(DeltaSeconds);
@@ -491,6 +577,11 @@ float ADrone::GetVectorAccumulatedMoveDistanceForTest() const
 float ADrone::GetBoosterAccumulatedMoveDistanceForTest() const
 {
 	return BoosterAccumulatedMoveDistanceMeters;
+}
+
+FDroneCombatRecord ADrone::GetCombatRecordForTest() const
+{
+	return BuildCombatRecordSnapshotForServer();
 }
 
 FVector2D ADrone::GetLastServerMoveInputForTest() const
@@ -518,6 +609,78 @@ void ADrone::OnRep_IsDead()
 	}
 }
 
+void ADrone::OnRep_ReplicatedMovement()
+{
+	Super::OnRep_ReplicatedMovement();
+
+	if (HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (Now - LastReplicatedLocationSummaryLogTime < MoveDistanceSummaryLogIntervalSeconds)
+	{
+		return;
+	}
+
+	LastReplicatedLocationSummaryLogTime = Now;
+	const bool bLocallyControlled = IsLocallyControlled();
+	const APlayerController* PC = bLocallyControlled ? Cast<APlayerController>(GetController()) : nullptr;
+	const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+	const AActor* ViewTarget = PC ? PC->GetViewTarget() : nullptr;
+	const TCHAR* ViewTargetResult = bLocallyControlled
+		? BuildLocalViewTargetResult(PC, Pawn, ViewTarget)
+		: TEXT("SimProxyObserved");
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReplicatedLocation PC=%s Pawn=%s Location=%s LocalRole=%d ViewTarget=%s ViewTargetResult=%s"),
+		*BuildDroneControllerLogString(PC),
+		Pawn ? *Pawn->GetName() : TEXT("None"),
+		*GetActorLocation().ToString(),
+		static_cast<int32>(GetLocalRole()),
+		ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
+		ViewTargetResult);
+}
+
+void ADrone::OnRep_OwnerMoveSync()
+{
+	if (HasAuthority() || !IsLocallyControlled())
+	{
+		return;
+	}
+
+	const FVector LocalBefore = GetActorLocation();
+	const FVector ServerLocation = OwnerMoveSync.Location;
+	const float DeltaCm = FVector::Dist(LocalBefore, ServerLocation);
+	if (DeltaCm <= OwnerMoveCorrectionThresholdCm)
+	{
+		return;
+	}
+
+	SetActorLocationAndRotation(ServerLocation, OwnerMoveSync.Rotation, false, nullptr, ETeleportType::TeleportPhysics);
+
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (Now - LastOwnerMoveCorrectedLogTime >= MoveDistanceSummaryLogIntervalSeconds)
+	{
+		LastOwnerMoveCorrectedLogTime = Now;
+		const APlayerController* PC = Cast<APlayerController>(GetController());
+		const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
+		const AActor* ViewTarget = PC ? PC->GetViewTarget() : nullptr;
+		const bool bViewTargetMatchesPawn = Pawn && ViewTarget && ViewTarget == Pawn;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OwnerMoveCorrected PC=%s Pawn=%s ViewTarget=%s bViewTargetMatchesPawn=%s LocalBefore=%s ServerLocation=%s Delta=%.2f Sequence=%u ViewTargetResult=%s"),
+			*BuildDroneControllerLogString(PC),
+			Pawn ? *Pawn->GetName() : TEXT("None"),
+			ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
+			bViewTargetMatchesPawn ? TEXT("true") : TEXT("false"),
+			*LocalBefore.ToString(),
+			*ServerLocation.ToString(),
+			DeltaCm,
+			OwnerMoveSync.Sequence,
+			BuildLocalViewTargetResult(PC, Pawn, ViewTarget));
+	}
+}
+
 void ADrone::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -525,6 +688,7 @@ void ADrone::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePr
 	DOREPLIFETIME(ADrone, MaxHealth);
 	DOREPLIFETIME(ADrone, AttackPower);
 	DOREPLIFETIME(ADrone, bIsDead);
+	DOREPLIFETIME_CONDITION(ADrone, OwnerMoveSync, COND_OwnerOnly);
 }
 
 void ADrone::ServerEquipPart(TSubclassOf<UDronePart> PartClass)
@@ -584,6 +748,10 @@ void ADrone::HandleDeath()
 			*CorePartID.ToString(),
 			*LeftWeaponPartID.ToString(),
 			*RightWeaponPartID.ToString());
+		RaidPC->TryCreateDroneReportForServer(EDroneReportTrigger::Death, false);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnAfterReport Player=%s Trigger=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			TEXT("Death"));
 		RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Death);
 	}
 	else
@@ -606,13 +774,42 @@ void ADrone::HandleAttackBossForServer()
 {
 	if (!HasAuthority())
 	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Failed: Reason=NotAuthority Player=%s Drone=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName());
 		return;
 	}
 
 	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (!RaidPC || RaidPC->GetPawn() != this)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=PossessMismatch Drone=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Failed: Reason=InvalidPawn Player=%s Drone=%s CurrentPawn=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			RaidPC && RaidPC->GetPawn() ? *RaidPC->GetPawn()->GetName() : TEXT("None"));
+		return;
+	}
+
+	if (const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (RaidGameState->RaidState == ERaidState::End)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=RaidEnd Player=%s Drone=%s RaidState=End"),
+				*BuildDroneControllerLogString(RaidPC),
+				*GetName());
+			return;
+		}
+	}
+
 	if (RaidPC && RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=NotInBattle SelectionState=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=NotInBattle Player=%s SelectionState=%s"),
 			*BuildDroneControllerLogString(RaidPC),
 			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()));
 		return;
@@ -620,6 +817,9 @@ void ADrone::HandleAttackBossForServer()
 
 	if (bIsDead)
 	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=Dead Drone=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName());
 		LogDeadInputIgnored(TEXT("Attack"));
 		return;
 	}
@@ -627,23 +827,45 @@ void ADrone::HandleAttackBossForServer()
 	ARaidBoss* Boss = FindRaidBossForServer();
 	if (!Boss)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Server] Drone ZAttack failed: Drone=%s Reason=RaidBoss missing"), *GetName());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=NoBoss Drone=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Failed: Reason=NoBoss Player=%s Drone=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName());
 		return;
 	}
 
-	const float LeftWeaponDamage = CalculateWeaponDamageForServer(EquippedLeftWeaponPartID, true);
-	const float RightWeaponDamage = CalculateWeaponDamageForServer(EquippedRightWeaponPartID, false);
+	if (Boss->IsDefeated())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=BossDead Player=%s Drone=%s BossHP=%.2f"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			Boss->GetCurrentHP());
+		return;
+	}
+
+	const FDroneWeaponCalculationResult LeftWeaponResult = CalculateWeaponDamageForServer(EquippedLeftWeaponPartID, true);
+	const FDroneWeaponCalculationResult RightWeaponResult = CalculateWeaponDamageForServer(EquippedRightWeaponPartID, false);
+	const float LeftWeaponDamage = LeftWeaponResult.WeaponDamage;
+	const float RightWeaponDamage = RightWeaponResult.WeaponDamage;
 	const float TotalWeaponDamage = LeftWeaponDamage + RightWeaponDamage;
-	const float CoreAttackModifier = GetCoreAttackModifierForServer(EquippedCorePartID);
-	const float CoreBonusAttackModifier = GetCoreBonusAttackModifierForServer(EquippedCorePartID);
-	const float FinalDamage = TotalWeaponDamage * CoreAttackModifier * CoreBonusAttackModifier;
+	const FDroneCoreCalculationResult CoreResult = CalculateCoreForServer(EquippedCorePartID);
+	const float FinalDamage = TotalWeaponDamage * CoreResult.CoreAttackModifier * CoreResult.CoreBonusAttackModifier;
 
 	const float BossHPBeforeAttack = Boss->GetCurrentHP();
 	Boss->ApplyDamageForServer(FinalDamage, Cast<AController>(GetController()), this);
 	const float DamageDealt = FMath::Max(0.0f, BossHPBeforeAttack - Boss->GetCurrentHP());
+	const bool bBossDefeatedByThisAttack = BossHPBeforeAttack > 0.0f && Boss->GetCurrentHP() <= 0.0f;
+	AddBossDamageToCombatRecordForServer(DamageDealt, Boss);
+	float HealAmount = 0.0f;
 	if (EquippedCorePartID == ADronePartInventory::GetCoreDrainPartID())
 	{
-		ApplyDrainHealForServer(DamageDealt);
+		HealAmount = ApplyDrainHealForServer(DamageDealt);
+	}
+	if (LeftWeaponResult.bResetVectorDistance || RightWeaponResult.bResetVectorDistance)
+	{
+		ResetVectorMoveDistanceForServer(FName(TEXT("VectorAttack")));
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone ZAttack: Drone=%s CorePartID=%s LeftWeaponPartID=%s RightWeaponPartID=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreAttackModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f BossHP=%.2f/%.2f"),
@@ -654,21 +876,46 @@ void ADrone::HandleAttackBossForServer()
 		LeftWeaponDamage,
 		RightWeaponDamage,
 		TotalWeaponDamage,
-		CoreAttackModifier,
-		CoreBonusAttackModifier,
+		CoreResult.CoreAttackModifier,
+		CoreResult.CoreBonusAttackModifier,
 		FinalDamage,
 		Boss->GetCurrentHP(),
 		Boss->GetMaxHP());
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack PC=%s Drone=%s Core=%s Left=%s Right=%s Damage=%.2f BossHP=%.2f/%.2f"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackCalc Player=%s Core=%s LeftWeapon=%s RightWeapon=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f DamageDealt=%.2f HealAmount=%.2f BossHP=%.2f/%.2f"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
-		*GetName(),
+		*EquippedCorePartID.ToString(),
+		*EquippedLeftWeaponPartID.ToString(),
+		*EquippedRightWeaponPartID.ToString(),
+		LeftWeaponDamage,
+		RightWeaponDamage,
+		TotalWeaponDamage,
+		CoreResult.CoreAttackModifier,
+		CoreResult.CoreBonusAttackModifier,
+		FinalDamage,
+		DamageDealt,
+		HealAmount,
+		Boss->GetCurrentHP(),
+		Boss->GetMaxHP());
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Accepted: Player=%s Core=%s LeftWeapon=%s RightWeapon=%s Damage=%.2f LeftDamage=%.2f RightDamage=%.2f BossHPBefore=%.2f BossHPAfter=%.2f"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
 		*EquippedCorePartID.ToString(),
 		*EquippedLeftWeaponPartID.ToString(),
 		*EquippedRightWeaponPartID.ToString(),
 		FinalDamage,
-		Boss->GetCurrentHP(),
-		Boss->GetMaxHP());
+		LeftWeaponDamage,
+		RightWeaponDamage,
+		BossHPBeforeAttack,
+		Boss->GetCurrentHP());
+	LogCombatRecordForServer();
+
+	if (bBossDefeatedByThisAttack)
+	{
+		if (ARaidGameMode* RaidGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ARaidGameMode>() : nullptr)
+		{
+			RaidGameMode->HandleBossDefeatedForServer();
+		}
+	}
 }
 
 FVector2D ADrone::ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const
@@ -714,6 +961,15 @@ bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 		return false;
 	}
 
+	if (const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (RaidGameState->RaidState == ERaidState::End)
+		{
+			LogMoveInputSummary(TEXT("Ignored"), TEXT("RaidEnd"), Axis);
+			return false;
+		}
+	}
+
 	if (bIsDead)
 	{
 		LogDeadInputIgnored(TEXT("Move"));
@@ -733,13 +989,115 @@ bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 		return false;
 	}
 
-	const FRotator YawRot(0.f, RaidPC->GetControlRotation().Yaw, 0.f);
-	AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::X), Axis.Y);
-	AddMovementInput(FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y), Axis.X);
 	LastServerMoveInput = Axis;
 
 	LogMoveInputSummary(TEXT("Accepted"), bWasClamped ? TEXT("Clamped") : TEXT("OK"), Axis);
 	return true;
+}
+
+bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	const FVector2D Axis = LastServerMoveInput;
+	LastServerMoveInput = FVector2D::ZeroVector;
+
+	if (Axis.IsNearlyZero() || DeltaSeconds <= 0.0f)
+	{
+		return false;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (RaidGameState->RaidState == ERaidState::End)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerMoveIgnored PC=%s Reason=RaidEnd Axis=%s"),
+				*BuildDroneControllerLogString(RaidPC),
+				*Axis.ToString());
+			return false;
+		}
+	}
+
+	if (!RaidPC || RaidPC->GetPawn() != this || bIsDead || RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
+	{
+		return false;
+	}
+
+	const float MoveSpeedCmPerSecond = FloatingMovement
+		? FMath::Max(0.0f, FloatingMovement->MaxSpeed)
+		: FMath::Max(0.0f, BaseMoveSpeedCmPerSecond);
+	if (MoveSpeedCmPerSecond <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	const FRotator YawRot(0.f, RaidPC->GetControlRotation().Yaw, 0.f);
+	const FVector ForwardMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X) * Axis.Y;
+	const FVector RightMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y) * Axis.X;
+	const FVector MoveDirection = (ForwardMove + RightMove).GetClampedToMaxSize(1.0f);
+	if (MoveDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector PreviousLocation = GetActorLocation();
+	const FVector MoveDelta = MoveDirection * MoveSpeedCmPerSecond * DeltaSeconds;
+	AddActorWorldOffset(MoveDelta, true);
+	const FVector CurrentLocation = GetActorLocation();
+	if (CurrentLocation.Equals(PreviousLocation, 0.1f))
+	{
+		return false;
+	}
+
+	UpdateOwnerMoveSyncForServer(CurrentLocation, GetActorRotation());
+	ForceNetUpdate();
+
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (Now - LastServerMoveAppliedSummaryLogTime >= MoveDistanceSummaryLogIntervalSeconds)
+	{
+		LastServerMoveAppliedSummaryLogTime = Now;
+		const AActor* ViewTarget = RaidPC->GetViewTarget();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerMoveApplied PC=%s Axis=%s Delta=%s ServerLocation=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			*Axis.ToString(),
+			*MoveDelta.ToString(),
+			*CurrentLocation.ToString(),
+			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()),
+			IsReplicatingMovement() ? TEXT("true") : TEXT("false"),
+			ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
+			TEXT("ServerObserved"));
+	}
+
+	return true;
+}
+
+void ADrone::UpdateOwnerMoveSyncForServer(const FVector& ServerLocation, const FRotator& ServerRotation)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	OwnerMoveSync.Location = ServerLocation;
+	OwnerMoveSync.Rotation = ServerRotation;
+	++OwnerMoveSync.Sequence;
+
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (Now - LastOwnerMoveSyncSentLogTime >= MoveDistanceSummaryLogIntervalSeconds)
+	{
+		LastOwnerMoveSyncSentLogTime = Now;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OwnerMoveSyncSent PC=%s Location=%s Rotation=%s Sequence=%u"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*OwnerMoveSync.Location.ToString(),
+			*OwnerMoveSync.Rotation.ToString(),
+			OwnerMoveSync.Sequence);
+	}
 }
 
 void ADrone::LogMoveInputSummary(const TCHAR* Result, const TCHAR* Reason, const FVector2D& Axis)
@@ -861,6 +1219,8 @@ void ADrone::UpdateMoveDistanceForServer(float DeltaSeconds)
 
 	VectorAccumulatedMoveDistanceMeters += DeltaMeters;
 	BoosterAccumulatedMoveDistanceMeters += DeltaMeters;
+	AddMoveDistanceToCombatRecordForServer(DeltaMeters);
+	RefreshMoveSpeedForServer();
 
 	UWorld* World = GetWorld();
 	const float Now = World ? World->GetTimeSeconds() : 0.0f;
@@ -936,112 +1296,94 @@ void ADrone::LogMoveDistanceIgnored(FName Reason)
 		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString());
 }
 
-float ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon)
+FDroneWeaponCalculationResult ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon)
 {
-	if (WeaponPartID.IsNone())
+	FDroneWeaponCalculationInput Input;
+	Input.WeaponType = ResolveWeaponTypeForServer(WeaponPartID);
+	Input.Slot = bIsLeftWeapon ? EDroneCombatWeaponSlot::Left : EDroneCombatWeaponSlot::Right;
+	Input.PulseAttackCount = bIsLeftWeapon ? LeftPulseAttackCount : RightPulseAttackCount;
+	Input.VectorAccumulatedMoveDistanceMeters = VectorAccumulatedMoveDistanceMeters;
+
+	FDroneWeaponCalculationResult Result = FDroneCombatRules::CalculateWeaponDamage(Input);
+	if (Input.WeaponType == EDroneCombatWeaponType::PulseLaser)
 	{
-		return 0.0f;
+		if (bIsLeftWeapon)
+		{
+			LeftPulseAttackCount = Result.PulseAttackCount;
+		}
+		else
+		{
+			RightPulseAttackCount = Result.PulseAttackCount;
+		}
 	}
 
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] WeaponCalc Player=%s Slot=%s WeaponType=%s BaseDamage=%.2f BonusDamage=%.2f HitCount=%d PulseCount=%d VectorDistance=%.2f WeaponDamage=%.2f ResetVector=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		ToWeaponSlotLogString(bIsLeftWeapon),
+		ToCombatWeaponTypeLogString(Input.WeaponType),
+		Result.BaseDamage,
+		Result.BonusDamage,
+		Result.HitCount,
+		Result.PulseAttackCount,
+		Result.VectorDistance,
+		Result.WeaponDamage,
+		Result.bResetVectorDistance ? TEXT("true") : TEXT("false"));
+
+	return Result;
+}
+
+FDroneCoreCalculationResult ADrone::CalculateCoreForServer(FName CorePartID) const
+{
+	FDroneCoreCalculationInput Input;
+	Input.CoreType = ResolveCoreTypeForServer(CorePartID);
+	Input.CurrentHP = Health;
+	Input.MaxHP = static_cast<float>(MaxHealth);
+	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
+
+	const FDroneCoreCalculationResult Result = FDroneCombatRules::CalculateCoreBonus(Input);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=%s HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreModifier=%.2f CoreBonusAttackModifier=%.2f MoveSpeedBonus=%.2f HealAmount=0.00"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		ToCombatCoreTypeLogString(Input.CoreType),
+		Result.HPRatio,
+		Input.AccumulatedMoveDistanceMeters,
+		Result.CoreAttackModifier,
+		Result.CoreBonusAttackModifier,
+		Result.MoveSpeedBonus);
+	return Result;
+}
+
+EDroneCombatWeaponType ADrone::ResolveWeaponTypeForServer(FName WeaponPartID) const
+{
 	if (WeaponPartID == ADronePartInventory::GetPulseLaserPartID())
 	{
-		int32& PulseAttackCount = bIsLeftWeapon ? LeftPulseAttackCount : RightPulseAttackCount;
-		PulseAttackCount++;
-		if (PulseAttackCount >= 3)
-		{
-			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] PulseAttack PC=%s Slot=%s Count=3 Damage=18 Reset=true"),
-				*BuildDroneControllerLogString(Cast<AController>(GetController())),
-				ToWeaponSlotLogString(bIsLeftWeapon));
-			PulseAttackCount = 0;
-			return 18.0f;
-		}
-
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] PulseAttack PC=%s Slot=%s Count=%d Damage=8 Reset=false"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
-			ToWeaponSlotLogString(bIsLeftWeapon),
-			PulseAttackCount);
-		return 8.0f;
+		return EDroneCombatWeaponType::PulseLaser;
 	}
-
 	if (WeaponPartID == ADronePartInventory::GetFractureBurstPartID())
 	{
-		constexpr float BaseDamage = 5.0f;
-		constexpr int32 ShardCount = 3;
-		constexpr float ShardDamage = 2.0f;
-		constexpr int32 HitCount = 1 + ShardCount;
-		const float Damage = BaseDamage + (static_cast<float>(ShardCount) * ShardDamage);
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] FractureAttack PC=%s Slot=%s Base=5 Shards=3 ShardDamage=2 Damage=11 HitCount=%d"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
-			ToWeaponSlotLogString(bIsLeftWeapon),
-			HitCount);
-		return Damage;
+		return EDroneCombatWeaponType::FractureBurst;
 	}
-
 	if (WeaponPartID == ADronePartInventory::GetVectorCannonPartID())
 	{
-		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Vector Cannon: movement distance damage bonus not implemented yet"));
-		return 7.0f;
+		return EDroneCombatWeaponType::VectorCannon;
 	}
-
-	UE_LOG(LogTemp, Warning, TEXT("[Server] Weapon damage missing data: Part=%s treated as 0"), *WeaponPartID.ToString());
-	return 0.0f;
+	return EDroneCombatWeaponType::None;
 }
 
-float ADrone::GetCoreAttackModifierForServer(FName CorePartID) const
+EDroneCombatCoreType ADrone::ResolveCoreTypeForServer(FName CorePartID) const
 {
-	if (CorePartID.IsNone())
-	{
-		return 1.0f;
-	}
-
 	if (CorePartID == ADronePartInventory::GetCoreZenithPartID())
 	{
-		return 1.0f;
+		return EDroneCombatCoreType::Zenith;
 	}
-
 	if (CorePartID == ADronePartInventory::GetCoreBoosterPartID())
 	{
-		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Booster Core: movement speed bonus to attack conversion not implemented yet"));
-		return 0.95f;
+		return EDroneCombatCoreType::Booster;
 	}
-
 	if (CorePartID == ADronePartInventory::GetCoreDrainPartID())
 	{
-		return 0.85f;
+		return EDroneCombatCoreType::Drain;
 	}
-
-	UE_LOG(LogTemp, Warning, TEXT("[Server] Core modifier missing data: Part=%s treated as no core"), *CorePartID.ToString());
-	return 1.0f;
-}
-
-float ADrone::GetCoreBonusAttackModifierForServer(FName CorePartID) const
-{
-	if (CorePartID == ADronePartInventory::GetCoreZenithPartID())
-	{
-		float CurrentHPRatio = MaxHealth > 0 ? Health / static_cast<float>(MaxHealth) : 0.0f;
-		if (!FMath::IsFinite(CurrentHPRatio))
-		{
-			CurrentHPRatio = 0.0f;
-		}
-
-		CurrentHPRatio = FMath::Clamp(CurrentHPRatio, 0.0f, 1.0f);
-		const float ZenithBonus = FMath::Min(FMath::FloorToFloat(CurrentHPRatio / 0.1f) * 0.02f, 0.20f);
-		const float Modifier = 1.0f + ZenithBonus;
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ZenithBonus PC=%s HPRatio=%.2f Bonus=%.2f Modifier=%.2f"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
-			CurrentHPRatio,
-			ZenithBonus,
-			Modifier);
-		return Modifier;
-	}
-
-	if (CorePartID == ADronePartInventory::GetCoreBoosterPartID())
-	{
-		UE_LOG(LogTemp, Log, TEXT("[Server] TODO Booster Core: accumulated movement distance bonus currently returns 0"));
-		return 1.0f;
-	}
-
-	return 1.0f;
+	return EDroneCombatCoreType::None;
 }
 
 ARaidBoss* ADrone::FindRaidBossForServer() const
@@ -1068,32 +1410,38 @@ ARaidBoss* ADrone::FindRaidBossForServer() const
 	return nullptr;
 }
 
-void ADrone::ApplyDrainHealForServer(float DamageDealt)
+float ADrone::ApplyDrainHealForServer(float DamageDealt)
 {
 	if (!HasAuthority())
 	{
-		return;
+		return 0.0f;
 	}
 
 	if (bIsDead)
 	{
 		LogDeadInputIgnored(TEXT("Heal"));
-		return;
+		return 0.0f;
 	}
 
 	const float SafeDamageDealt = FMath::Max(0.0f, DamageDealt);
-	const float RawHealAmount = SafeDamageDealt * 0.12f;
-	const float CappedHealAmount = FMath::Min(RawHealAmount, 3.0f);
+	const float CappedHealAmount = FDroneCombatRules::CalculateDrainHeal(SafeDamageDealt);
 	const float PreviousHealth = Health;
 	Health = FMath::Clamp(Health + CappedHealAmount, 0.0f, static_cast<float>(MaxHealth));
 	const float AppliedHealAmount = FMath::Max(0.0f, Health - PreviousHealth);
-	const bool bCapped = RawHealAmount > CappedHealAmount + KINDA_SMALL_NUMBER
-		|| AppliedHealAmount + KINDA_SMALL_NUMBER < RawHealAmount;
+	const bool bCapped = SafeDamageDealt * 0.12f > CappedHealAmount + KINDA_SMALL_NUMBER
+		|| AppliedHealAmount + KINDA_SMALL_NUMBER < SafeDamageDealt * 0.12f;
+	AddHealToCombatRecordForServer(AppliedHealAmount);
 
 	if (AppliedHealAmount > KINDA_SMALL_NUMBER)
 	{
 		ForceNetUpdate();
 	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=Drain HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreBonusAttackModifier=1.00 MoveSpeedBonus=0.00 HealAmount=%.2f"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		MaxHealth > 0 ? FMath::Clamp(Health / static_cast<float>(MaxHealth), 0.0f, 1.0f) : 0.0f,
+		BoosterAccumulatedMoveDistanceMeters,
+		AppliedHealAmount);
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DrainHeal PC=%s DamageDealt=%.2f Heal=%.2f HP=%.2f/%d Capped=%s"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
@@ -1102,6 +1450,132 @@ void ADrone::ApplyDrainHealForServer(float DamageDealt)
 		Health,
 		MaxHealth,
 		bCapped ? TEXT("true") : TEXT("false"));
+	return AppliedHealAmount;
+}
+
+void ADrone::StartCombatRecordForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	CombatRecord = FDroneCombatRecord();
+	bCombatRecordActive = true;
+
+	const UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	CombatRecord.RaidJoinTime = Now;
+	CombatRecord.CombatStartTime = Now;
+	CombatRecord.CombatEndTime = 0.0f;
+	CombatRecord.bIsAliveAtReport = !bIsDead;
+
+	if (const ARaidBoss* Boss = FindRaidBossForServer())
+	{
+		CombatRecord.BossMaxHP = Boss->GetMaxHP();
+		CombatRecord.BossHPOnJoin = Boss->GetCurrentHP();
+	}
+}
+
+FDroneCombatRecord ADrone::BuildCombatRecordSnapshotForServer() const
+{
+	FDroneCombatRecord Snapshot = CombatRecord;
+	const UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : Snapshot.CombatEndTime;
+	const float EndTime = Snapshot.CombatEndTime > KINDA_SMALL_NUMBER ? Snapshot.CombatEndTime : Now;
+	if (Snapshot.CombatStartTime > KINDA_SMALL_NUMBER)
+	{
+		Snapshot.SurvivalTime = FMath::Max(0.0f, EndTime - Snapshot.CombatStartTime);
+	}
+	Snapshot.bIsAliveAtReport = !bIsDead;
+	return Snapshot;
+}
+
+void ADrone::AddBossDamageToCombatRecordForServer(float DamageDealt, const ARaidBoss* Boss)
+{
+	if (!HasAuthority() || !bCombatRecordActive)
+	{
+		return;
+	}
+
+	CombatRecord.BossDamage += FMath::Max(0.0f, DamageDealt);
+	if (Boss)
+	{
+		CombatRecord.BossMaxHP = Boss->GetMaxHP();
+		if (CombatRecord.BossHPOnJoin <= KINDA_SMALL_NUMBER)
+		{
+			CombatRecord.BossHPOnJoin = Boss->GetCurrentHP();
+		}
+	}
+}
+
+void ADrone::AddHealToCombatRecordForServer(float HealAmount)
+{
+	if (HasAuthority() && bCombatRecordActive)
+	{
+		CombatRecord.HealAmount += FMath::Max(0.0f, HealAmount);
+	}
+}
+
+void ADrone::AddMoveDistanceToCombatRecordForServer(float DeltaMeters)
+{
+	if (HasAuthority() && bCombatRecordActive)
+	{
+		CombatRecord.MoveDistance += FMath::Max(0.0f, DeltaMeters);
+	}
+}
+
+void ADrone::MarkCombatRecordEndedForServer()
+{
+	if (!HasAuthority() || !bCombatRecordActive)
+	{
+		return;
+	}
+
+	if (CombatRecord.CombatEndTime <= KINDA_SMALL_NUMBER)
+	{
+		const UWorld* World = GetWorld();
+		CombatRecord.CombatEndTime = World ? World->GetTimeSeconds() : CombatRecord.CombatStartTime;
+	}
+	CombatRecord.bIsAliveAtReport = !bIsDead;
+}
+
+void ADrone::LogCombatRecordForServer() const
+{
+	const FDroneCombatRecord Snapshot = BuildCombatRecordSnapshotForServer();
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatRecord Player=%s SurvivalTime=%.2f BossDamage=%.2f BossMaxHP=%.2f BossHPOnJoin=%.2f MoveDistance=%.2f HealAmount=%.2f DamageTakenCount=%d CombatStartTime=%.2f RaidJoinTime=%.2f IsAliveAtReport=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		Snapshot.SurvivalTime,
+		Snapshot.BossDamage,
+		Snapshot.BossMaxHP,
+		Snapshot.BossHPOnJoin,
+		Snapshot.MoveDistance,
+		Snapshot.HealAmount,
+		Snapshot.DamageTakenCount,
+		Snapshot.CombatStartTime,
+		Snapshot.RaidJoinTime,
+		Snapshot.bIsAliveAtReport ? TEXT("true") : TEXT("false"));
+}
+
+void ADrone::RefreshMoveSpeedForServer()
+{
+	if (!HasAuthority() || !FloatingMovement)
+	{
+		return;
+	}
+
+	if (BaseMoveSpeedCmPerSecond <= KINDA_SMALL_NUMBER)
+	{
+		BaseMoveSpeedCmPerSecond = FloatingMovement->MaxSpeed;
+	}
+
+	FDroneCoreCalculationInput Input;
+	Input.CoreType = ResolveCoreTypeForServer(EquippedCorePartID);
+	Input.CurrentHP = Health;
+	Input.MaxHP = static_cast<float>(MaxHealth);
+	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
+	const FDroneCoreCalculationResult CoreResult = FDroneCombatRules::CalculateCoreBonus(Input);
+	FloatingMovement->MaxSpeed = BaseMoveSpeedCmPerSecond * (1.0f + CoreResult.MoveSpeedBonus);
 }
 
 void ADrone::ResetCombatRuntimeStateForReason(FName Reason)
@@ -1109,6 +1583,13 @@ void ADrone::ResetCombatRuntimeStateForReason(FName Reason)
 	LeftPulseAttackCount = 0;
 	RightPulseAttackCount = 0;
 	ResetMoveDistanceForServer(Reason);
+	if (Reason == FName(TEXT("Death")) || Reason == FName(TEXT("RaidEnd")))
+	{
+		MarkCombatRecordEndedForServer();
+		LogCombatRecordForServer();
+		bCombatRecordActive = false;
+	}
+	RefreshMoveSpeedForServer();
 }
 
 void ADrone::ClearEquippedPartsForServer()

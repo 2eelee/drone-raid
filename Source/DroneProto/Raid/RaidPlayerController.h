@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DroneCombatTypes.h"
 #include "DronePart.h"
 #include "DronePartReturnManager.h"
 #include "Blueprint/UserWidget.h"
@@ -10,6 +11,7 @@
 
 class ADronePartInventory;
 class ADrone;
+class UDroneReportWidget;
 class UTexture2D;
 class UDronePartReturnManager;
 
@@ -42,6 +44,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UUserWidget> DronePartSelectWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UDroneReportWidget> DroneReportWidgetClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	bool bAutoShowDronePartSelectUI = true;
@@ -143,6 +148,12 @@ public:
 	void HideDronePartSelectUI();
 
 	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ShowDroneReportWidget(const FDroneReportData& ReportData);
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void HideDroneReportWidget();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
 	void RefreshSelectionUI();
 
 	void SetSelectedPartIDForSlotForServer(EPartSlot Slot, FName PartID);
@@ -151,10 +162,15 @@ public:
 	bool ReturnEquippedPartsForServer(EDronePartReturnReason Reason);
 	bool ReturnSingleSelectedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	bool ReturnSingleEquippedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
+	void FinalizeRaidEndForServer(FName Reason);
 	void HandleSelectionTimerExpiredForServer();
+	bool TryCreateDroneReportForServer(EDroneReportTrigger Trigger, bool bBossDefeated);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void SetDronePartReturnManagerForTest(UDronePartReturnManager* InReturnManager);
+	FDroneReportData GetLastDroneReportDataForTest() const;
+	bool HasDroneReportGeneratedForTest() const;
+	void ResetDroneReportForTest();
 #endif
 
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Drone Parts")
@@ -180,6 +196,12 @@ public:
 
 	UFUNCTION(Client, Reliable, Category = "Raid")
 	void Client_NotifyRaidReadyResult(bool bSuccess, const FString& Reason, FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID);
+
+	UFUNCTION(Client, Reliable, Category = "Drone|Report")
+	void Client_ReceiveDroneReport(const FDroneReportData& ReportData);
+
+	UFUNCTION(Client, Reliable, Category = "Raid")
+	void Client_NotifyRaidEndedForUI(FName Reason);
 
 	UFUNCTION(Exec)
 	void D4SelectPart(FString SlotName, FString PartIDText);
@@ -229,7 +251,16 @@ private:
 	TObjectPtr<UUserWidget> DronePartSelectWidget = nullptr;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UDroneReportWidget> CurrentDroneReportWidget = nullptr;
+
+	UPROPERTY(Transient)
 	TObjectPtr<ADronePartInventory> BoundDronePartInventory = nullptr;
+
+	UPROPERTY(Transient)
+	bool bDroneReportGenerated = false;
+
+	UPROPERTY(Transient)
+	FDroneReportData LastDroneReportData;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	UDronePartReturnManager* TestDronePartReturnManager = nullptr;
@@ -252,6 +283,9 @@ private:
 	void StartSelectionTimerForServer();
 	void StopSelectionTimerForServer(const FString& Reason, bool bLogSummary);
 	bool ProcessReadyForRaidForServer(bool bAutoReady);
+	static const TCHAR* ReportGradeToLogString(EDroneReportGrade Grade);
+	static const TCHAR* ReportTriggerToLogString(EDroneReportTrigger Trigger);
+	static bool ReportHasBonus(const FDroneReportData& ReportData, EDroneReportBonusType BonusType);
 
 	UFUNCTION()
 	void HandleDronePartStocksChanged();

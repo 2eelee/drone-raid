@@ -1,6 +1,7 @@
 #include "RaidPlayerController.h"
 #include "Drone.h"
 #include "DronePartInventory.h"
+#include "DroneReportWidget.h"
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
 #include "Engine/World.h"
@@ -437,6 +438,43 @@ const TCHAR* ARaidPlayerController::SelectionStateToLogString(EPlayerSelectionSt
 	}
 }
 
+const TCHAR* ARaidPlayerController::ReportGradeToLogString(EDroneReportGrade Grade)
+{
+	switch (Grade)
+	{
+	case EDroneReportGrade::S:
+		return TEXT("S");
+	case EDroneReportGrade::A:
+		return TEXT("A");
+	case EDroneReportGrade::B:
+		return TEXT("B");
+	case EDroneReportGrade::C:
+		return TEXT("C");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+const TCHAR* ARaidPlayerController::ReportTriggerToLogString(EDroneReportTrigger Trigger)
+{
+	switch (Trigger)
+	{
+	case EDroneReportTrigger::Death:
+		return TEXT("Death");
+	case EDroneReportTrigger::BossDefeated:
+		return TEXT("BossDefeated");
+	case EDroneReportTrigger::RaidTimeLimit:
+		return TEXT("RaidTimeLimit");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+bool ARaidPlayerController::ReportHasBonus(const FDroneReportData& ReportData, EDroneReportBonusType BonusType)
+{
+	return ReportData.AchievedBonusList.Contains(BonusType);
+}
+
 void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Slot, FName NewPartID)
 {
 	if (!HasAuthority())
@@ -855,6 +893,37 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 	HideDronePartSelectUI();
 }
 
+void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDroneReportData& ReportData)
+{
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportClientReceived Player=%s Grade=%s BonusScore=%d"),
+		*BuildControllerLogString(this),
+		ReportGradeToLogString(ReportData.Grade),
+		ReportData.BonusScore);
+
+	if (IsLocalController())
+	{
+		ShowDroneReportWidget(ReportData);
+	}
+}
+
+void ARaidPlayerController::Client_NotifyRaidEndedForUI_Implementation(FName Reason)
+{
+	PlayerSelectionState = EPlayerSelectionState::Locked;
+	SetSelectedPartIDForSlot(EPartSlot::Core, NAME_None);
+	SetSelectedPartIDForSlot(EPartSlot::LeftWeapon, NAME_None);
+	SetSelectedPartIDForSlot(EPartSlot::RightWeapon, NAME_None);
+	SetEquippedPartIDForSlot(EPartSlot::Core, NAME_None);
+	SetEquippedPartIDForSlot(EPartSlot::LeftWeapon, NAME_None);
+	SetEquippedPartIDForSlot(EPartSlot::RightWeapon, NAME_None);
+
+	OnSelectedPartsChanged.Broadcast();
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEndClientRefresh Player=%s Reason=%s State=%s Core=None Left=None Right=None"),
+		*BuildControllerLogString(this),
+		Reason.IsNone() ? TEXT("RaidEnd") : *Reason.ToString(),
+		ToPlayerSelectionStateLogString(PlayerSelectionState));
+	RefreshSelectionUI();
+}
+
 void ARaidPlayerController::D4SelectPart(FString SlotName, FString PartIDText)
 {
 	EPartSlot Slot = EPartSlot::Core;
@@ -968,6 +1037,22 @@ void ARaidPlayerController::SetDronePartReturnManagerForTest(UDronePartReturnMan
 {
 	TestDronePartReturnManager = InReturnManager;
 }
+
+FDroneReportData ARaidPlayerController::GetLastDroneReportDataForTest() const
+{
+	return LastDroneReportData;
+}
+
+bool ARaidPlayerController::HasDroneReportGeneratedForTest() const
+{
+	return bDroneReportGenerated;
+}
+
+void ARaidPlayerController::ResetDroneReportForTest()
+{
+	bDroneReportGenerated = false;
+	LastDroneReportData = FDroneReportData();
+}
 #endif
 
 bool ARaidPlayerController::RefreshDronePartInventoryBinding()
@@ -1070,6 +1155,100 @@ void ARaidPlayerController::HideDronePartSelectUI()
 	SetInputMode(InputMode);
 
 	UE_LOG(LogTemp, Log, TEXT("[Client] Drone part select UI hidden"));
+}
+
+void ARaidPlayerController::ShowDroneReportWidget(const FDroneReportData& ReportData)
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (!DroneReportWidgetClass)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetMissingClass Player=%s Grade=%s BonusScore=%d"),
+			*BuildControllerLogString(this),
+			ReportGradeToLogString(ReportData.Grade),
+			ReportData.BonusScore);
+		return;
+	}
+
+	if (!CurrentDroneReportWidget)
+	{
+		CurrentDroneReportWidget = CreateWidget<UDroneReportWidget>(this, DroneReportWidgetClass);
+	}
+
+	if (!CurrentDroneReportWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ShowDroneReportWidget failed: widget could not be created Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	const bool bAlreadyInViewport = CurrentDroneReportWidget->IsInViewport();
+	CurrentDroneReportWidget->RefreshReport(ReportData);
+
+	if (!bAlreadyInViewport)
+	{
+		CurrentDroneReportWidget->AddToViewport();
+		SetShowMouseCursor(true);
+		FInputModeGameAndUI InputMode;
+		InputMode.SetWidgetToFocus(CurrentDroneReportWidget->TakeWidget());
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		SetInputMode(InputMode);
+
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetShown Player=%s Grade=%s BonusScore=%d"),
+			*BuildControllerLogString(this),
+			ReportGradeToLogString(ReportData.Grade),
+			ReportData.BonusScore);
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetRefreshed Player=%s Grade=%s BonusScore=%d"),
+		*BuildControllerLogString(this),
+		ReportGradeToLogString(ReportData.Grade),
+		ReportData.BonusScore);
+}
+
+void ARaidPlayerController::HideDroneReportWidget()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (CurrentDroneReportWidget && CurrentDroneReportWidget->IsInViewport())
+	{
+		CurrentDroneReportWidget->RemoveFromParent();
+	}
+
+	if (DronePartSelectWidget && DronePartSelectWidget->IsInViewport())
+	{
+		SetShowMouseCursor(true);
+		FInputModeGameAndUI InputMode;
+		InputMode.SetWidgetToFocus(DronePartSelectWidget->TakeWidget());
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		SetInputMode(InputMode);
+	}
+	else
+	{
+		SetShowMouseCursor(false);
+		FInputModeGameOnly InputMode;
+		SetInputMode(InputMode);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetHidden Player=%s"),
+		*BuildControllerLogString(this));
 }
 
 void ARaidPlayerController::RefreshSelectionUI()
@@ -1503,6 +1682,8 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 
 	MoveSelectedPartsToEquippedForServer();
 	SetPlayerSelectionStateForServer(EPlayerSelectionState::InBattle);
+	bDroneReportGenerated = false;
+	LastDroneReportData = FDroneReportData();
 
 	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
 	{
@@ -1598,6 +1779,105 @@ bool ARaidPlayerController::ReturnSingleEquippedPartForServer(EPartSlot Slot, ED
 	}
 
 	return false;
+}
+
+void ARaidPlayerController::FinalizeRaidEndForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	StopSelectionTimerForServer(TEXT("RaidEnd"), false);
+	SetEquippedPartIDForSlotForServer(EPartSlot::Core, NAME_None);
+	SetEquippedPartIDForSlotForServer(EPartSlot::LeftWeapon, NAME_None);
+	SetEquippedPartIDForSlotForServer(EPartSlot::RightWeapon, NAME_None);
+	SetPlayerSelectionStateForServer(EPlayerSelectionState::Locked);
+	Client_NotifyRaidEndedForUI(Reason);
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEndStateCleaned Player=%s Reason=%s State=%s Core=%s Left=%s Right=%s"),
+		*BuildControllerLogString(this),
+		Reason.IsNone() ? TEXT("RaidEnd") : *Reason.ToString(),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*EquippedCorePartID.ToString(),
+		*EquippedLeftWeaponPartID.ToString(),
+		*EquippedRightWeaponPartID.ToString());
+	RefreshSelectionUI();
+}
+
+bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Trigger, bool bBossDefeated)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	const FString PlayerLog = BuildControllerLogString(this);
+	if (bDroneReportGenerated)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportDuplicateIgnored Player=%s Reason=AlreadyGenerated Trigger=%s"),
+			*PlayerLog,
+			ReportTriggerToLogString(Trigger));
+		return false;
+	}
+
+	ADrone* ControlledDrone = Cast<ADrone>(GetPawn());
+	if (!ControlledDrone)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportDuplicateIgnored Player=%s Reason=NoDrone Trigger=%s"),
+			*PlayerLog,
+			ReportTriggerToLogString(Trigger));
+		return false;
+	}
+
+	if (Trigger != EDroneReportTrigger::Death && ControlledDrone->IsDead())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportDuplicateIgnored Player=%s Reason=DeadAtReport Trigger=%s"),
+			*PlayerLog,
+			ReportTriggerToLogString(Trigger));
+		return false;
+	}
+
+	const FDroneCombatRecord CombatRecord = ControlledDrone->GetCombatRecordForServer();
+	LastDroneReportData = FDroneReportRules::BuildReportData(CombatRecord, bBossDefeated);
+	bDroneReportGenerated = true;
+
+	const bool bBossSlayer = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::BossSlayer);
+	const bool bHighDPS = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::HighDPS);
+	const bool bNoDamage = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::NoDamage);
+	const bool bKeepMoving = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::KeepMoving);
+	const bool bHighRecovery = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::HighRecovery);
+	const float BasePerformanceScore = LastDroneReportData.ReportScore - static_cast<float>(LastDroneReportData.BonusScore);
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BonusCalc Player=%s BossSlayer=%s HighDPS=%s NoDamage=%s KeepMoving=%s HighRecovery=%s BonusScore=%d"),
+		*PlayerLog,
+		bBossSlayer ? TEXT("true") : TEXT("false"),
+		bHighDPS ? TEXT("true") : TEXT("false"),
+		bNoDamage ? TEXT("true") : TEXT("false"),
+		bKeepMoving ? TEXT("true") : TEXT("false"),
+		bHighRecovery ? TEXT("true") : TEXT("false"),
+		LastDroneReportData.BonusScore);
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] GradeCalc Player=%s BasePerformanceScore=%.2f ReportScore=%.2f Grade=%s"),
+		*PlayerLog,
+		BasePerformanceScore,
+		LastDroneReportData.ReportScore,
+		ReportGradeToLogString(LastDroneReportData.Grade));
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportCreated Player=%s SurvivalTime=%.2f BossDamage=%.2f BossDamageRatio=%.4f MoveDistance=%.2f HealAmount=%.2f BonusScore=%d ReportScore=%.2f Grade=%s Trigger=%s"),
+		*PlayerLog,
+		LastDroneReportData.SurvivalTime,
+		LastDroneReportData.BossDamage,
+		LastDroneReportData.BossDamageRatio,
+		LastDroneReportData.MoveDistance,
+		LastDroneReportData.HealAmount,
+		LastDroneReportData.BonusScore,
+		LastDroneReportData.ReportScore,
+		ReportGradeToLogString(LastDroneReportData.Grade),
+		ReportTriggerToLogString(Trigger));
+
+	Client_ReceiveDroneReport(LastDroneReportData);
+	return true;
 }
 
 bool ARaidPlayerController::IsPartTypeAllowedForSlot(EPartSlot Slot, EDronePartType PartType) const
