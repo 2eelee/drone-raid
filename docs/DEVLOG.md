@@ -3,6 +3,53 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-27 — POR-5/POR-7 RaidEnd 반환 및 cleanup 안정화
+
+### 문제
+
+구현 감사에서 드론부품 환원 경로의 두 가지 리스크가 남아 있었다.
+
+- `RaidEnd`가 `InBattle` 플레이어의 equipped 부품 중심으로 처리되어, 아직 Ready 전 `Selecting` 상태에서 selected 부품을 들고 있던 플레이어의 부품 반환 근거가 부족했다.
+- Death / Logout / RaidEnd 조합에서 PlayerController의 selected/equipped 슬롯은 비워지지만, 같은 Pawn의 `ADrone` 내부 loadout FName까지 항상 비워지는지 테스트 근거가 약했다.
+
+### 수정
+
+- POR-5: `ARaidGameMode::ReturnAllEquippedPartsForRaidEnd`가 `Selecting` 플레이어도 순회해 selected Core/LeftWeapon/RightWeapon을 반환하도록 보강했다.
+- POR-7: `ADrone::ClearEquippedLoadoutForServer(FName Reason)`를 추가해 서버 cleanup 경로에서 Drone 내부 equipped loadout과 runtime 공격 값을 명시적으로 비우도록 했다.
+- Death, Logout, RaidEnd 경로에서 반환 후 PlayerController slot과 Drone internal loadout이 모두 `None`/empty 상태가 되도록 정리했다.
+- 중복 반환 방지는 별도 반환 로그 구조가 아니라 기존 slot clear 기준을 유지했다.
+- 선택 교체 순서와 클라이언트 UI/Replication 구조는 변경하지 않았다.
+
+### 검증
+
+- Build는 직전 작업에서 성공했고, Linear 검증 반영 단계에서는 사용자가 "빌드는 했으므로 그 다음부터"라고 지시해 재실행하지 않았다.
+- `git diff --check` 성공. LF/CRLF warning 외 whitespace error 없음.
+- Targeted automation:
+  - `Automation RunTests DroneProto.D6.RaidGameMode.LogoutClearsDroneLoadout` 성공.
+  - `Automation RunTests DroneProto.D6.RaidGameMode.RaidEndReturnClearsInBattlePlayers` 성공.
+  - `Automation RunTests DroneProto.D6.Drone.DeathReturnClearsEquippedSlots` 성공.
+- Full automation:
+  - `Automation RunTests DroneProto` 성공, 28 tests performed.
+- Linear:
+  - POR-7에 검증 코멘트 반영 후 `Done` 처리.
+  - POR-5 동작 유지 확인은 POR-7 검증 코멘트에 함께 기록.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] DroneDeath`
+- `[DR_SUMMARY] DeathReturn`
+- `[DR_SUMMARY] RaidEnd`
+- `[DR_SUMMARY] RaidEndReturn`
+- `[DR_SUMMARY] ReturnSkipped`
+- `[DR_SUMMARY] Ready`
+- `[DR_SUMMARY] Attack Ignored`
+
+### 보류
+
+- 이번 반영은 자동화 테스트 기준 검증이다. 2 Client PIE에서 수동으로 Death 후 Logout, RaidEnd 후 Logout, Selecting RaidEnd 반환 로그를 한 번 더 확인하면 수동 검증까지 닫을 수 있다.
+
+---
+
 ## 2026-06-27 — RaidEnd 이후 공격/이동 차단 및 상태 정리
 
 ### 문제
