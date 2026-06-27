@@ -1647,6 +1647,15 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("full loadout equips right weapon before death"),
 		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
 		VectorCannon);
+	TestEqual(TEXT("full loadout equips drone internal core before death"),
+		FullLoadout.Drone->GetEquippedCorePartIDForTest(),
+		CoreZenith);
+	TestEqual(TEXT("full loadout equips drone internal left weapon before death"),
+		FullLoadout.Drone->GetEquippedLeftWeaponPartIDForTest(),
+		PulseLaser);
+	TestEqual(TEXT("full loadout equips drone internal right weapon before death"),
+		FullLoadout.Drone->GetEquippedRightWeaponPartIDForTest(),
+		VectorCannon);
 
 	ARaidBoss* Boss = FullLoadout.World->SpawnActor<ARaidBoss>();
 	TestNotNull(TEXT("boss is spawned for dead attack guard"), Boss);
@@ -1667,6 +1676,17 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 		NAME_None);
 	TestEqual(TEXT("death return clears equipped right weapon slot"),
 		FullLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestFalse(TEXT("death return clears drone internal loadout"),
+		FullLoadout.Drone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("death return clears drone internal core"),
+		FullLoadout.Drone->GetEquippedCorePartIDForTest(),
+		NAME_None);
+	TestEqual(TEXT("death return clears drone internal left weapon"),
+		FullLoadout.Drone->GetEquippedLeftWeaponPartIDForTest(),
+		NAME_None);
+	TestEqual(TEXT("death return clears drone internal right weapon"),
+		FullLoadout.Drone->GetEquippedRightWeaponPartIDForTest(),
 		NAME_None);
 	TestEqual(TEXT("death return restores core stock"),
 		FullLoadout.Inventory->GetCurrentCount(CoreZenith),
@@ -1691,6 +1711,11 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 
 	TestFalse(TEXT("logout after death skips because equipped slots were cleared"),
 		FullLoadout.PC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect));
+	if (ARaidGameMode* DeathLogoutGameMode = FullLoadout.World->SpawnActor<ARaidGameMode>())
+	{
+		FullLoadout.World->AddController(FullLoadout.PC);
+		DeathLogoutGameMode->Logout(FullLoadout.PC);
+	}
 	TestEqual(TEXT("logout after death does not over-return core stock"),
 		FullLoadout.Inventory->GetCurrentCount(CoreZenith),
 		FullLoadout.Inventory->GetMaxCount(CoreZenith));
@@ -1700,6 +1725,8 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("logout after death does not over-return right stock"),
 		FullLoadout.Inventory->GetCurrentCount(VectorCannon),
 		FullLoadout.Inventory->GetMaxCount(VectorCannon));
+	TestFalse(TEXT("logout after death keeps drone internal loadout clear"),
+		FullLoadout.Drone->HasEquippedLoadoutForTest());
 	DestroyDroneSelectionTestContext(FullLoadout);
 
 	UDronePartReturnManager* EmptyReturnManager = nullptr;
@@ -1718,6 +1745,8 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 	EmptyLoadout.PC->Server_RequestReadyForRaid_Implementation();
 	EmptyLoadout.Drone->ApplyDamageForServer(999, FName(TEXT("Automation")));
 	TestTrue(TEXT("default drone can die without equipped parts"), EmptyLoadout.Drone->IsDead());
+	TestFalse(TEXT("default drone death leaves internal loadout empty"),
+		EmptyLoadout.Drone->HasEquippedLoadoutForTest());
 	TestEqual(TEXT("default drone death does not change weapon stock"),
 		EmptyLoadout.Inventory->GetCurrentCount(PulseLaser),
 		EmptyPulseCountBeforeDeath);
@@ -1745,6 +1774,8 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("partial death clears left weapon only"),
 		PartialLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
 		NAME_None);
+	TestFalse(TEXT("partial death clears drone internal loadout"),
+		PartialLoadout.Drone->HasEquippedLoadoutForTest());
 	TestEqual(TEXT("partial death leaves empty core slot empty"),
 		PartialLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
 		NAME_None);
@@ -1782,11 +1813,101 @@ bool FDroneDeathReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("duplicate death clears right duplicate weapon"),
 		DuplicateLoadout.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
 		NAME_None);
+	TestFalse(TEXT("duplicate death clears drone internal loadout"),
+		DuplicateLoadout.Drone->HasEquippedLoadoutForTest());
 	TestEqual(TEXT("duplicate left/right weapons return exactly two stock entries without exceeding max"),
 		DuplicateLoadout.Inventory->GetCurrentCount(PulseLaser),
 		DuplicateLoadout.Inventory->GetMaxCount(PulseLaser));
 	DestroyDroneSelectionTestContext(DuplicateLoadout);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneLogoutCleanupTest,
+	"DroneProto.D6.RaidGameMode.LogoutClearsDroneLoadout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneLogoutCleanupTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("DroneLogoutCleanupWorld"), ReturnManager);
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+
+	TestNotNull(TEXT("logout cleanup world is created"), Context.World);
+	TestNotNull(TEXT("logout cleanup inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("logout cleanup player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("logout cleanup drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("logout cleanup return manager is created"), ReturnManager);
+	TestNotNull(TEXT("logout cleanup game mode is spawned"), GameMode);
+	if (!Context.World || !Context.Inventory || !Context.PC || !Context.Drone || !ReturnManager || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	TestTrue(TEXT("logout cleanup consumes selected core"), Context.Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("logout cleanup consumes selected left weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	TestTrue(TEXT("logout cleanup consumes selected right weapon"), Context.Inventory->TryConsumePart(VectorCannon));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("logout cleanup player is InBattle before logout"),
+		Context.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("ready clears selected core before logout"),
+		Context.PC->GetSelectedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("ready equips PC core before logout"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		CoreZenith);
+	TestEqual(TEXT("ready equips drone internal core before logout"),
+		Context.Drone->GetEquippedCorePartIDForTest(),
+		CoreZenith);
+	TestEqual(TEXT("ready equips drone internal left weapon before logout"),
+		Context.Drone->GetEquippedLeftWeaponPartIDForTest(),
+		PulseLaser);
+	TestEqual(TEXT("ready equips drone internal right weapon before logout"),
+		Context.Drone->GetEquippedRightWeaponPartIDForTest(),
+		VectorCannon);
+
+	GameMode->Logout(Context.PC);
+
+	TestEqual(TEXT("logout clears PC equipped core"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("logout clears PC equipped left weapon"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("logout clears PC equipped right weapon"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestFalse(TEXT("logout clears drone internal loadout"),
+		Context.Drone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("logout restores core stock"),
+		Context.Inventory->GetCurrentCount(CoreZenith),
+		Context.Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("logout restores left weapon stock"),
+		Context.Inventory->GetCurrentCount(PulseLaser),
+		Context.Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("logout restores right weapon stock"),
+		Context.Inventory->GetCurrentCount(VectorCannon),
+		Context.Inventory->GetMaxCount(VectorCannon));
+	TestFalse(TEXT("second logout cleanup skips because PC slots were cleared"),
+		Context.PC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect));
+	TestEqual(TEXT("second logout cleanup does not over-return core"),
+		Context.Inventory->GetCurrentCount(CoreZenith),
+		Context.Inventory->GetMaxCount(CoreZenith));
+
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 
@@ -1811,6 +1932,10 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	ADrone* BattleDrone = World->SpawnActor<ADrone>();
 	ARaidPlayerController* SelectingPC = World->SpawnActor<ARaidPlayerController>();
 	ADrone* SelectingDrone = World->SpawnActor<ADrone>();
+	ARaidPlayerController* PartialSelectingPC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* PartialSelectingDrone = World->SpawnActor<ADrone>();
+	ARaidPlayerController* EmptySelectingPC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* EmptySelectingDrone = World->SpawnActor<ADrone>();
 
 	TestNotNull(TEXT("raid end game mode is spawned"), GameMode);
 	TestNotNull(TEXT("raid end game state is spawned"), GameState);
@@ -1819,7 +1944,12 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("battle drone is spawned"), BattleDrone);
 	TestNotNull(TEXT("selecting player controller is spawned"), SelectingPC);
 	TestNotNull(TEXT("selecting drone is spawned"), SelectingDrone);
-	if (!GameMode || !GameState || !Inventory || !BattlePC || !BattleDrone || !SelectingPC || !SelectingDrone)
+	TestNotNull(TEXT("partial selecting player controller is spawned"), PartialSelectingPC);
+	TestNotNull(TEXT("partial selecting drone is spawned"), PartialSelectingDrone);
+	TestNotNull(TEXT("empty selecting player controller is spawned"), EmptySelectingPC);
+	TestNotNull(TEXT("empty selecting drone is spawned"), EmptySelectingDrone);
+	if (!GameMode || !GameState || !Inventory || !BattlePC || !BattleDrone || !SelectingPC || !SelectingDrone
+		|| !PartialSelectingPC || !PartialSelectingDrone || !EmptySelectingPC || !EmptySelectingDrone)
 	{
 		World->DestroyWorld(false);
 		return false;
@@ -1829,11 +1959,17 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	GameState->SetDronePartInventory(Inventory);
 	World->AddController(BattlePC);
 	World->AddController(SelectingPC);
+	World->AddController(PartialSelectingPC);
+	World->AddController(EmptySelectingPC);
 	BattlePC->Possess(BattleDrone);
 	SelectingPC->Possess(SelectingDrone);
+	PartialSelectingPC->Possess(PartialSelectingDrone);
+	EmptySelectingPC->Possess(EmptySelectingDrone);
 
 	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName CoreBooster = ADronePartInventory::GetCoreBoosterPartID();
 	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName FractureBurst = ADronePartInventory::GetFractureBurstPartID();
 	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
 
 	TestTrue(TEXT("battle raid end test consumes left weapon"), Inventory->TryConsumePart(PulseLaser));
@@ -1850,11 +1986,49 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("battle player is InBattle before RaidEnd"),
 		BattlePC->GetCurrentSelectionState(),
 		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Ready clears battle selected left weapon before RaidEnd"),
+		BattlePC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("Ready moves left weapon into drone internal loadout before RaidEnd"),
+		BattleDrone->GetEquippedLeftWeaponPartIDForTest(),
+		PulseLaser);
+	TestEqual(TEXT("Ready moves right weapon into drone internal loadout before RaidEnd"),
+		BattleDrone->GetEquippedRightWeaponPartIDForTest(),
+		VectorCannon);
 
 	TestTrue(TEXT("selecting raid end test consumes selected core"), Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("selecting raid end test consumes selected left weapon"), Inventory->TryConsumePart(FractureBurst));
+	TestTrue(TEXT("selecting raid end test consumes selected right weapon"), Inventory->TryConsumePart(VectorCannon));
 	SelectingPC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	SelectingPC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, FractureBurst);
+	SelectingPC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
 	TestEqual(TEXT("selecting player stays Selecting before RaidEnd"),
 		SelectingPC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestFalse(TEXT("selecting drone has no internal loadout before RaidEnd"),
+		SelectingDrone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("selecting core stock is consumed before RaidEnd"),
+		Inventory->GetCurrentCount(CoreZenith),
+		Inventory->GetMaxCount(CoreZenith) - 1);
+	TestEqual(TEXT("selecting left weapon stock is consumed before RaidEnd"),
+		Inventory->GetCurrentCount(FractureBurst),
+		Inventory->GetMaxCount(FractureBurst) - 1);
+	TestEqual(TEXT("selecting right weapon stock includes battle and selecting consumes before RaidEnd"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon) - 2);
+
+	TestTrue(TEXT("partial selecting raid end test consumes selected core only"), Inventory->TryConsumePart(CoreBooster));
+	PartialSelectingPC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreBooster);
+	TestEqual(TEXT("partial selecting player stays Selecting before RaidEnd"),
+		PartialSelectingPC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestFalse(TEXT("partial selecting drone has no internal loadout before RaidEnd"),
+		PartialSelectingDrone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("partial selecting left slot starts empty"),
+		PartialSelectingPC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("empty selecting player stays Selecting before RaidEnd"),
+		EmptySelectingPC->GetCurrentSelectionState(),
 		EPlayerSelectionState::Selecting);
 
 	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
@@ -1865,6 +2039,14 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("RaidEnd clears battle right weapon"),
 		BattlePC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
 		NAME_None);
+	TestFalse(TEXT("RaidEnd clears battle drone internal loadout"),
+		BattleDrone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("RaidEnd clears battle drone internal left weapon"),
+		BattleDrone->GetEquippedLeftWeaponPartIDForTest(),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd clears battle drone internal right weapon"),
+		BattleDrone->GetEquippedRightWeaponPartIDForTest(),
+		NAME_None);
 	TestTrue(TEXT("RaidEnd moves battle player out of InBattle"),
 		BattlePC->GetCurrentSelectionState() != EPlayerSelectionState::InBattle);
 	TestEqual(TEXT("RaidEnd returns battle left weapon stock"),
@@ -1873,12 +2055,45 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("RaidEnd returns battle right weapon stock"),
 		Inventory->GetCurrentCount(VectorCannon),
 		Inventory->GetMaxCount(VectorCannon));
-	TestEqual(TEXT("RaidEnd does not return selecting player's selected core"),
+	TestEqual(TEXT("RaidEnd returns selecting player's selected core"),
 		Inventory->GetCurrentCount(CoreZenith),
-		Inventory->GetMaxCount(CoreZenith) - 1);
-	TestEqual(TEXT("RaidEnd leaves selecting player's selected core intact"),
+		Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("RaidEnd returns selecting player's selected left weapon"),
+		Inventory->GetCurrentCount(FractureBurst),
+		Inventory->GetMaxCount(FractureBurst));
+	TestEqual(TEXT("RaidEnd returns selecting player's selected right weapon"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon));
+	TestEqual(TEXT("RaidEnd returns partial selecting player's selected core"),
+		Inventory->GetCurrentCount(CoreBooster),
+		Inventory->GetMaxCount(CoreBooster));
+	TestEqual(TEXT("RaidEnd clears selecting player's selected core"),
 		SelectingPC->GetSelectedPartIDBySlot(EPartSlot::Core),
-		CoreZenith);
+		NAME_None);
+	TestEqual(TEXT("RaidEnd clears selecting player's selected left weapon"),
+		SelectingPC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd clears selecting player's selected right weapon"),
+		SelectingPC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd clears partial selecting player's selected core"),
+		PartialSelectingPC->GetSelectedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd leaves partial selecting player's empty left slot empty"),
+		PartialSelectingPC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("RaidEnd keeps empty selecting player's core slot empty"),
+		EmptySelectingPC->GetSelectedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestFalse(TEXT("RaidEnd keeps selecting drone internal loadout empty"),
+		SelectingDrone->HasEquippedLoadoutForTest());
+	TestFalse(TEXT("RaidEnd keeps partial selecting drone internal loadout empty"),
+		PartialSelectingDrone->HasEquippedLoadoutForTest());
+	TestFalse(TEXT("RaidEnd keeps empty selecting drone internal loadout empty"),
+		EmptySelectingDrone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("empty selecting player does not change unrelated stock"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
 
 	if (Boss)
 	{
@@ -1899,12 +2114,37 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	BattlePC->SetDronePartReturnManagerForTest(GameMode->GetDronePartReturnManager());
 	TestFalse(TEXT("logout after RaidEnd skips because equipped slots were cleared"),
 		BattlePC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect));
+	GameMode->Logout(BattlePC);
 	TestEqual(TEXT("logout after RaidEnd does not over-return left weapon"),
 		Inventory->GetCurrentCount(PulseLaser),
 		Inventory->GetMaxCount(PulseLaser));
 	TestEqual(TEXT("logout after RaidEnd does not over-return right weapon"),
 		Inventory->GetCurrentCount(VectorCannon),
 		Inventory->GetMaxCount(VectorCannon));
+
+	SelectingPC->SetDronePartReturnManagerForTest(GameMode->GetDronePartReturnManager());
+	PartialSelectingPC->SetDronePartReturnManagerForTest(GameMode->GetDronePartReturnManager());
+	EmptySelectingPC->SetDronePartReturnManagerForTest(GameMode->GetDronePartReturnManager());
+	TestFalse(TEXT("selecting logout after RaidEnd skips because selected slots were cleared"),
+		SelectingPC->ReturnSelectedPartsForServer(EDronePartReturnReason::Disconnect));
+	TestFalse(TEXT("partial selecting logout after RaidEnd skips because selected slot was cleared"),
+		PartialSelectingPC->ReturnSelectedPartsForServer(EDronePartReturnReason::Disconnect));
+	TestFalse(TEXT("empty selected slots skip without changing stock"),
+		EmptySelectingPC->ReturnSelectedPartsForServer(EDronePartReturnReason::Disconnect));
+	GameMode->Logout(SelectingPC);
+	TestEqual(TEXT("selecting logout after RaidEnd does not over-return core"),
+		Inventory->GetCurrentCount(CoreZenith),
+		Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("partial selecting logout after RaidEnd does not over-return core"),
+		Inventory->GetCurrentCount(CoreBooster),
+		Inventory->GetMaxCount(CoreBooster));
+	TestEqual(TEXT("empty selecting skip leaves pulse stock at max"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
+	TestFalse(TEXT("logout after RaidEnd keeps battle drone internal loadout clear"),
+		BattleDrone->HasEquippedLoadoutForTest());
+	TestFalse(TEXT("logout after RaidEnd keeps selecting drone internal loadout clear"),
+		SelectingDrone->HasEquippedLoadoutForTest());
 
 	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("AutomationRetry")));
 	TestEqual(TEXT("second RaidEnd does not over-return left weapon"),
@@ -1913,6 +2153,12 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("second RaidEnd does not over-return right weapon"),
 		Inventory->GetCurrentCount(VectorCannon),
 		Inventory->GetMaxCount(VectorCannon));
+	TestEqual(TEXT("second RaidEnd does not over-return selecting core"),
+		Inventory->GetCurrentCount(CoreZenith),
+		Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("second RaidEnd does not over-return partial core"),
+		Inventory->GetCurrentCount(CoreBooster),
+		Inventory->GetMaxCount(CoreBooster));
 
 	World->DestroyWorld(false);
 	return true;

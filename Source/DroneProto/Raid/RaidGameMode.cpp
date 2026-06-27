@@ -280,6 +280,11 @@ void ARaidGameMode::Logout(AController* Exiting)
 					static_cast<int32>(RaidPC->GetPlayerSelectionState()));
 				RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect);
 			}
+
+			if (ADrone* Drone = Cast<ADrone>(RaidPC->GetPawn()))
+			{
+				Drone->ClearEquippedLoadoutForServer(FName(TEXT("Disconnect")));
+			}
 		}
 
 		if (ARaidGameState* GS = GetGameState<ARaidGameState>())
@@ -328,7 +333,9 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
 		{
 			const EPlayerSelectionState SelectionState = RaidPC->GetPlayerSelectionState();
-			if (SelectionState == EPlayerSelectionState::InBattle || SelectionState == EPlayerSelectionState::Locked)
+			if (SelectionState == EPlayerSelectionState::Selecting
+				|| SelectionState == EPlayerSelectionState::InBattle
+				|| SelectionState == EPlayerSelectionState::Locked)
 			{
 				EligiblePlayerCount++;
 			}
@@ -349,6 +356,17 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
 		{
 			const EPlayerSelectionState SelectionState = RaidPC->GetPlayerSelectionState();
+			if (SelectionState == EPlayerSelectionState::Selecting)
+			{
+				DronePartReturnManager->ReturnSelectedParts(RaidPC, EDronePartReturnReason::RaidEnd);
+				if (ADrone* Drone = Cast<ADrone>(RaidPC->GetPawn()))
+				{
+					Drone->ClearEquippedLoadoutForServer(FName(TEXT("RaidEnd")));
+				}
+				RaidPC->FinalizeRaidEndForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+				continue;
+			}
+
 			if (SelectionState != EPlayerSelectionState::InBattle && SelectionState != EPlayerSelectionState::Locked)
 			{
 				continue;
@@ -363,12 +381,13 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 			if (ADrone* Drone = Cast<ADrone>(RaidPC->GetPawn()))
 			{
 				Drone->ResetCombatRuntimeStateForServer();
+				Drone->ClearEquippedLoadoutForServer(FName(TEXT("RaidEnd")));
 			}
 			RaidPC->FinalizeRaidEndForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd equipped part return completed Reason=%s PlayerCount=%d"),
+	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd part return completed Reason=%s PlayerCount=%d"),
 		*ReasonText,
 		EligiblePlayerCount);
 }

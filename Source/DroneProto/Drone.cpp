@@ -391,6 +391,27 @@ void ADrone::ResetCombatRuntimeStateForServer()
 	ResetCombatRuntimeStateForReason(FName(TEXT("RaidEnd")));
 }
 
+void ADrone::ClearEquippedLoadoutForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ClearEquippedLoadoutForServer rejected: server authority required"));
+		return;
+	}
+
+	EquippedParts.Reset();
+	EquippedCorePartID = NAME_None;
+	EquippedLeftWeaponPartID = NAME_None;
+	EquippedRightWeaponPartID = NAME_None;
+	AttackPower = 0;
+	RefreshMoveSpeedForServer();
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] ClearEquippedLoadout: Drone=%s Reason=%s"),
+		*GetName(),
+		Reason.IsNone() ? TEXT("Cleanup") : *Reason.ToString());
+}
+
 FDroneCombatRecord ADrone::GetCombatRecordForServer() const
 {
 	if (!HasAuthority())
@@ -588,6 +609,29 @@ FVector2D ADrone::GetLastServerMoveInputForTest() const
 {
 	return LastServerMoveInput;
 }
+
+FName ADrone::GetEquippedCorePartIDForTest() const
+{
+	return EquippedCorePartID;
+}
+
+FName ADrone::GetEquippedLeftWeaponPartIDForTest() const
+{
+	return EquippedLeftWeaponPartID;
+}
+
+FName ADrone::GetEquippedRightWeaponPartIDForTest() const
+{
+	return EquippedRightWeaponPartID;
+}
+
+bool ADrone::HasEquippedLoadoutForTest() const
+{
+	return !EquippedCorePartID.IsNone()
+		|| !EquippedLeftWeaponPartID.IsNone()
+		|| !EquippedRightWeaponPartID.IsNone()
+		|| EquippedParts.Num() > 0;
+}
 #endif
 
 void ADrone::OnRep_Health()
@@ -764,7 +808,7 @@ void ADrone::HandleDeath()
 			*EquippedRightWeaponPartID.ToString());
 	}
 
-	ClearEquippedPartsForServer();
+	ClearEquippedLoadoutForServer(FName(TEXT("Death")));
 
 	// TODO(D5 UI): show drone death state when the combat death UI flow exists.
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone death handled: equipped parts returned"));
@@ -1590,21 +1634,6 @@ void ADrone::ResetCombatRuntimeStateForReason(FName Reason)
 		bCombatRecordActive = false;
 	}
 	RefreshMoveSpeedForServer();
-}
-
-void ADrone::ClearEquippedPartsForServer()
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	EquippedParts.Reset();
-	EquippedCorePartID = NAME_None;
-	EquippedLeftWeaponPartID = NAME_None;
-	EquippedRightWeaponPartID = NAME_None;
-	AttackPower = 0;
-	ForceNetUpdate();
 }
 
 void ADrone::LogDeadInputIgnored(const TCHAR* ActionName) const

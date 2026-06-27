@@ -1789,6 +1789,9 @@ void ARaidPlayerController::FinalizeRaidEndForServer(FName Reason)
 	}
 
 	StopSelectionTimerForServer(TEXT("RaidEnd"), false);
+	SetSelectedPartIDForSlotForServer(EPartSlot::Core, NAME_None);
+	SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, NAME_None);
+	SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, NAME_None);
 	SetEquippedPartIDForSlotForServer(EPartSlot::Core, NAME_None);
 	SetEquippedPartIDForSlotForServer(EPartSlot::LeftWeapon, NAME_None);
 	SetEquippedPartIDForSlotForServer(EPartSlot::RightWeapon, NAME_None);

@@ -38,6 +38,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
 	bool ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID);
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
+	void ClearEquippedLoadoutForServer(FName Reason);
+
 	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
 	void RequestAttackBoss();
 
@@ -80,6 +83,10 @@ public:
 	float GetBoosterAccumulatedMoveDistanceForTest() const;
 	FDroneCombatRecord GetCombatRecordForTest() const;
 	FVector2D GetLastServerMoveInputForTest() const;
+	FName GetEquippedCorePartIDForTest() const;
+	FName GetEquippedLeftWeaponPartIDForTest() const;
+	FName GetEquippedRightWeaponPartIDForTest() const;
+	bool HasEquippedLoadoutForTest() const;
 #endif
 
 protected:
@@ -217,7 +224,6 @@ private:
 	void RecalculateStats();
 	void HandleDeath();
 	void HandleAttackBossForServer();
-	void ClearEquippedPartsForServer();
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	FVector2D ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const;
 	bool ApplyMoveInputForServer(FVector2D RawAxis);
