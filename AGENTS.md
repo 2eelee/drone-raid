@@ -37,19 +37,23 @@
 - `ServerState`(인스턴스 가용성) vs `RaidState`(레이드 진행단계) 분리 — 합치지 않음
 - 매치메이킹 레이어는 게임 서버 위 별도 계층. 단일 인스턴스는 전역 정원 불인지
 - `RecalculateStats`는 드래프팅(전투 전)에서만 호출 — 전투 중 호출 시 Health=MaxHealth로 풀피 회복 버그
-- 이동거리 기반 효과 계산은 별도 단계로 분리. D8에서 서버 권한 이동 입력과 Vector/Booster용 이동거리 누적 기반만 구현했고, Vector Cannon/Booster Core 보너스 계산은 아직 미구현.
+- 이동거리 기반 효과 계산은 별도 단계로 분리. D8에서 서버 권한 이동 입력과 Vector/Booster용 이동거리 누적 기반을 만들었고, 이후 Vector Cannon 피해 보너스와 Booster Core 공격/속도 보너스 계산 기반을 서버 경로에 연결했다.
 - 이동거리 누적은 서버 ActorLocation delta 기준. `InBattle + Alive`일 때만 누적하고 Spawn/Possess/Loadout/Death/RaidEnd/FirstSample/TooLargeDelta/Teleport성 delta는 reset 또는 ignore 처리.
-- `VectorAccumulatedMoveDistanceMeters`와 `BoosterAccumulatedMoveDistanceMeters`는 분리 유지. 향후 Vector 공격 후에는 Vector 누적만 reset하고, Booster 누적은 공격으로 reset하지 않는 설계.
+- `VectorAccumulatedMoveDistanceMeters`와 `BoosterAccumulatedMoveDistanceMeters`는 분리 유지. Vector 공격 후에는 Vector 누적만 reset하고, Booster 누적은 공격으로 reset하지 않는다.
 - Drain Core 회복은 서버에서 실제 Boss HP 감소량 기준으로 1회 Z 입력당 최대 3까지만 적용한다.
+- RaidEnd 또는 BossDead 이후에는 `PlayerSelectionState == InBattle`만으로 공격/이동을 허용하지 않는다. 서버에서 `RaidState`, Boss defeated, Boss HP를 함께 확인해 입력을 무시한다.
+- DroneReport는 서버가 생성하고 owning client RPC로 표시 요청한다. 클라이언트는 Report UI 표시와 복제값 읽기만 담당한다.
 
 ## 현재 상태 / 다음 단계
-- 현재: D8 완료. D5 선택/Ready/AutoReady, D6 DeathReturn/RaidEndReturn/Dead 차단, D7 이동거리 비기반 전투 효과를 유지한 상태에서 Vector/Booster 선행 작업인 서버 권한 이동 입력 + 서버 이동거리 누적 기반을 구현.
-- TestMap PIE 2 Players 기준 D5/D6 흐름은 유지: `BP_Drone_C` possess, 공유 재고 선택/취소/반환, 15초 AutoReady, 수동 Ready, Selecting 공격 차단, InBattle Z 공격으로 Boss HP 감소.
-- D7 전투 효과: Pulse Laser는 슬롯별 독립 3타 카운트(8/8/18), Fracture Burst는 11 damage/HitCount 4, Zenith Core는 HP 비율 단계 보너스, Drain Core는 피해량 기반 최대 3 회복.
-- D8 이동 기반: `ADrone::Move -> Server_SetMoveInput -> ApplyMoveInputForServer` 경로로 축 입력만 서버에 전달하고, 서버 Tick에서 위치 delta를 m 단위로 Vector/Booster 누적값에 더함.
+- 현재: D11 기반. D5 선택/Ready/AutoReady, D6 DeathReturn/RaidEndReturn/Dead 차단, D7 전투 효과, D8 서버 권한 이동거리 누적, D9 Vector/Booster 계산, D10/D11 DroneReport 표시 기반까지 연결.
+- TestMap PIE 2 Players 기준 1차 루프 동작: 부품 선택 → Ready → InBattle → Boss 피격 → BossDeath → RaidEnd → DroneReport 표시 → 부품 반환.
+- D7-D9 전투 효과: Pulse Laser는 슬롯별 독립 3타 카운트(8/8/18), Fracture Burst는 11 damage/HitCount 4, Vector Cannon은 이동거리 기반 보너스 후 Vector 누적 reset, Zenith Core는 HP 비율 단계 보너스, Booster Core는 이동거리 기반 공격/속도 보너스 계산, Drain Core는 피해량 기반 최대 3 회복.
+- D8 이동 기반: `ADrone::Move -> Server_SetMoveInput -> ApplyMoveInputForServer -> ApplyPendingServerMoveInputForServer` 경로로 축 입력만 서버에 전달하고, 서버 Tick에서 위치 이동/복제/Vector-Booster 이동거리 누적을 처리.
 - D6 테스트 경로: `D6KillDrone`은 현재 콘솔/owning PlayerController의 Pawn을 사망 처리하고, `D6RaidEndReturn`은 레이드 종료 반환 경로를 실행한다. 에디터/서버 콘솔에서는 서버 쪽 PC가 대상이 될 수 있으므로 `[DR_SUMMARY] D6KillDrone RequestPC=... TargetPC=... TargetDrone=...` 로그로 대상 확인.
-- 검증: `Build.bat DroneProtoEditor Win64 Development -NoLiveCoding` 성공, `Automation RunTests DroneProto` 전체 22개 성공.
-- 다음: D8 누적값을 사용해 Vector Cannon 피해 보너스와 Booster Core 공격/속도 보너스를 별도 범위로 구현. 보이는 보스/HP UI 또는 전투/리포트 계층은 이후 별도 범위. UMG 에셋/보스 패턴/ContributionManager/DroneReport/DataTable 전환은 아직 미구현.
+- RaidEnd 이후 Z 입력은 `[DR_SUMMARY] Attack Ignored: Reason=RaidEnd` 또는 `Reason=BossDead`가 떠야 하며, `Attack Accepted` / `BossDamage OldHP=0.00`가 남으면 회귀.
+- RaidEnd 이후 이동 입력은 `[DR_SUMMARY] MoveInput ... Result=Ignored Reason=RaidEnd` 또는 `[DR_SUMMARY] ServerMoveIgnored ... Reason=RaidEnd`가 떠야 하며, `ServerMoveApplied`가 남으면 회귀.
+- 검증: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공, `Automation RunTests DroneProto.D6.RaidGameMode.RaidEndReturnClearsInBattlePlayers` 성공. 전체 자동화 재실행은 앱 사용량 제한으로 추가 확인 필요.
+- 다음: ContributionManager / DataTable 전환 / 보스 패턴 / VFX / Report UI polish를 별도 범위로 진행.
 
 ## 보류 (D11)
 - 팝업 위젯 클래스 지정 + `IsSlotEnabled`(현재 dead) 정리
@@ -58,10 +62,9 @@
 
 ## 보류 (D6 이후)
 - UMG 배치/디자인/아이콘 polish.
-- 보이는 보스 액터/HP UI.
-- Booster Core 이동거리/속도/공격 보너스, Vector Cannon 이동거리 피해 보너스.
-- D8 서버 이동 경로의 2 Clients PIE 체감/복제 수동 확인. 코드 기준 서버 누적 기반은 마련됐지만, 로컬 예측 제거로 조작감/보정은 별도 튜닝 대상.
-- ContributionManager / DroneReport / DataTable 전환 / 보스 패턴 / VFX.
+- 보이는 보스 액터/HP UI polish.
+- D8 서버 이동 경로의 2 Clients PIE 체감/복제 추가 튜닝. 코드 기준 서버 이동/owner-only 보정 기반은 마련됐지만, 로컬 체감은 별도 조정 대상.
+- ContributionManager / DataTable 전환 / 보스 패턴 / VFX.
 
 ## D7 PIE / 로그 검색어
 - `[DR_SUMMARY] PulseAttack PC=`
@@ -77,6 +80,22 @@
 - `[DR_SUMMARY] MoveDistance PC=`
 - `[DR_SUMMARY] MoveDistanceIgnored PC=`
 - `[DR_SUMMARY] MoveDistanceReset PC=`
+
+## D9-D11 PIE / 로그 검색어
+- `[DR_SUMMARY] WeaponCalc Player=`
+- `[DR_SUMMARY] CoreCalc Player=`
+- `[DR_SUMMARY] Attack Accepted: Player=`
+- `[DR_SUMMARY] Attack Ignored: Reason=RaidEnd`
+- `[DR_SUMMARY] Attack Ignored: Reason=BossDead`
+- `[DR_SUMMARY] BossDamage: OldHP=`
+- `[DR_SUMMARY] BossDeath:`
+- `[DR_SUMMARY] BossDamageIgnored: Reason=BossDead`
+- `[DR_SUMMARY] CombatRecord Player=`
+- `[DR_SUMMARY] ReportCreated Player=`
+- `[DR_SUMMARY] ReportWidgetShown Player=`
+- `[DR_SUMMARY] RaidEndStateCleaned Player=`
+- `[DR_SUMMARY] RaidEndClientRefresh Player=`
+- `[DR_SUMMARY] ServerMoveIgnored PC=`
 
 ## 하지 말 것
 - 게임 변형(Combat/Platforming 등) 없음 — 단일 게임

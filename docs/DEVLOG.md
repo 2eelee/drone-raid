@@ -3,6 +3,169 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-27 — RaidEnd 이후 공격/이동 차단 및 상태 정리
+
+### 문제
+
+2 Client PIE에서 `BossDeath -> RaidEnd -> DroneReport -> 부품 반환`까지 1차 루프는 동작했지만, RaidEnd 이후에도 입력 처리 일부가 살아 있었다.
+
+- Boss HP가 이미 `0.00`인데도 `Attack Accepted`, `BossDamage` 로그가 추가로 남음.
+- RaidEnd 이후 이동 입력에서 `MoveDistanceIgnored Reason=RaidEnd`는 찍히지만 서버 위치 이동은 적용됨.
+- RaidEnd/Return 이후 UI refresh에 `State=InBattle` 또는 이전 Core/Left/Right 선택값이 stale하게 남는 경우가 있음.
+
+### 수정
+
+- `ADrone::HandleAttackBossForServer` 초입에서 `RaidState == End`를 검사해 공격을 서버에서 즉시 무시.
+- Boss가 이미 defeated 상태이면 공격 계산, Pulse/Vector 카운터, BossDamage, Attack Accepted 경로에 들어가지 않게 차단.
+- `ARaidBoss::ApplyDamageForServer`는 이미 죽은 Boss에게 추가 데미지를 적용하지 않고 `[DR_SUMMARY] BossDamageIgnored: Reason=BossDead`를 남김.
+- `ADrone::ApplyMoveInputForServer`와 서버 Tick 이동 적용 경로에서 RaidEnd를 모두 검사해 RaidEnd 이후 서버 위치 변경 자체를 막음.
+- `ARaidGameMode::ReturnAllEquippedPartsForRaidEnd`는 RaidEnd를 1회만 처리하고 중복 호출은 `[DR_SUMMARY] RaidEndSkipped Reason=AlreadyEnded`로 종료.
+- RaidEnd 반환 후 `ARaidPlayerController::FinalizeRaidEndForServer`와 owning client RPC에서 Equipped/Selected 캐시를 `None`으로 비우고 UI refresh를 요청.
+- 부품 반환은 기존 `ReturnEquippedPartsForServer -> DronePartReturnManager` 단일 경로를 유지하고, 공격/이동 코드에 재고 계산을 새로 만들지 않음.
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D6.RaidGameMode.RaidEndReturnClearsInBattlePlayers` 성공.
+- 확인 로그:
+  - `[DR_SUMMARY] RaidEnd Reason=Automation PlayerCount=1`
+  - `[DR_SUMMARY] RaidEndStateCleaned ... State=Locked Core=None Left=None Right=None`
+  - `[DR_SUMMARY] Attack Ignored: Reason=RaidEnd ...`
+  - `[DR_SUMMARY] MoveInput ... Result=Ignored Reason=RaidEnd`
+  - `[DR_SUMMARY] RaidEndSkipped Reason=AlreadyEnded RequestedReason=AutomationRetry`
+
+### PIE 검색어
+
+- `[DR_SUMMARY] Attack Ignored: Reason=RaidEnd`
+- `[DR_SUMMARY] Attack Ignored: Reason=BossDead`
+- `[DR_SUMMARY] BossDamageIgnored: Reason=BossDead`
+- `[DR_SUMMARY] ServerMoveIgnored PC=`
+- `[DR_SUMMARY] RaidEndSkipped Reason=AlreadyEnded`
+- `[DR_SUMMARY] RaidEndStateCleaned Player=`
+- `[DR_SUMMARY] RaidEndClientRefresh Player=`
+
+### 보류
+
+- 전체 `DroneProto` 자동화 재실행은 앱 사용량 제한으로 추가 확인하지 못했다. 직전 빌드는 성공했고, RaidEnd 핵심 자동화는 통과했다.
+
+---
+
+## 2026-06-27 — Vector/Booster 전투 계산과 DroneReport 기반
+
+### 구현
+
+- `FDroneCombatRules`를 추가해 무기/코어 계산과 리포트 점수/등급 계산을 검증 가능한 helper로 분리.
+- Vector Cannon은 서버 이동거리 snapshot 기준으로 5m당 보너스 피해를 계산하고, 1회 공격 입력에서 좌/우 Vector 계산을 모두 끝낸 뒤 Vector 누적값만 reset.
+- Booster Core는 Booster 전용 누적 이동거리를 사용해 공격 보너스와 이동속도 보너스 계산 기반을 연결.
+- Pulse/Fracture/Zenith/Drain 계산도 같은 helper 기반으로 정리해 좌/우 무기 합산이 중복/누락되지 않게 유지.
+- `FDroneCombatRecord`로 생존 시간, Boss damage, 이동거리, 회복량, 피격 횟수를 서버에서 누적.
+- Boss 사망 또는 RaidEnd 시 서버에서 `FDroneReportData`를 생성하고 owning client RPC로 전달.
+- `UDroneReportWidget` C++ glue를 추가해 Blueprint 위젯에서 생존 시간, Boss 피해, 이동거리, 회복량, 보너스, 등급 텍스트를 읽을 수 있게 함.
+- Boss HP/MaxHP 복제와 BossDamage/BossDeath summary 로그를 정리.
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- 자동화 테스트 추가/확장:
+  - `DroneProto.D9.DroneCombat.Formulas`
+  - `DroneProto.D9.Drone.VectorBoosterCombatRecord`
+  - `DroneProto.D10.DroneReport.Formulas`
+  - `DroneProto.D10.DroneReport.DuplicateGeneration`
+  - `DroneProto.D11.DroneReport.WidgetTextHelpers`
+  - `DroneProto.D5.ManualSummaryLogs.SourceMarkers`
+- PIE 2 Clients 기준 `ReportCreated`, `ReportWidgetShown`, `RaidEndReturn`, `ReturnSkipped AlreadyEmpty` 흐름을 로그로 확인.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] WeaponCalc Player=`
+- `[DR_SUMMARY] CoreCalc Player=`
+- `[DR_SUMMARY] Attack Accepted: Player=`
+- `[DR_SUMMARY] BossDamage: OldHP=`
+- `[DR_SUMMARY] BossDeath:`
+- `[DR_SUMMARY] CombatRecord Player=`
+- `[DR_SUMMARY] ReportCreated Player=`
+- `[DR_SUMMARY] ReportWidgetShown Player=`
+- `[DR_SUMMARY] ReturnAfterReport Player=`
+
+### 범위 제외
+
+- ContributionManager, DataTable 전환, 보스 패턴, VFX는 아직 미구현.
+- Report 위젯 C++ 바인딩과 에셋 연결만 진행했고, UMG 레이아웃 polish는 별도 범위로 남김.
+
+---
+## 2026-06-23 — [디버깅] 드론 이동 입력 방향 오류 수정
+
+### 문제
+
+전투 진입 후 드론의 실제 이동 방향이 입력 의도와 90도 어긋났다.
+
+- `A` / 왼쪽 입력: 뒤로 이동
+- `W` / 앞 입력: 오른쪽 이동
+- `D` / 오른쪽 입력: 앞으로 이동
+- `S` / 뒤 입력: 왼쪽 이동
+
+### 원인
+
+C++ 서버 이동 처리 코드(`ADrone::ApplyMoveInputForServer`)는 `Axis.X=좌우`, `Axis.Y=전후` 기준으로 정상 동작하고 있었다.
+
+실제 원인은 Enhanced Input Mapping Context의 `IA_Move` WASD 축 매핑 오류였다. `W/S`는 Y축 전후 입력으로, `A/D`는 X축 좌우 입력으로 들어와야 하지만 두 축이 서로 뒤바뀐 상태였다.
+
+### 수정
+
+`IA_Move` 매핑을 다음 기준으로 정리했다.
+
+- `W`: Y축 `+1`
+- `S`: Y축 `-1`
+- `D`: X축 `+1`
+- `A`: X축 `-1`
+
+`ADrone::ApplyMoveInputForServer`는 수정하지 않았다. RPC, Replicate/OnRep, 이동거리 누적 로직, 전투 상태 조건도 그대로 유지했다.
+
+### 검증
+
+PIE 멀티 테스트에서 전투 진입 후 이동 방향을 확인했다.
+
+- `W`: 앞으로 이동
+- `S`: 뒤로 이동
+- `A`: 왼쪽 이동
+- `D`: 오른쪽 이동
+
+서버/클라이언트 화면에서 이동 방향이 동일하게 보이는 것을 확인했다.
+
+---
+
+## 2026-06-23 — D8 이동 입력/이동거리 누적 검증 및 PIE 포커스 이슈 정리
+
+### 검증 목적
+
+Vector Cannon / Booster Core 구현 전에, 이동거리 기반 효과의 원천 데이터가 클라이언트 위치값이 아니라 서버 `ActorLocation` 기준으로만 계산되는지 재확인했다.
+
+서버는 클라이언트가 보낸 이동 축 입력만 받고, 실제 이동 적용과 `VectorAccumulatedMoveDistanceMeters` / `BoosterAccumulatedMoveDistanceMeters` 누적은 서버 Tick 경로에서 처리하는 D8 구조를 유지했다.
+
+### 확인 내용
+
+별도 클라이언트 창에서 이동 입력 시 서버 화면에서는 움직이지만 클라이언트 본인 화면에서는 움직임이 보이지 않는 문제가 있었다. 이를 확인하는 과정에서 owning client에 한해 표시용 로컬 이동을 복구하는 임시 패치를 적용했다. 이 로컬 이동은 화면 체감용이며 이동거리 누적값은 변경하지 않는다.
+
+이후 서버 플레이어가 전투에 진입하면 클라이언트 입력이 서버 플레이어에게 들어가는 것처럼 보이는 현상이 있었다. 처음에는 이동 대상 꼬임, 소유 Pawn 불일치, 입력 버퍼 잔류 문제로 의심했으나, 입력 소스 로그를 추가해 확인한 결과 실제 원인은 Listen Server PIE 환경의 포커스 전환이었다.
+
+서버 플레이어가 AutoReady로 전투에 진입하면서 에디터/Listen Server 뷰포트가 active input target이 되었고, 그 상태에서 키보드 입력이 서버 플레이어에게 들어갔다. 클라이언트 창을 다시 클릭하면 클라이언트 Pawn이 정상적으로 이동했다. 따라서 코드상 이동 대상 꼬임보다는 Listen Server PIE 테스트 환경의 입력 포커스 문제로 판단했다.
+
+### 현재 결론
+
+- 클라이언트 Ready 후 클라이언트 창에 포커스가 있을 때 클라이언트 Pawn 이동은 정상.
+- 서버에서 해당 클라이언트 Pawn의 `MoveDistance` 누적도 정상.
+- 이동거리 누적은 서버 `HasAuthority()` 경로에서만 처리.
+- 서버 플레이어 전투 시작 후 입력이 서버 Pawn으로 들어간 현상은 Listen Server 뷰포트 포커스 전환 때문.
+- Dedicated Server 구조에서는 서버에 플레이어 입력 뷰포트가 없으므로 동일 문제가 재현되지 않을 가능성이 높다.
+
+### 후속 작업
+
+- 임시로 추가한 `MoveLocalSource`, `MoveLocalPredict`, `MoveServerBefore`, `MoveServerAfter` 로그 정리.
+- Dedicated Server + Clients 2개 환경에서 이동거리 누적 재검증.
+- 검증 후 Vector Cannon / Booster Core 이동거리 기반 효과 구현.
+- Vector/Booster 구현 전까지 이동 시스템은 불필요하게 추가 수정하지 않기.
+
+---
 
 ## 2026-06-21 — D8 서버 권한 이동 입력 + 이동거리 누적 기반
 
