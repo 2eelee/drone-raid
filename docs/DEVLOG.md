@@ -3,6 +3,64 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-28 — D14/D14.5 서버 권한 Dodge 및 PIE 로그 진단
+
+### 문제
+
+기획 플로우의 `C + 방향키 = 회피` 입력이 서버 권한 전투 액션으로 연결되어야 했다.
+
+- 기존 Dodge 요청 경로는 실제 서버 이동 적용까지 이어지지 않았다.
+- Enhanced Input asset은 C++에서 직접 생성/수정하지 않고, 코드 쪽 연결 슬롯과 null guard만 준비해야 했다.
+- PIE 2 Players 검증 중 `ServerMoveApplied`와 `OwnerMoveCorrected` 로그의 `PC`/`Pawn`/`ViewTarget`이 서로 다른 Pawn처럼 보여 실제 보정 대상 확인이 필요했다.
+
+### 수정
+
+- `ADrone::RequestDodge(FVector2D)`와 `Server_RequestDodge(FVector2D)` 경로를 통해 클라이언트는 요청만 보내고 서버가 최종 위치를 확정하도록 했다.
+- `RequestDodgeForServer(FVector2D)`에서 서버 권한, Controller/Pawn 소유권, RaidEnd, Dead, InBattle, zero direction, cooldown을 검증한다.
+- Dodge 성공 시 서버 ActorLocation을 변경하고 기존 `OwnerMoveSync` / movement replication 경로로 owner 클라 위치 보정을 유지한다.
+- Dodge 이동거리는 `DodgeDistanceCm = 300.0f`, 최소 서버 쿨다운은 `DodgeCooldownSeconds = 0.20f`로 두었다.
+- Dodge 이동은 Vector/Booster/report 이동거리 누적에서 제외하고 `[DR_SUMMARY] MoveDistanceIgnored Reason=Dodge`로 남긴다.
+- `DodgeAction` C++ 입력 슬롯과 move-axis cache를 추가했다. asset 지정은 에디터 작업으로 남기고, 미지정 상태에서는 null guard로 crash 없이 동작한다.
+- 방향 없이 C만 누른 경우 클라이언트에서 요청하지 않고 `[DR_SUMMARY] DodgeInputIgnored ... Reason=ZeroDirection`으로 무시한다.
+- `OwnerMoveCorrected` 로그에 실제 보정 대상인 `CorrectedActor`, `bPawnMatchesCorrectedActor`, `LocalRole`, `RemoteRole`을 추가했다.
+- `ServerMoveApplied`, `ServerDodgeApplied`, `OwnerMoveSyncSent` 로그에 `Drone`, `Pawn`, `bPawnMatchesDrone`을 추가해 서버 이동 대상과 PC 소유 Pawn 일치 여부를 바로 확인할 수 있게 했다.
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D14` 성공, 2 tests performed.
+- `Automation RunTests DroneProto.D7` 성공, 4 tests performed.
+- `Automation RunTests DroneProto` 성공, 33 tests performed.
+- PIE 수동 검증에서 `Dodge Result=Success`, `ServerDodgeApplied`, `MoveDistanceIgnored Reason=Dodge`, `DodgeInputIgnored Reason=ZeroDirection`, `Dodge Ignored Reason=Cooldown` 확인.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] Dodge`
+- `[DR_SUMMARY] Dodge Ignored`
+- `[DR_SUMMARY] DodgeInputIgnored`
+- `[DR_SUMMARY] ServerDodgeApplied`
+- `[DR_SUMMARY] ServerMoveApplied`
+- `[DR_SUMMARY] OwnerMoveSyncSent`
+- `[DR_SUMMARY] OwnerMoveCorrected`
+- `[DR_SUMMARY] ReplicatedLocation`
+- `[DR_SUMMARY] MoveDistanceIgnored`
+- `[DR_SUMMARY] Attack Accepted`
+- `[DR_SUMMARY] Attack Ignored`
+
+### PIE 판정
+
+- `ServerMoveApplied` / `ServerDodgeApplied` / `OwnerMoveSyncSent`에서 `bPawnMatchesDrone=true`면 서버가 PC 소유 Pawn만 이동 적용한 것이다.
+- `OwnerMoveCorrected`에서 `CorrectedActor`와 `Pawn`이 같고 `bPawnMatchesCorrectedActor=true`면 owning client가 자기 Pawn만 보정한 것이다.
+- `ReplicatedLocation ... ViewTargetResult=SimProxyObserved`는 SimProxy 관찰 로그이며 owner correction과 구분해서 봐야 한다.
+- 현재 코드 기준으로 다른 플레이어 Pawn을 실제 보정하는 증거는 없고, 기존 혼동은 로그 표시와 PIE 멀티 컨텍스트 로그 interleaving에 가까웠다.
+
+### SpecDecisionNeeded
+
+- Dodge cooldown duration has no numeric design value. 현재는 비정상 연타 이동을 막기 위한 최소 서버 쿨다운 0.20초를 사용한다.
+- Dodge displacement move-distance scoring policy has no final design value. 현재는 Vector/Booster/report 이동거리 누적에서 제외한다.
+
+---
+
 ## 2026-06-28 — POR-8 D13 전투 계산식/부품 효과 명세 정렬
 
 ### 문제
