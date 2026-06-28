@@ -5,6 +5,7 @@
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
@@ -1688,6 +1689,22 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
 	{
 		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+	}
+	if (UWorld* World = GetWorld())
+	{
+		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
+		if (!RaidGameMode)
+		{
+			for (TActorIterator<ARaidGameMode> It(World); It; ++It)
+			{
+				RaidGameMode = *It;
+				break;
+			}
+		}
+		if (RaidGameMode)
+		{
+			RaidGameMode->StartRaidTimeLimitTimerForServer();
+		}
 	}
 
 	StopSelectionTimerForServer(bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"), !bAutoReady);

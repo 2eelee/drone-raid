@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerState.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "TimerManager.h"
 
 namespace
 {
@@ -327,6 +328,7 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 	const FString ReasonText = Reason.IsNone() ? TEXT("Manual") : Reason.ToString();
 	const EDroneReportTrigger ReportTrigger = ResolveReportTriggerForRaidEndReason(Reason);
 	const bool bBossDefeated = ReportTrigger == EDroneReportTrigger::BossDefeated;
+	ClearRaidTimeLimitTimerForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 	int32 EligiblePlayerCount = 0;
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
@@ -401,6 +403,117 @@ void ARaidGameMode::HandleBossDefeatedForServer()
 
 	ReturnAllEquippedPartsForRaidEnd(FName(TEXT("BossDefeated")));
 }
+
+void ARaidGameMode::StartRaidTimeLimitTimerForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!World || !GS)
+	{
+		return;
+	}
+
+	if (GS->RaidState == ERaidState::End)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerSkipped Phase=Start Reason=RaidEnded"));
+		return;
+	}
+
+	if (GS->RaidState != ERaidState::Battle)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerSkipped Phase=Start Reason=NotBattle State=%d"),
+			static_cast<int32>(GS->RaidState));
+		return;
+	}
+
+	if (World->GetTimerManager().IsTimerActive(RaidTimeLimitTimerHandle))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerSkipped Phase=Start Reason=AlreadyActive Remaining=%.2f"),
+			World->GetTimerManager().GetTimerRemaining(RaidTimeLimitTimerHandle));
+		return;
+	}
+
+	const float ClampedTimeLimit = FMath::Max(0.01f, RaidTimeLimitSeconds);
+	World->GetTimerManager().SetTimer(
+		RaidTimeLimitTimerHandle,
+		this,
+		&ARaidGameMode::HandleRaidTimeLimitExpiredForServer,
+		ClampedTimeLimit,
+		false);
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerStart Duration=%.2f"),
+		ClampedTimeLimit);
+}
+
+void ARaidGameMode::ClearRaidTimeLimitTimerForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	if (World->GetTimerManager().TimerExists(RaidTimeLimitTimerHandle))
+	{
+		World->GetTimerManager().ClearTimer(RaidTimeLimitTimerHandle);
+		UE_LOG(LogTemp, Log, TEXT("[Server] RaidTimeLimit timer cleared Reason=%s"),
+			Reason.IsNone() ? TEXT("RaidEnd") : *Reason.ToString());
+	}
+}
+
+void ARaidGameMode::HandleRaidTimeLimitExpiredForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!World || !GS)
+	{
+		return;
+	}
+
+	if (GS->RaidState == ERaidState::End)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerExpired Result=Ignored Reason=AlreadyEnded"));
+		return;
+	}
+
+	if (GS->RaidState != ERaidState::Battle)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerExpired Result=Ignored Reason=NotBattle State=%d"),
+			static_cast<int32>(GS->RaidState));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerExpired Result=RaidEnd Reason=RaidTimeLimit"));
+	ReturnAllEquippedPartsForRaidEnd(FName(TEXT("RaidTimeLimit")));
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool ARaidGameMode::IsRaidTimeLimitTimerActiveForTest() const
+{
+	const UWorld* World = GetWorld();
+	return World && World->GetTimerManager().IsTimerActive(RaidTimeLimitTimerHandle);
+}
+
+void ARaidGameMode::ExpireRaidTimeLimitForTest()
+{
+	HandleRaidTimeLimitExpiredForServer();
+}
+#endif
 
 UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const
 {

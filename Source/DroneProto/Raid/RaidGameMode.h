@@ -25,12 +25,25 @@ public:
 	void ReturnAllEquippedPartsForRaidEnd(FName Reason);
 
 	void HandleBossDefeatedForServer();
+	void StartRaidTimeLimitTimerForServer();
 
 	UDronePartReturnManager* GetDronePartReturnManager() const;
 
+#if WITH_DEV_AUTOMATION_TESTS
+	bool IsRaidTimeLimitTimerActiveForTest() const;
+	void ExpireRaidTimeLimitForTest();
+#endif
+
 private:
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Timer", meta = (ClampMin = "1.0"))
+	float RaidTimeLimitSeconds = 180.0f;
+
 	UPROPERTY()
 	UDronePartReturnManager* DronePartReturnManager = nullptr;
 
+	FTimerHandle RaidTimeLimitTimerHandle;
+
 	bool EnsureDronePartReturnManagerForServer();
+	void ClearRaidTimeLimitTimerForServer(FName Reason);
+	void HandleRaidTimeLimitExpiredForServer();
 };

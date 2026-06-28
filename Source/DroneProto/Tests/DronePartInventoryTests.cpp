@@ -131,6 +131,24 @@ float AttackBossAndMeasureDamage(ADrone* Drone, const ARaidBoss* Boss)
 	Drone->RequestAttackBoss();
 	return HPBeforeAttack - Boss->GetCurrentHP();
 }
+
+bool SetFloatPropertyForAutomationTest(UObject* Object, FName PropertyName, float Value)
+{
+	if (!Object)
+	{
+		return false;
+	}
+
+	FFloatProperty* FloatProperty = FindFProperty<FFloatProperty>(Object->GetClass(), PropertyName);
+	if (!FloatProperty)
+	{
+		return false;
+	}
+
+	FloatProperty->SetPropertyValue_InContainer(Object, Value);
+	return true;
+}
+
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -2159,6 +2177,205 @@ bool FRaidEndReturnTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("second RaidEnd does not over-return partial core"),
 		Inventory->GetCurrentCount(CoreBooster),
 		Inventory->GetMaxCount(CoreBooster));
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidTimeLimitEndTest,
+	"DroneProto.D12.RaidGameMode.RaidTimeLimitEndsRaid",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidTimeLimitEndTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("RaidTimeLimitEndWorld")));
+	TestNotNull(TEXT("raid time limit world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
+	ARaidGameState* GameState = World->SpawnActor<ARaidGameState>();
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	ARaidPlayerController* BattlePC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* BattleDrone = World->SpawnActor<ADrone>();
+	ARaidPlayerController* SelectingPC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* SelectingDrone = World->SpawnActor<ADrone>();
+	ARaidPlayerController* DeadPC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* DeadDrone = World->SpawnActor<ADrone>();
+
+	TestNotNull(TEXT("raid time limit game mode is spawned"), GameMode);
+	TestNotNull(TEXT("raid time limit game state is spawned"), GameState);
+	TestNotNull(TEXT("raid time limit inventory is spawned"), Inventory);
+	TestNotNull(TEXT("raid time limit battle PC is spawned"), BattlePC);
+	TestNotNull(TEXT("raid time limit battle drone is spawned"), BattleDrone);
+	TestNotNull(TEXT("raid time limit selecting PC is spawned"), SelectingPC);
+	TestNotNull(TEXT("raid time limit selecting drone is spawned"), SelectingDrone);
+	TestNotNull(TEXT("raid time limit dead PC is spawned"), DeadPC);
+	TestNotNull(TEXT("raid time limit dead drone is spawned"), DeadDrone);
+	if (!GameMode || !GameState || !Inventory || !BattlePC || !BattleDrone || !SelectingPC || !SelectingDrone || !DeadPC || !DeadDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetDronePartInventory(Inventory);
+	World->AddController(BattlePC);
+	World->AddController(SelectingPC);
+	World->AddController(DeadPC);
+	BattlePC->Possess(BattleDrone);
+	SelectingPC->Possess(SelectingDrone);
+	DeadPC->Possess(DeadDrone);
+
+	TestTrue(TEXT("raid time limit is test-configurable"),
+		SetFloatPropertyForAutomationTest(GameMode, FName(TEXT("RaidTimeLimitSeconds")), 0.05f));
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	TestTrue(TEXT("raid time limit consumes battle core"), Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("raid time limit consumes battle left weapon"), Inventory->TryConsumePart(PulseLaser));
+	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	BattlePC->Server_RequestReadyForRaid_Implementation();
+
+	TestTrue(TEXT("raid time limit consumes selecting right weapon"), Inventory->TryConsumePart(VectorCannon));
+	SelectingPC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+
+	DeadPC->Server_RequestReadyForRaid_Implementation();
+	DeadDrone->ApplyDamageForServer(999, FName(TEXT("Automation")));
+	TestTrue(TEXT("dead player receives death report before raid time limit"),
+		DeadPC->HasDroneReportGeneratedForTest());
+	const FDroneReportData DeathReport = DeadPC->GetLastDroneReportDataForTest();
+
+	TestEqual(TEXT("ready starts Battle before raid time limit expires"),
+		GameState->RaidState,
+		ERaidState::Battle);
+	TestTrue(TEXT("ready starts raid time limit timer"),
+		GameMode->IsRaidTimeLimitTimerActiveForTest());
+
+	GameMode->ExpireRaidTimeLimitForTest();
+
+	TestEqual(TEXT("raid time limit moves raid to End"),
+		GameState->RaidState,
+		ERaidState::End);
+	TestTrue(TEXT("surviving battle player receives raid time limit report"),
+		BattlePC->HasDroneReportGeneratedForTest());
+	TestFalse(TEXT("raid time limit report does not mark BossSlayer bonus"),
+		BattlePC->GetLastDroneReportDataForTest().AchievedBonusList.Contains(EDroneReportBonusType::BossSlayer));
+	TestFalse(TEXT("selecting player does not receive raid time limit report"),
+		SelectingPC->HasDroneReportGeneratedForTest());
+	TestTrue(TEXT("dead player keeps original death report"),
+		DeadPC->HasDroneReportGeneratedForTest());
+	TestTrue(TEXT("raid time limit does not replace death report"),
+		FMath::IsNearlyEqual(DeadPC->GetLastDroneReportDataForTest().ReportScore, DeathReport.ReportScore, 0.01f));
+
+	TestEqual(TEXT("raid time limit returns battle core"),
+		Inventory->GetCurrentCount(CoreZenith),
+		Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("raid time limit returns battle left weapon"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("raid time limit returns selecting right weapon"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon));
+	TestFalse(TEXT("raid time limit clears battle drone loadout"),
+		BattleDrone->HasEquippedLoadoutForTest());
+	TestEqual(TEXT("raid time limit clears battle PC equipped core"),
+		BattlePC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("raid time limit clears selecting selected right weapon"),
+		SelectingPC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+
+	GameMode->Logout(BattlePC);
+	GameMode->Logout(SelectingPC);
+	TestEqual(TEXT("logout after raid time limit does not over-return battle core"),
+		Inventory->GetCurrentCount(CoreZenith),
+		Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("logout after raid time limit does not over-return selecting weapon"),
+		Inventory->GetCurrentCount(VectorCannon),
+		Inventory->GetMaxCount(VectorCannon));
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidTimeLimitBossDefeatedGuardTest,
+	"DroneProto.D12.RaidGameMode.RaidTimeLimitDoesNotDuplicateBossDefeated",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidTimeLimitBossDefeatedGuardTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("RaidTimeLimitBossDefeatedWorld")));
+	TestNotNull(TEXT("raid boss defeated timer guard world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
+	ARaidGameState* GameState = World->SpawnActor<ARaidGameState>();
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	ARaidPlayerController* BattlePC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* BattleDrone = World->SpawnActor<ADrone>();
+
+	TestNotNull(TEXT("boss defeated timer guard game mode is spawned"), GameMode);
+	TestNotNull(TEXT("boss defeated timer guard game state is spawned"), GameState);
+	TestNotNull(TEXT("boss defeated timer guard inventory is spawned"), Inventory);
+	TestNotNull(TEXT("boss defeated timer guard battle PC is spawned"), BattlePC);
+	TestNotNull(TEXT("boss defeated timer guard battle drone is spawned"), BattleDrone);
+	if (!GameMode || !GameState || !Inventory || !BattlePC || !BattleDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetDronePartInventory(Inventory);
+	World->AddController(BattlePC);
+	BattlePC->Possess(BattleDrone);
+
+	TestTrue(TEXT("boss defeated timer guard raid time limit is test-configurable"),
+		SetFloatPropertyForAutomationTest(GameMode, FName(TEXT("RaidTimeLimitSeconds")), 0.05f));
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("boss defeated timer guard consumes left weapon"), Inventory->TryConsumePart(PulseLaser));
+	BattlePC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	BattlePC->Server_RequestReadyForRaid_Implementation();
+
+	GameMode->HandleBossDefeatedForServer();
+
+	TestEqual(TEXT("boss defeated ends raid before timer"),
+		GameState->RaidState,
+		ERaidState::End);
+	TestFalse(TEXT("boss defeated clears raid time limit timer"),
+		GameMode->IsRaidTimeLimitTimerActiveForTest());
+	TestTrue(TEXT("boss defeated creates report"),
+		BattlePC->HasDroneReportGeneratedForTest());
+	const FDroneReportData BossReport = BattlePC->GetLastDroneReportDataForTest();
+	TestEqual(TEXT("boss defeated returns left weapon"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
+
+	GameMode->ExpireRaidTimeLimitForTest();
+
+	TestTrue(TEXT("timer after boss defeated does not replace report"),
+		FMath::IsNearlyEqual(BattlePC->GetLastDroneReportDataForTest().ReportScore, BossReport.ReportScore, 0.01f));
+	TestEqual(TEXT("timer after boss defeated preserves report bonus score"),
+		BattlePC->GetLastDroneReportDataForTest().BonusScore,
+		BossReport.BonusScore);
+	TestEqual(TEXT("timer after boss defeated preserves report bonus count"),
+		BattlePC->GetLastDroneReportDataForTest().AchievedBonusList.Num(),
+		BossReport.AchievedBonusList.Num());
+	TestEqual(TEXT("timer after boss defeated does not over-return left weapon"),
+		Inventory->GetCurrentCount(PulseLaser),
+		Inventory->GetMaxCount(PulseLaser));
 
 	World->DestroyWorld(false);
 	return true;
