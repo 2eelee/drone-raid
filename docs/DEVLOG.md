@@ -3,6 +3,88 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-28 — POR-8 D13 전투 계산식/부품 효과 명세 정렬
+
+### 문제
+
+구현 감사에서 Drone Core / Weapon 계산식과 최신 기획서 사이에 확인이 필요한 지점이 남아 있었다.
+
+- Fracture Burst는 총 피해 11은 맞지만 `HitCount=4`가 총 타수인지 추가 타수인지 로그만으로 헷갈릴 수 있었다.
+- Drain Core의 "기본 공격력/이속 낮음" 문구는 있었지만 적용할 수 있는 정확한 수치가 없었다.
+- Zenith / Booster / Drain / Pulse / Fracture / Vector 경계값을 한 번에 고정하는 자동화 테스트가 부족했다.
+
+### 수정
+
+- `FDroneWeaponCalculationResult`에 `AdditionalHitCount`를 추가했다.
+- Fracture Burst는 기존 `HitCount=4`를 유지하면서 `AdditionalHitCount=3`, `BaseDamage=5`, `BonusDamage=6`, `WeaponDamage=11`로 의미를 분리했다.
+- `[DR_SUMMARY] WeaponCalc` 로그에 `AdditionalHitCount`를 추가했다.
+- Drain Core의 기본 공격/이속 페널티는 정확한 수치가 없어 임의 구현하지 않았다.
+- `DroneProto.D13.DroneCombat.SpecAlignment` 테스트로 Core/Weapon 경계값과 Drain 실제 피해량 기준 회복을 검증했다.
+
+### 검증
+
+- `git diff --check` 성공. LF/CRLF warning 외 whitespace error 없음.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D13.DroneCombat.SpecAlignment` 성공, 1 test performed.
+- `Automation RunTests DroneProto.D7` 성공, 4 tests performed.
+- `Automation RunTests DroneProto` 성공, 31 tests performed.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] WeaponCalc`
+- `[DR_SUMMARY] CoreCalc`
+- `[DR_SUMMARY] AttackCalc`
+- `[DR_SUMMARY] DrainHeal`
+- `[DR_SUMMARY] BossDamage`
+- `[DR_SUMMARY] MoveDistanceReset`
+- `[DR_SUMMARY] Attack Accepted`
+- `[DR_SUMMARY] Attack Ignored`
+
+### SpecDecisionNeeded
+
+- Drain base attack/move penalty has no numeric value.
+
+---
+
+## 2026-06-28 — POR-9 RaidTimeLimit 실제 종료 트리거 연결
+
+### 문제
+
+DroneReport 발생 조건에는 드론 사망, 보스 처치, 레이드 제한 시간 종료가 포함되어 있지만, 실제 RaidTimeLimit 타이머 만료가 서버 RaidEnd로 이어지는 경로가 없었다.
+
+### 수정
+
+- `ARaidGameMode`에 서버 권한 RaidTimeLimit 타이머를 추가했다.
+- `RaidState`가 `Battle`로 진입한 뒤 `StartRaidTimeLimitTimerForServer()`가 제한 시간 타이머를 1회 시작한다.
+- 타이머 만료 시 `Reason=RaidTimeLimit`으로 기존 `ReturnAllEquippedPartsForRaidEnd` 경로를 호출한다.
+- BossDefeated 또는 기존 RaidEnd가 먼저 발생하면 RaidTimeLimit 타이머를 정리하고, End 상태에서 재진입하면 무시한다.
+- 생존 `InBattle` 플레이어는 DroneReport를 받은 뒤 equipped 부품이 반환되고, `Selecting` 플레이어는 기존 정책대로 selected 부품만 반환된다.
+- Death Report를 이미 받은 플레이어는 RaidTimeLimit 종료에서 Report를 중복 생성하지 않는다.
+
+### 검증
+
+- `git diff --check` 성공. LF/CRLF warning 외 whitespace error 없음.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto` 성공, 31 tests performed.
+- Full automation 안에서 `DroneProto.D12.RaidGameMode.RaidTimeLimitEndsRaid`와 `DroneProto.D12.RaidGameMode.RaidTimeLimitDoesNotDuplicateBossDefeated` 성공을 확인했다.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] Ready`
+- `[DR_SUMMARY] RaidTimerStart`
+- `[DR_SUMMARY] RaidTimerExpired`
+- `[DR_SUMMARY] RaidEnd Reason=RaidTimeLimit`
+- `[DR_SUMMARY] ReportCreated`
+- `[DR_SUMMARY] RaidEndReturn`
+- `[DR_SUMMARY] ReturnSkipped`
+- `[DR_SUMMARY] RaidEndStateCleaned`
+
+### 보류
+
+- POR-9의 `DroneReportManager` 분리와 PlayerID/key 기반 report 중복 방지는 이번 범위에서 제외했다. 현재 구현은 기존 PlayerController bool 중복 방지 경로를 유지한다.
+
+---
+
 ## 2026-06-27 — POR-5/POR-7 RaidEnd 반환 및 cleanup 안정화
 
 ### 문제
