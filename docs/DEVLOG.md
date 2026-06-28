@@ -3,6 +3,62 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-28 — POR-12 D15 Boss Attack / Drone Hit 최소 수직 슬라이스
+
+### 문제
+
+보스가 서버 권한으로 단순 공격 판정을 만들고, 판정 시점에 범위 안에 있는 Drone에게 피해를 주는 최소 전투 루프가 필요했다.
+
+- Dodge는 이미 서버에서 최종 위치를 바꾸므로, 공격 판정은 클라이언트 입력이 아니라 서버 위치를 기준으로 해야 했다.
+- 클라이언트가 Boss attack 결과를 직접 확정하면 안 된다.
+- Drone HP, Death, DroneReport, 부품 반환 경로는 이미 있으므로 새 경로를 만들지 않고 재사용해야 했다.
+- RaidEnd 또는 BossDead 이후 Boss attack은 무시되어야 했다.
+
+### 수정
+
+- `ARaidBoss::PerformDebugAreaAttackForServer(FVector AttackCenter, float RadiusCm, int32 DamageAmount)`를 추가했다.
+- 함수는 서버 권한에서만 판정하며, `RaidState == End`, BossDead, invalid params, no world 상태는 `[DR_SUMMARY] BossAttackIgnored`로 무시한다.
+- 판정은 `AttackCenter`와 Drone 서버 위치 사이의 XY 2D 거리로 계산한다.
+- 살아 있고, possess가 맞고, `PlayerSelectionState == InBattle`인 Drone만 피해 대상이 된다.
+- 범위 밖, Dead, NotInBattle, invalid controller 대상은 `[DR_SUMMARY] BossAttackMiss`로 남기고 피해를 주지 않는다.
+- 범위 안의 대상은 `[DR_SUMMARY] BossAttackHit`를 남기고 기존 `ADrone::ApplyDamageForServer(..., "BossAttack")` 경로로 피해를 적용한다.
+- 기존 `ApplyDamageForServer`가 HP 감소, `DamageTakenCount`, `DroneDeath`, `ReportCreated`, `ReturnAfterReport`, 부품 반환을 이어서 처리한다.
+- 새 client-to-server Boss attack RPC, 새 replicated 변수, UMG/VFX/animation/uasset 변경은 추가하지 않았다.
+
+### 검증
+
+- TDD red 확인: D15 테스트를 먼저 추가한 뒤 `PerformDebugAreaAttackForServer` 누락 컴파일 에러를 확인했다.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D15` 성공, 1 test performed.
+- `Automation RunTests DroneProto.D14` 성공, 2 tests performed.
+- `Automation RunTests DroneProto.D7` 성공, 4 tests performed.
+- `Automation RunTests DroneProto` 성공, 34 tests performed.
+- `git diff --check` 성공. LF/CRLF warning 외 whitespace error 없음.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] BossAttack`
+- `[DR_SUMMARY] BossAttackHit`
+- `[DR_SUMMARY] BossAttackMiss`
+- `[DR_SUMMARY] BossAttackIgnored`
+- `[DR_SUMMARY] DroneDamage`
+- `[DR_SUMMARY] DroneDeath`
+- `[DR_SUMMARY] ReportCreated`
+- `[DR_SUMMARY] ReturnAfterReport`
+
+### PIE 판정
+
+- 범위 안의 InBattle Drone은 `BossAttackHit` 뒤에 `DroneDamage`가 남아야 한다.
+- lethal damage이면 `DroneDeath`, `ReportCreated`, `ReturnAfterReport`가 이어져야 한다.
+- Dodge 뒤 판정 범위 밖에 있으면 `BossAttackMiss Reason=OutOfRange`가 남고 `DroneDamage`가 없어야 한다.
+- RaidEnd 이후에는 `BossAttackIgnored Reason=RaidEnd`가 남고 `BossAttackHit`가 없어야 한다.
+- BossDead 이후에는 `BossAttackIgnored Reason=BossDead`가 남고 Drone HP가 변하지 않아야 한다.
+
+### SpecDecisionNeeded
+
+- 없음. 실제 보스 패턴, 텔레그래프, 쿨다운, 수동 exec 트리거는 D15 최소 수직 슬라이스 범위 밖으로 남긴다.
+
+---
 ## 2026-06-28 — D14/D14.5 서버 권한 Dodge 및 PIE 로그 진단
 
 ### 문제

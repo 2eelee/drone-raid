@@ -1774,6 +1774,203 @@ bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossDebugAreaAttackTest,
+	"DroneProto.D15.RaidBoss.DebugAreaAttack",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossDebugAreaAttackTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext HitContext = CreateDroneSelectionTestContext(TEXT("BossAreaAttackHitWorld"));
+	ARaidBoss* HitBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, HitContext, HitBoss, TEXT("boss area hit")))
+	{
+		DestroyDroneSelectionTestContext(HitContext);
+		return false;
+	}
+
+	HitContext.Drone->SetActorLocation(FVector::ZeroVector);
+	const int32 HitHealthBefore = HitContext.Drone->GetHealth();
+	TestEqual(TEXT("InBattle drone inside area is hit once"),
+		HitBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, 25),
+		1);
+	TestEqual(TEXT("boss area hit reduces drone HP"),
+		HitContext.Drone->GetHealth(),
+		HitHealthBefore - 25);
+	TestEqual(TEXT("boss area hit increments DamageTakenCount"),
+		HitContext.Drone->GetCombatRecordForTest().DamageTakenCount,
+		1);
+	DestroyDroneSelectionTestContext(HitContext);
+
+	FDroneSelectionTestContext MissContext = CreateDroneSelectionTestContext(TEXT("BossAreaAttackMissWorld"));
+	ARaidBoss* MissBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, MissContext, MissBoss, TEXT("boss area miss")))
+	{
+		DestroyDroneSelectionTestContext(MissContext);
+		return false;
+	}
+
+	MissContext.Drone->SetActorLocation(FVector(500.0f, 0.0f, 0.0f));
+	const int32 MissHealthBefore = MissContext.Drone->GetHealth();
+	TestEqual(TEXT("InBattle drone outside area is missed"),
+		MissBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 100.0f, 25),
+		0);
+	TestEqual(TEXT("boss area miss leaves drone HP unchanged"),
+		MissContext.Drone->GetHealth(),
+		MissHealthBefore);
+	TestEqual(TEXT("boss area miss leaves DamageTakenCount unchanged"),
+		MissContext.Drone->GetCombatRecordForTest().DamageTakenCount,
+		0);
+	DestroyDroneSelectionTestContext(MissContext);
+
+	FDroneSelectionTestContext DodgeContext = CreateDroneSelectionTestContext(TEXT("BossAreaAttackDodgeWorld"));
+	ARaidBoss* DodgeBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DodgeContext, DodgeBoss, TEXT("boss area dodge")))
+	{
+		DestroyDroneSelectionTestContext(DodgeContext);
+		return false;
+	}
+
+	DodgeContext.PC->SetControlRotation(FRotator::ZeroRotator);
+	DodgeContext.Drone->SetActorLocation(FVector::ZeroVector);
+	const int32 DodgeHealthBefore = DodgeContext.Drone->GetHealth();
+	TestTrue(TEXT("server dodge moves drone before boss area attack"),
+		DodgeContext.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("dodge places drone outside small attack radius"),
+		FVector::Dist2D(DodgeContext.Drone->GetActorLocation(), FVector::ZeroVector) > 100.0f);
+	TestEqual(TEXT("boss area attack after dodge is a miss"),
+		DodgeBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 100.0f, 25),
+		0);
+	TestEqual(TEXT("dodge miss leaves HP unchanged"),
+		DodgeContext.Drone->GetHealth(),
+		DodgeHealthBefore);
+	DestroyDroneSelectionTestContext(DodgeContext);
+
+	UDronePartReturnManager* DeathReturnManager = nullptr;
+	FDroneSelectionTestContext DeathContext = CreateDroneReturnTestContext(TEXT("BossAreaAttackDeathWorld"), DeathReturnManager);
+	TestNotNull(TEXT("death boss area world is created"), DeathContext.World);
+	TestNotNull(TEXT("death boss area inventory is spawned"), DeathContext.Inventory);
+	TestNotNull(TEXT("death boss area player controller is spawned"), DeathContext.PC);
+	TestNotNull(TEXT("death boss area drone is spawned"), DeathContext.Drone);
+	TestNotNull(TEXT("death boss area return manager is created"), DeathReturnManager);
+	if (!DeathContext.World || !DeathContext.Inventory || !DeathContext.PC || !DeathContext.Drone || !DeathReturnManager)
+	{
+		DestroyDroneSelectionTestContext(DeathContext);
+		return false;
+	}
+
+	ARaidBoss* DeathBoss = DeathContext.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("death boss area boss is spawned"), DeathBoss);
+	if (!DeathBoss)
+	{
+		DestroyDroneSelectionTestContext(DeathContext);
+		return false;
+	}
+	if (DeathContext.GameState)
+	{
+		DeathContext.GameState->SetRaidBossForServer(DeathBoss);
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("death boss area consumes selected core"), DeathContext.Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("death boss area consumes selected left weapon"), DeathContext.Inventory->TryConsumePart(PulseLaser));
+	DeathContext.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	DeathContext.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	DeathContext.PC->Server_RequestReadyForRaid_Implementation();
+	DeathContext.Drone->SetActorLocation(FVector::ZeroVector);
+
+	TestEqual(TEXT("lethal boss area attack hits one drone"),
+		DeathBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, DeathContext.Drone->GetMaxHealth() + 10),
+		1);
+	TestTrue(TEXT("lethal boss area attack marks drone dead"), DeathContext.Drone->IsDead());
+	TestTrue(TEXT("lethal boss area attack creates death report"), DeathContext.PC->HasDroneReportGeneratedForTest());
+	TestEqual(TEXT("death report records damage taken"),
+		DeathContext.PC->GetLastDroneReportDataForTest().DamageTakenCount,
+		1);
+	TestFalse(TEXT("death report does not grant NoDamage after boss hit"),
+		DeathContext.PC->GetLastDroneReportDataForTest().AchievedBonusList.Contains(EDroneReportBonusType::NoDamage));
+	TestEqual(TEXT("death return clears equipped core"),
+		DeathContext.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("death return clears equipped left weapon"),
+		DeathContext.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+	TestEqual(TEXT("death return restores core stock"),
+		DeathContext.Inventory->GetCurrentCount(CoreZenith),
+		DeathContext.Inventory->GetMaxCount(CoreZenith));
+	TestEqual(TEXT("death return restores left weapon stock"),
+		DeathContext.Inventory->GetCurrentCount(PulseLaser),
+		DeathContext.Inventory->GetMaxCount(PulseLaser));
+	TestEqual(TEXT("dead drone ignores later boss area damage"),
+		DeathBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, 25),
+		0);
+	TestEqual(TEXT("dead drone HP stays zero after later boss area attack"),
+		DeathContext.Drone->GetHealth(),
+		0);
+	DestroyDroneSelectionTestContext(DeathContext);
+
+	FDroneSelectionTestContext SelectingContext = CreateDroneSelectionTestContext(TEXT("BossAreaAttackSelectingWorld"));
+	TestNotNull(TEXT("selecting boss area world is created"), SelectingContext.World);
+	TestNotNull(TEXT("selecting boss area player controller is spawned"), SelectingContext.PC);
+	TestNotNull(TEXT("selecting boss area drone is spawned"), SelectingContext.Drone);
+	if (!SelectingContext.World || !SelectingContext.PC || !SelectingContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(SelectingContext);
+		return false;
+	}
+	ARaidBoss* SelectingBoss = SelectingContext.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("selecting boss area boss is spawned"), SelectingBoss);
+	if (SelectingBoss && SelectingContext.GameState)
+	{
+		SelectingContext.GameState->SetRaidBossForServer(SelectingBoss);
+	}
+	const int32 SelectingHealthBefore = SelectingContext.Drone->GetHealth();
+	TestEqual(TEXT("NotInBattle drone is excluded from boss area attack"),
+		SelectingBoss ? SelectingBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, 25) : -1,
+		0);
+	TestEqual(TEXT("NotInBattle exclusion leaves HP unchanged"),
+		SelectingContext.Drone->GetHealth(),
+		SelectingHealthBefore);
+	DestroyDroneSelectionTestContext(SelectingContext);
+
+	FDroneSelectionTestContext RaidEndContext = CreateDroneSelectionTestContext(TEXT("BossAreaAttackRaidEndWorld"));
+	ARaidBoss* RaidEndBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, RaidEndContext, RaidEndBoss, TEXT("boss area raid end")))
+	{
+		DestroyDroneSelectionTestContext(RaidEndContext);
+		return false;
+	}
+	RaidEndContext.GameState->SetRaidStateForServer(ERaidState::End);
+	const int32 RaidEndHealthBefore = RaidEndContext.Drone->GetHealth();
+	TestEqual(TEXT("RaidEnd ignores boss area attack"),
+		RaidEndBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, 25),
+		0);
+	TestEqual(TEXT("RaidEnd ignored boss area attack leaves HP unchanged"),
+		RaidEndContext.Drone->GetHealth(),
+		RaidEndHealthBefore);
+	DestroyDroneSelectionTestContext(RaidEndContext);
+
+	FDroneSelectionTestContext DeadBossContext = CreateDroneSelectionTestContext(TEXT("BossAreaAttackDeadBossWorld"));
+	ARaidBoss* DeadBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DeadBossContext, DeadBoss, TEXT("dead boss area attack")))
+	{
+		DestroyDroneSelectionTestContext(DeadBossContext);
+		return false;
+	}
+	DeadBoss->ApplyDamageForServer(DeadBoss->GetMaxHP() + 100.0f, DeadBossContext.PC, DeadBossContext.Drone);
+	const int32 DeadBossHealthBefore = DeadBossContext.Drone->GetHealth();
+	TestEqual(TEXT("BossDead ignores boss area attack"),
+		DeadBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, 25),
+		0);
+	TestEqual(TEXT("BossDead ignored boss area attack leaves drone HP unchanged"),
+		DeadBossContext.Drone->GetHealth(),
+		DeadBossHealthBefore);
+	DestroyDroneSelectionTestContext(DeadBossContext);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneMoveDistanceAccumulationTest,
 	"DroneProto.D8.Drone.MoveDistanceAccumulation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -2786,6 +2983,14 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDeath:")));
 	TestTrue(TEXT("dead boss damage ignored summary log marker exists"),
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=BossDead")));
+	TestTrue(TEXT("boss area attack summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttack")));
+	TestTrue(TEXT("boss area attack hit summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackHit")));
+	TestTrue(TEXT("boss area attack miss summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackMiss")));
+	TestTrue(TEXT("boss area attack ignored summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackIgnored")));
 	TestTrue(TEXT("boss max HP is replicated with current HP"),
 		RaidBossSource.Contains(TEXT("DOREPLIFETIME(ARaidBoss, MaxHP)")));
 	TestTrue(TEXT("selection timer start summary log marker exists"),

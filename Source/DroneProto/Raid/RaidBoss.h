@@ -17,6 +17,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss")
 	void ApplyDamageForServer(float DamageAmount, AController* InstigatorController, AActor* DamageCauser);
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss|Debug")
+	int32 PerformDebugAreaAttackForServer(FVector AttackCenter, float RadiusCm = 300.0f, int32 DamageAmount = 25);
+
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss")
 	float GetCurrentHP() const;
 
