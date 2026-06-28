@@ -149,6 +149,23 @@ bool SetFloatPropertyForAutomationTest(UObject* Object, FName PropertyName, floa
 	return true;
 }
 
+bool SetPawnControllerForAutomationTest(APawn* Pawn, AController* Controller)
+{
+	if (!Pawn)
+	{
+		return false;
+	}
+
+	FObjectProperty* ControllerProperty = FindFProperty<FObjectProperty>(APawn::StaticClass(), TEXT("Controller"));
+	if (!ControllerProperty)
+	{
+		return false;
+	}
+
+	ControllerProperty->SetObjectPropertyValue_InContainer(Pawn, Controller);
+	return true;
+}
+
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -1537,6 +1554,226 @@ bool FDroneServerMoveInputAuthorityTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneServerDodgeAuthorityTest,
+	"DroneProto.D14.Drone.ServerDodgeAuthority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneServerDodgeAuthorityTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Valid = CreateDroneSelectionTestContext(TEXT("DroneServerDodgeValidWorld"));
+	TestNotNull(TEXT("valid dodge world is created"), Valid.World);
+	TestNotNull(TEXT("valid dodge game state is spawned"), Valid.GameState);
+	TestNotNull(TEXT("valid dodge player controller is spawned"), Valid.PC);
+	TestNotNull(TEXT("valid dodge drone is spawned"), Valid.Drone);
+	if (!Valid.World || !Valid.GameState || !Valid.PC || !Valid.Drone)
+	{
+		DestroyDroneSelectionTestContext(Valid);
+		return false;
+	}
+
+	ARaidBoss* Boss = Valid.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("valid dodge boss is spawned"), Boss);
+	if (Boss)
+	{
+		Valid.GameState->SetRaidBossForServer(Boss);
+	}
+	Valid.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("valid dodge player is InBattle"),
+		Valid.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestTrue(TEXT("valid dodge test loadout applies"),
+		Valid.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	Valid.PC->SetControlRotation(FRotator::ZeroRotator);
+	Valid.Drone->SetActorLocation(FVector::ZeroVector);
+	Valid.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Automation")));
+
+	const FVector ValidLocationBefore = Valid.Drone->GetActorLocation();
+	TestTrue(TEXT("InBattle valid direction dodge succeeds"),
+		Valid.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	const FVector ValidLocationAfter = Valid.Drone->GetActorLocation();
+	TestTrue(TEXT("successful dodge changes server location"),
+		!ValidLocationAfter.Equals(ValidLocationBefore, 0.1f));
+	TestTrue(TEXT("dodge does not enqueue normal server move input"),
+		Valid.Drone->GetLastServerMoveInputForTest().IsNearlyZero());
+	TestTrue(TEXT("dodge is excluded from Vector move distance until design confirms otherwise"),
+		FMath::IsNearlyZero(Valid.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("dodge is excluded from Booster move distance until design confirms otherwise"),
+		FMath::IsNearlyZero(Valid.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+	if (Boss)
+	{
+		const float BossHPBeforeAttack = Boss->GetCurrentHP();
+		Valid.Drone->RequestAttackBoss();
+		TestTrue(TEXT("attack remains available after a successful dodge"),
+			Boss->GetCurrentHP() < BossHPBeforeAttack);
+	}
+	DestroyDroneSelectionTestContext(Valid);
+
+	FDroneSelectionTestContext ZeroDirection = CreateDroneSelectionTestContext(TEXT("DroneServerDodgeZeroDirectionWorld"));
+	TestNotNull(TEXT("zero direction dodge world is created"), ZeroDirection.World);
+	TestNotNull(TEXT("zero direction dodge player controller is spawned"), ZeroDirection.PC);
+	TestNotNull(TEXT("zero direction dodge drone is spawned"), ZeroDirection.Drone);
+	if (!ZeroDirection.World || !ZeroDirection.PC || !ZeroDirection.Drone)
+	{
+		DestroyDroneSelectionTestContext(ZeroDirection);
+		return false;
+	}
+
+	ZeroDirection.PC->Server_RequestReadyForRaid_Implementation();
+	const FVector ZeroDirectionLocationBefore = ZeroDirection.Drone->GetActorLocation();
+	TestFalse(TEXT("zero direction dodge is ignored"),
+		ZeroDirection.Drone->RequestDodgeForServer(FVector2D::ZeroVector));
+	TestTrue(TEXT("zero direction dodge keeps server location"),
+		ZeroDirection.Drone->GetActorLocation().Equals(ZeroDirectionLocationBefore, 0.1f));
+	DestroyDroneSelectionTestContext(ZeroDirection);
+
+	FDroneSelectionTestContext Selecting = CreateDroneSelectionTestContext(TEXT("DroneServerDodgeSelectingWorld"));
+	TestNotNull(TEXT("selecting dodge world is created"), Selecting.World);
+	TestNotNull(TEXT("selecting dodge player controller is spawned"), Selecting.PC);
+	TestNotNull(TEXT("selecting dodge drone is spawned"), Selecting.Drone);
+	if (!Selecting.World || !Selecting.PC || !Selecting.Drone)
+	{
+		DestroyDroneSelectionTestContext(Selecting);
+		return false;
+	}
+
+	TestEqual(TEXT("selecting dodge test starts Selecting"),
+		Selecting.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestFalse(TEXT("Selecting dodge is ignored"),
+		Selecting.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	DestroyDroneSelectionTestContext(Selecting);
+
+	FDroneSelectionTestContext Dead = CreateDroneSelectionTestContext(TEXT("DroneServerDodgeDeadWorld"));
+	TestNotNull(TEXT("dead dodge world is created"), Dead.World);
+	TestNotNull(TEXT("dead dodge player controller is spawned"), Dead.PC);
+	TestNotNull(TEXT("dead dodge drone is spawned"), Dead.Drone);
+	if (!Dead.World || !Dead.PC || !Dead.Drone)
+	{
+		DestroyDroneSelectionTestContext(Dead);
+		return false;
+	}
+
+	Dead.PC->Server_RequestReadyForRaid_Implementation();
+	Dead.Drone->ApplyDamageForServer(Dead.Drone->GetMaxHealth() + 10, FName(TEXT("Automation")));
+	TestTrue(TEXT("dead dodge setup kills the drone"), Dead.Drone->IsDead());
+	TestFalse(TEXT("Dead dodge is ignored"),
+		Dead.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	DestroyDroneSelectionTestContext(Dead);
+
+	FDroneSelectionTestContext RaidEnd = CreateDroneSelectionTestContext(TEXT("DroneServerDodgeRaidEndWorld"));
+	TestNotNull(TEXT("raid end dodge world is created"), RaidEnd.World);
+	TestNotNull(TEXT("raid end dodge game state is spawned"), RaidEnd.GameState);
+	TestNotNull(TEXT("raid end dodge player controller is spawned"), RaidEnd.PC);
+	TestNotNull(TEXT("raid end dodge drone is spawned"), RaidEnd.Drone);
+	if (!RaidEnd.World || !RaidEnd.GameState || !RaidEnd.PC || !RaidEnd.Drone)
+	{
+		DestroyDroneSelectionTestContext(RaidEnd);
+		return false;
+	}
+
+	RaidEnd.PC->Server_RequestReadyForRaid_Implementation();
+	RaidEnd.GameState->SetRaidStateForServer(ERaidState::End);
+	const FVector RaidEndLocationBefore = RaidEnd.Drone->GetActorLocation();
+	TestFalse(TEXT("RaidEnd dodge is ignored"),
+		RaidEnd.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("RaidEnd dodge keeps server location"),
+		RaidEnd.Drone->GetActorLocation().Equals(RaidEndLocationBefore, 0.1f));
+	DestroyDroneSelectionTestContext(RaidEnd);
+
+	FDroneSelectionTestContext NoController = CreateDroneSelectionTestContext(TEXT("DroneServerDodgeNoControllerWorld"));
+	TestNotNull(TEXT("no controller dodge world is created"), NoController.World);
+	TestNotNull(TEXT("no controller dodge player controller is spawned"), NoController.PC);
+	TestNotNull(TEXT("no controller dodge drone is spawned"), NoController.Drone);
+	if (!NoController.World || !NoController.PC || !NoController.Drone)
+	{
+		DestroyDroneSelectionTestContext(NoController);
+		return false;
+	}
+
+	NoController.PC->Server_RequestReadyForRaid_Implementation();
+	NoController.PC->UnPossess();
+	TestFalse(TEXT("NoController dodge is ignored"),
+		NoController.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	DestroyDroneSelectionTestContext(NoController);
+
+	FDroneSelectionTestContext PossessMismatch = CreateDroneSelectionTestContext(TEXT("DroneServerDodgePossessMismatchWorld"));
+	TestNotNull(TEXT("possess mismatch dodge world is created"), PossessMismatch.World);
+	TestNotNull(TEXT("possess mismatch dodge player controller is spawned"), PossessMismatch.PC);
+	TestNotNull(TEXT("possess mismatch dodge drone is spawned"), PossessMismatch.Drone);
+	if (!PossessMismatch.World || !PossessMismatch.PC || !PossessMismatch.Drone)
+	{
+		DestroyDroneSelectionTestContext(PossessMismatch);
+		return false;
+	}
+
+	PossessMismatch.PC->Server_RequestReadyForRaid_Implementation();
+	ADrone* OtherDrone = PossessMismatch.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("possess mismatch alternate drone is spawned"), OtherDrone);
+	if (OtherDrone)
+	{
+		PossessMismatch.PC->Possess(OtherDrone);
+		TestTrue(TEXT("possess mismatch test can set stale controller pointer"),
+			SetPawnControllerForAutomationTest(PossessMismatch.Drone, PossessMismatch.PC));
+		TestFalse(TEXT("PossessMismatch dodge is ignored"),
+			PossessMismatch.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	}
+	DestroyDroneSelectionTestContext(PossessMismatch);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDodgeInputBridgeTest,
+	"DroneProto.D14_5.Drone.DodgeInputBridge",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneDodgeInputBridgeWorld"));
+	TestNotNull(TEXT("dodge input bridge world is created"), Context.World);
+	TestNotNull(TEXT("dodge input bridge game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("dodge input bridge player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("dodge input bridge drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("dodge input bridge player is InBattle"),
+		Context.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	Context.PC->SetControlRotation(FRotator::ZeroRotator);
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+	Context.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Automation")));
+
+	TestTrue(TEXT("cache helper clamps large move input for dodge"),
+		Context.Drone->CacheMoveInputForDodgeForTest(FVector2D(3.0f, 4.0f)));
+	TestTrue(TEXT("cached dodge move input is normalized"),
+		FMath::IsNearlyEqual(Context.Drone->GetCachedMoveInputForDodgeForTest().Size(), 1.0f, 0.001f));
+	const FVector LocationBeforeDodge = Context.Drone->GetActorLocation();
+	TestTrue(TEXT("dodge input bridge requests dodge from cached move axis"),
+		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
+	TestTrue(TEXT("dodge input bridge changes server location through D14 path"),
+		!Context.Drone->GetActorLocation().Equals(LocationBeforeDodge, 0.1f));
+	TestTrue(TEXT("dodge input bridge clears cached axis after request"),
+		Context.Drone->GetCachedMoveInputForDodgeForTest().IsNearlyZero());
+	TestTrue(TEXT("dodge input bridge keeps dodge excluded from Vector movement distance"),
+		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+
+	const FVector LocationBeforeZeroDodge = Context.Drone->GetActorLocation();
+	Context.Drone->ClearMoveInputForDodgeForTest();
+	TestFalse(TEXT("dodge input bridge ignores C without direction"),
+		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
+	TestTrue(TEXT("C without direction leaves server location unchanged"),
+		Context.Drone->GetActorLocation().Equals(LocationBeforeZeroDodge, 0.1f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneMoveDistanceAccumulationTest,
 	"DroneProto.D8.Drone.MoveDistanceAccumulation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -2583,6 +2820,26 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("TEXT(\"Move\")")));
 	TestTrue(TEXT("dead dodge ignored marker exists"),
 		DroneSource.Contains(TEXT("TEXT(\"Dodge\")")));
+	TestTrue(TEXT("callable dodge request helper exists"),
+		DroneSource.Contains(TEXT("RequestDodge(")));
+	TestTrue(TEXT("client dodge requests use one server RPC"),
+		DroneSource.Contains(TEXT("Server_RequestDodge")));
+	TestTrue(TEXT("dodge input action slot exists for editor assignment"),
+		DroneSource.Contains(TEXT("DodgeAction")));
+	TestTrue(TEXT("dodge input binding is null guarded"),
+		DroneSource.Contains(TEXT("if (DodgeAction)")));
+	TestTrue(TEXT("dodge input action uses a single press-style binding"),
+		DroneSource.Contains(TEXT("BindAction(DodgeAction, ETriggerEvent::Started")));
+	TestTrue(TEXT("dodge input bridge has a local zero direction ignore log"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DodgeInputIgnored")));
+	TestTrue(TEXT("dodge summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Dodge PC=")));
+	TestTrue(TEXT("dodge ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Dodge Ignored")));
+	TestTrue(TEXT("server dodge applied summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] ServerDodgeApplied PC=")));
+	TestTrue(TEXT("dodge move-distance policy marker exists"),
+		DroneSource.Contains(TEXT("MoveDistancePolicy=Excluded")));
 	TestTrue(TEXT("dead heal ignored marker exists"),
 		DroneSource.Contains(TEXT("TEXT(\"Heal\")")));
 	TestTrue(TEXT("weapon calculation summary log marker exists"),
@@ -2630,6 +2887,12 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("[DR_SUMMARY] OwnerMoveSyncSent PC=")));
 	TestTrue(TEXT("owner move corrected summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] OwnerMoveCorrected PC=")));
+	TestTrue(TEXT("owner move corrected target actor marker exists"),
+		DroneSource.Contains(TEXT("CorrectedActor=")));
+	TestTrue(TEXT("owner move corrected pawn ownership comparison marker exists"),
+		DroneSource.Contains(TEXT("bPawnMatchesCorrectedActor=")));
+	TestTrue(TEXT("server move pawn ownership comparison marker exists"),
+		DroneSource.Contains(TEXT("bPawnMatchesDrone=")));
 	TestTrue(TEXT("replicated location summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] ReplicatedLocation PC=")));
 	TestTrue(TEXT("view target result summary marker exists"),

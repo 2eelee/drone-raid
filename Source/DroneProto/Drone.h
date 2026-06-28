@@ -44,6 +44,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
 	void RequestAttackBoss();
 
+	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
+	void RequestDodge(FVector2D RawDirection);
+
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
 	void ApplyDamageForServer(int32 DamageAmount, FName Reason);
 
@@ -51,7 +54,7 @@ public:
 	bool HealForServer(int32 HealAmount);
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
-	bool RequestDodgeForServer();
+	bool RequestDodgeForServer(FVector2D RawDirection = FVector2D::ZeroVector);
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
 	void ResetCombatRuntimeStateForServer();
@@ -83,6 +86,10 @@ public:
 	float GetBoosterAccumulatedMoveDistanceForTest() const;
 	FDroneCombatRecord GetCombatRecordForTest() const;
 	FVector2D GetLastServerMoveInputForTest() const;
+	bool CacheMoveInputForDodgeForTest(FVector2D RawAxis);
+	FVector2D GetCachedMoveInputForDodgeForTest() const;
+	void ClearMoveInputForDodgeForTest();
+	bool RequestDodgeFromCurrentMoveInputForTest();
 	FName GetEquippedCorePartIDForTest() const;
 	FName GetEquippedLeftWeaponPartIDForTest() const;
 	FName GetEquippedRightWeaponPartIDForTest() const;
@@ -139,13 +146,27 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Input")
 	UInputAction* MoveAction;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Input")
+	UInputAction* DodgeAction;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "cm"))
+	float DodgeDistanceCm = 300.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "s"))
+	float DodgeCooldownSeconds = 0.20f;
+
 	UFUNCTION(Server, Reliable)
 	void Server_RequestAttackBoss();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestDodge(FVector2D RawDirection);
 
 	UFUNCTION(Server, Unreliable)
 	void Server_SetMoveInput(FVector2D RawAxis);
 
 	void Move(const FInputActionValue& Value);
+	void Dodge(const FInputActionValue& Value);
+	void ClearMoveInputForDodge(const FInputActionValue& Value);
 
 	// ---- 장착 부품 (서버 전용, 복제 안 함) ----
 	UPROPERTY(Transient)
@@ -182,7 +203,13 @@ private:
 	FVector2D LastServerMoveInput = FVector2D::ZeroVector;
 
 	UPROPERTY(Transient)
+	FVector2D CachedMoveInputForDodge = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
 	float LastMoveInputSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	float NextDodgeAllowedServerTime = 0.0f;
 
 	UPROPERTY(Transient)
 	FName LastMoveInputSummaryResult = NAME_None;
@@ -226,6 +253,9 @@ private:
 	void HandleAttackBossForServer();
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	FVector2D ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const;
+	bool CacheMoveInputForDodge(FVector2D RawAxis);
+	void ClearCachedMoveInputForDodge();
+	bool RequestDodgeFromCurrentMoveInput();
 	bool ApplyMoveInputForServer(FVector2D RawAxis);
 	bool ApplyPendingServerMoveInputForServer(float DeltaSeconds);
 	void UpdateOwnerMoveSyncForServer(const FVector& ServerLocation, const FRotator& ServerRotation);

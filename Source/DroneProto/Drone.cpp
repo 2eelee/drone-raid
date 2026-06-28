@@ -249,7 +249,15 @@ void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		if (MoveAction)
+		{
 			EIC->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ADrone::Move);
+			EIC->BindAction(MoveAction, ETriggerEvent::Completed, this, &ADrone::ClearMoveInputForDodge);
+			EIC->BindAction(MoveAction, ETriggerEvent::Canceled, this, &ADrone::ClearMoveInputForDodge);
+		}
+		if (DodgeAction)
+		{
+			EIC->BindAction(DodgeAction, ETriggerEvent::Started, this, &ADrone::Dodge);
+		}
 	}
 
 	PlayerInputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ADrone::RequestAttackBoss);
@@ -260,8 +268,11 @@ void ADrone::Move(const FInputActionValue& Value)
 	const FVector2D Axis = Value.Get<FVector2D>();
 	if (Axis.IsNearlyZero())
 	{
+		ClearCachedMoveInputForDodge();
 		return;
 	}
+
+	CacheMoveInputForDodge(Axis);
 
 	if (HasAuthority())
 	{
@@ -270,6 +281,18 @@ void ADrone::Move(const FInputActionValue& Value)
 	}
 
 	Server_SetMoveInput(Axis);
+}
+
+void ADrone::Dodge(const FInputActionValue& Value)
+{
+	(void)Value;
+	RequestDodgeFromCurrentMoveInput();
+}
+
+void ADrone::ClearMoveInputForDodge(const FInputActionValue& Value)
+{
+	(void)Value;
+	ClearCachedMoveInputForDodge();
 }
 
 float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
@@ -362,21 +385,142 @@ bool ADrone::HealForServer(int32 HealAmount)
 	return Health > PreviousHealth + KINDA_SMALL_NUMBER;
 }
 
-bool ADrone::RequestDodgeForServer()
+bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 {
 	if (!HasAuthority())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Client] RequestDodgeForServer rejected: server authority required"));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Ignored Reason=NotAuthority Player=%s Drone=%s Direction=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			*RawDirection.ToString());
 		return false;
+	}
+
+	bool bWasClamped = false;
+	const FVector2D Direction = ClampMoveInputAxisForServer(RawDirection, bWasClamped);
+	const auto LogIgnored = [this, &Direction](const TCHAR* Reason)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Ignored Reason=%s PC=%s Drone=%s Direction=%s"),
+			Reason ? Reason : TEXT("Unknown"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			*Direction.ToString());
+	};
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (!RaidPC)
+	{
+		LogIgnored(TEXT("NoController"));
+		return false;
+	}
+
+	if (RaidPC->GetPawn() != this)
+	{
+		LogIgnored(TEXT("PossessMismatch"));
+		return false;
+	}
+
+	if (const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (RaidGameState->RaidState == ERaidState::End)
+		{
+			LogIgnored(TEXT("RaidEnd"));
+			return false;
+		}
 	}
 
 	if (bIsDead)
 	{
+		LogIgnored(TEXT("Dead"));
 		LogDeadInputIgnored(TEXT("Dodge"));
 		return false;
 	}
 
-	UE_LOG(LogTemp, VeryVerbose, TEXT("[Server] Dodge request accepted for future implementation: Drone=%s"), *GetName());
+	if (RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
+	{
+		LogIgnored(TEXT("NotInBattle"));
+		return false;
+	}
+
+	if (Direction.IsNearlyZero())
+	{
+		LogIgnored(TEXT("ZeroDirection"));
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	const float SafeCooldownSeconds = FMath::Max(0.0f, DodgeCooldownSeconds);
+	if (SafeCooldownSeconds > KINDA_SMALL_NUMBER && Now + KINDA_SMALL_NUMBER < NextDodgeAllowedServerTime)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Ignored Reason=Cooldown PC=%s Drone=%s Direction=%s Remaining=%.2f"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName(),
+			*Direction.ToString(),
+			FMath::Max(0.0f, NextDodgeAllowedServerTime - Now));
+		return false;
+	}
+
+	const float SafeDodgeDistanceCm = FMath::Max(0.0f, DodgeDistanceCm);
+	if (SafeDodgeDistanceCm <= KINDA_SMALL_NUMBER)
+	{
+		LogIgnored(TEXT("NoDistance"));
+		return false;
+	}
+
+	const FRotator YawRot(0.f, RaidPC->GetControlRotation().Yaw, 0.f);
+	const FVector ForwardMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X) * Direction.Y;
+	const FVector RightMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y) * Direction.X;
+	const FVector DodgeDirection = (ForwardMove + RightMove).GetClampedToMaxSize(1.0f);
+	if (DodgeDirection.IsNearlyZero())
+	{
+		LogIgnored(TEXT("ZeroDirection"));
+		return false;
+	}
+
+	const FVector PreviousLocation = GetActorLocation();
+	const FVector RequestedDelta = DodgeDirection * SafeDodgeDistanceCm;
+	FHitResult SweepHit;
+	SetActorLocation(PreviousLocation + RequestedDelta, true, &SweepHit, ETeleportType::None);
+	const FVector CurrentLocation = GetActorLocation();
+	const FVector AppliedDelta = CurrentLocation - PreviousLocation;
+	if (CurrentLocation.Equals(PreviousLocation, 0.1f))
+	{
+		LogIgnored(SweepHit.bBlockingHit ? TEXT("Blocked") : TEXT("NoMovement"));
+		return false;
+	}
+
+	NextDodgeAllowedServerTime = Now + SafeCooldownSeconds;
+	UpdateOwnerMoveSyncForServer(CurrentLocation, GetActorRotation());
+	ForceNetUpdate();
+
+	// SpecDecisionNeeded: dodge displacement is excluded from Vector/Booster/report move distance until the design says otherwise.
+	LastMoveDistanceLocation = CurrentLocation;
+	bHasMoveDistanceSample = true;
+	LogMoveDistanceIgnored(FName(TEXT("Dodge")));
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge PC=%s Direction=%s Result=Success Reason=%s DistanceCm=%.2f Cooldown=%.2f MoveDistancePolicy=Excluded"),
+		*BuildDroneControllerLogString(RaidPC),
+		*Direction.ToString(),
+		bWasClamped ? TEXT("Clamped") : TEXT("OK"),
+		AppliedDelta.Size(),
+		SafeCooldownSeconds);
+
+	const AActor* ViewTarget = RaidPC->GetViewTarget();
+	const APawn* ControlledPawn = RaidPC->GetPawn();
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerDodgeApplied PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Direction=%s Delta=%s ServerLocation=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s MoveDistancePolicy=Excluded"),
+		*BuildDroneControllerLogString(RaidPC),
+		*GetName(),
+		ControlledPawn ? *ControlledPawn->GetName() : TEXT("None"),
+		ControlledPawn == this ? TEXT("true") : TEXT("false"),
+		*Direction.ToString(),
+		*AppliedDelta.ToString(),
+		*CurrentLocation.ToString(),
+		ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()),
+		IsReplicatingMovement() ? TEXT("true") : TEXT("false"),
+		ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
+		TEXT("ServerObserved"));
+
 	return true;
 }
 
@@ -524,14 +668,70 @@ void ADrone::RequestAttackBoss()
 	Server_RequestAttackBoss();
 }
 
+void ADrone::RequestDodge(FVector2D RawDirection)
+{
+	if (HasAuthority())
+	{
+		RequestDodgeForServer(RawDirection);
+		return;
+	}
+
+	Server_RequestDodge(RawDirection);
+}
+
+bool ADrone::RequestDodgeFromCurrentMoveInput()
+{
+	const FVector2D DodgeDirection = CachedMoveInputForDodge;
+	ClearCachedMoveInputForDodge();
+
+	if (DodgeDirection.IsNearlyZero())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DodgeInputIgnored PC=%s Reason=ZeroDirection"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())));
+		return false;
+	}
+
+	if (HasAuthority())
+	{
+		return RequestDodgeForServer(DodgeDirection);
+	}
+
+	RequestDodge(DodgeDirection);
+	return true;
+}
+
 void ADrone::Server_RequestAttackBoss_Implementation()
 {
 	HandleAttackBossForServer();
 }
 
+void ADrone::Server_RequestDodge_Implementation(FVector2D RawDirection)
+{
+	RequestDodgeForServer(RawDirection);
+}
+
 void ADrone::Server_SetMoveInput_Implementation(FVector2D RawAxis)
 {
 	ApplyMoveInputForServer(RawAxis);
+}
+
+bool ADrone::CacheMoveInputForDodge(FVector2D RawAxis)
+{
+	bool bWasClamped = false;
+	const FVector2D Axis = ClampMoveInputAxisForServer(RawAxis, bWasClamped);
+	if (Axis.IsNearlyZero())
+	{
+		CachedMoveInputForDodge = FVector2D::ZeroVector;
+		return false;
+	}
+
+	CachedMoveInputForDodge = Axis;
+	return true;
+}
+
+void ADrone::ClearCachedMoveInputForDodge()
+{
+	CachedMoveInputForDodge = FVector2D::ZeroVector;
 }
 
 int32 ADrone::GetHealth() const
@@ -608,6 +808,26 @@ FDroneCombatRecord ADrone::GetCombatRecordForTest() const
 FVector2D ADrone::GetLastServerMoveInputForTest() const
 {
 	return LastServerMoveInput;
+}
+
+bool ADrone::CacheMoveInputForDodgeForTest(FVector2D RawAxis)
+{
+	return CacheMoveInputForDodge(RawAxis);
+}
+
+FVector2D ADrone::GetCachedMoveInputForDodgeForTest() const
+{
+	return CachedMoveInputForDodge;
+}
+
+void ADrone::ClearMoveInputForDodgeForTest()
+{
+	ClearCachedMoveInputForDodge();
+}
+
+bool ADrone::RequestDodgeFromCurrentMoveInputForTest()
+{
+	return RequestDodgeFromCurrentMoveInput();
 }
 
 FName ADrone::GetEquippedCorePartIDForTest() const
@@ -711,12 +931,17 @@ void ADrone::OnRep_OwnerMoveSync()
 		const APlayerController* PC = Cast<APlayerController>(GetController());
 		const APawn* Pawn = PC ? PC->GetPawn() : nullptr;
 		const AActor* ViewTarget = PC ? PC->GetViewTarget() : nullptr;
+		const bool bPawnMatchesCorrectedActor = Pawn == this;
 		const bool bViewTargetMatchesPawn = Pawn && ViewTarget && ViewTarget == Pawn;
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OwnerMoveCorrected PC=%s Pawn=%s ViewTarget=%s bViewTargetMatchesPawn=%s LocalBefore=%s ServerLocation=%s Delta=%.2f Sequence=%u ViewTargetResult=%s"),
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OwnerMoveCorrected PC=%s CorrectedActor=%s Pawn=%s ViewTarget=%s bPawnMatchesCorrectedActor=%s bViewTargetMatchesPawn=%s LocalRole=%d RemoteRole=%d LocalBefore=%s ServerLocation=%s Delta=%.2f Sequence=%u ViewTargetResult=%s"),
 			*BuildDroneControllerLogString(PC),
+			*GetName(),
 			Pawn ? *Pawn->GetName() : TEXT("None"),
 			ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
+			bPawnMatchesCorrectedActor ? TEXT("true") : TEXT("false"),
 			bViewTargetMatchesPawn ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()),
+			static_cast<int32>(GetRemoteRole()),
 			*LocalBefore.ToString(),
 			*ServerLocation.ToString(),
 			DeltaCm,
@@ -1105,9 +1330,13 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 	if (Now - LastServerMoveAppliedSummaryLogTime >= MoveDistanceSummaryLogIntervalSeconds)
 	{
 		LastServerMoveAppliedSummaryLogTime = Now;
+		const APawn* ControlledPawn = RaidPC->GetPawn();
 		const AActor* ViewTarget = RaidPC->GetViewTarget();
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerMoveApplied PC=%s Axis=%s Delta=%s ServerLocation=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s"),
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerMoveApplied PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Axis=%s Delta=%s ServerLocation=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s"),
 			*BuildDroneControllerLogString(RaidPC),
+			*GetName(),
+			ControlledPawn ? *ControlledPawn->GetName() : TEXT("None"),
+			ControlledPawn == this ? TEXT("true") : TEXT("false"),
 			*Axis.ToString(),
 			*MoveDelta.ToString(),
 			*CurrentLocation.ToString(),
@@ -1136,8 +1365,13 @@ void ADrone::UpdateOwnerMoveSyncForServer(const FVector& ServerLocation, const F
 	if (Now - LastOwnerMoveSyncSentLogTime >= MoveDistanceSummaryLogIntervalSeconds)
 	{
 		LastOwnerMoveSyncSentLogTime = Now;
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OwnerMoveSyncSent PC=%s Location=%s Rotation=%s Sequence=%u"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		const ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+		const APawn* ControlledPawn = RaidPC ? RaidPC->GetPawn() : nullptr;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OwnerMoveSyncSent PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Location=%s Rotation=%s Sequence=%u"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName(),
+			ControlledPawn ? *ControlledPawn->GetName() : TEXT("None"),
+			ControlledPawn == this ? TEXT("true") : TEXT("false"),
 			*OwnerMoveSync.Location.ToString(),
 			*OwnerMoveSync.Rotation.ToString(),
 			OwnerMoveSync.Sequence);
@@ -1627,6 +1861,7 @@ void ADrone::ResetCombatRuntimeStateForReason(FName Reason)
 {
 	LeftPulseAttackCount = 0;
 	RightPulseAttackCount = 0;
+	NextDodgeAllowedServerTime = 0.0f;
 	ResetMoveDistanceForServer(Reason);
 	if (Reason == FName(TEXT("Death")) || Reason == FName(TEXT("RaidEnd")))
 	{
