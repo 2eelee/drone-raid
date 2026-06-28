@@ -507,6 +507,7 @@ Config/DefaultEditorPerProjectUserSettings.ini
 
 # Claude 관련 (로컬 전용)
 CLAUDE.md
+AGENTS.md
 .claude/
 
 # 로컬 문서

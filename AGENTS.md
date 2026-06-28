@@ -6,6 +6,14 @@
 - 핵심: 서버 전체가 공유하는 한정된 부품 풀로 드론을 설계해 보스 레이드
 - 개발 기록/트러블슈팅 원문: docs/DEVLOG.md 확인
 
+## 이슈 관리 (Linear)
+- 이 프로젝트의 작업 추적은 Linear `DroneProto` 프로젝트를 기본으로 한다.
+- 기본 라우팅: Team `Portfolio`, Project `DroneProto`, Assignee `me`, 초기 상태 `Backlog`.
+- 새 기능/버그/검증 보강처럼 범위가 있는 작업은 Linear 이슈를 만들거나 기존 이슈에 연결한 뒤 진행한다.
+- 작업 브랜치/커밋/DEVLOG 항목에는 가능하면 Linear 이슈 ID(`POR-5` 형식)를 함께 남긴다.
+- `docs/DEVLOG.md`는 구현 이력/트러블슈팅의 canonical 기록이고, 작업 우선순위와 백로그 관리는 Linear를 기준으로 한다.
+- 현재 감사 기준 문서: `docs/ImplementationAudit_DroneRaid.md`; 해당 감사 결과는 Linear `Implementation Audit Snapshot - 2026-06-27` 문서와 POR-5~POR-10 이슈에 반영되어 있다.
+
 ## 네트워크 아키텍처 (핵심)
 - Dedicated Server, 서버 권한(server authoritative) 구조
 - 4명 검증 → 16명 목표 (관심영역 최적화는 확장 단계)
