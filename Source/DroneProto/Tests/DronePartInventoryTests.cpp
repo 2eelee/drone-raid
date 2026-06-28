@@ -211,6 +211,102 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"DroneProto.D10.DroneReport.Formulas",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCombatSpecAlignmentTest,
+	"DroneProto.D13.DroneCombat.SpecAlignment",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
+{
+	const auto ExpectCore = [this](EDroneCombatCoreType CoreType, float CurrentHP, float MaxHP, float MoveMeters, float ExpectedCoreModifier, float ExpectedBonusModifier, float ExpectedMoveSpeedBonus, const TCHAR* Label)
+	{
+		FDroneCoreCalculationInput Input;
+		Input.CoreType = CoreType;
+		Input.CurrentHP = CurrentHP;
+		Input.MaxHP = MaxHP;
+		Input.AccumulatedMoveDistanceMeters = MoveMeters;
+		const FDroneCoreCalculationResult Result = FDroneCombatRules::CalculateCoreBonus(Input);
+		TestTrue(FString::Printf(TEXT("%s core attack modifier"), Label),
+			FMath::IsNearlyEqual(Result.CoreAttackModifier, ExpectedCoreModifier, 0.001f));
+		TestTrue(FString::Printf(TEXT("%s core bonus attack modifier"), Label),
+			FMath::IsNearlyEqual(Result.CoreBonusAttackModifier, ExpectedBonusModifier, 0.001f));
+		TestTrue(FString::Printf(TEXT("%s move speed bonus"), Label),
+			FMath::IsNearlyEqual(Result.MoveSpeedBonus, ExpectedMoveSpeedBonus, 0.001f));
+	};
+
+	ExpectCore(EDroneCombatCoreType::None, 100.0f, 100.0f, 0.0f, 1.0f, 1.0f, 0.0f, TEXT("empty"));
+	ExpectCore(EDroneCombatCoreType::Zenith, 0.0f, 100.0f, 0.0f, 1.0f, 1.0f, 0.0f, TEXT("Zenith 0 percent HP"));
+	ExpectCore(EDroneCombatCoreType::Zenith, 10.0f, 100.0f, 0.0f, 1.0f, 1.02f, 0.0f, TEXT("Zenith 10 percent HP"));
+	ExpectCore(EDroneCombatCoreType::Zenith, 50.0f, 100.0f, 0.0f, 1.0f, 1.10f, 0.0f, TEXT("Zenith 50 percent HP"));
+	ExpectCore(EDroneCombatCoreType::Zenith, 100.0f, 100.0f, 0.0f, 1.0f, 1.20f, 0.0f, TEXT("Zenith 100 percent HP"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 0.0f, 1.0f, 1.0f, 0.0f, TEXT("Booster 0m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 19.99f, 1.0f, 1.0f, 0.0f, TEXT("Booster 19.99m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 20.0f, 1.0f, 1.015f, 0.03f, TEXT("Booster 20m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 40.0f, 1.0f, 1.03f, 0.06f, TEXT("Booster 40m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 200.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster cap"));
+	ExpectCore(EDroneCombatCoreType::Drain, 100.0f, 100.0f, 200.0f, 1.0f, 1.0f, 0.0f, TEXT("Drain no unspecified penalty"));
+
+	const auto ExpectWeapon = [this](EDroneCombatWeaponType WeaponType, int32 PulseCount, float VectorMeters, float ExpectedDamage, float ExpectedBaseDamage, float ExpectedBonusDamage, int32 ExpectedHitCount, int32 ExpectedAdditionalHitCount, bool bExpectedResetVector, int32 ExpectedPulseCount, const TCHAR* Label)
+	{
+		FDroneWeaponCalculationInput Input;
+		Input.WeaponType = WeaponType;
+		Input.PulseAttackCount = PulseCount;
+		Input.VectorAccumulatedMoveDistanceMeters = VectorMeters;
+		const FDroneWeaponCalculationResult Result = FDroneCombatRules::CalculateWeaponDamage(Input);
+		TestTrue(FString::Printf(TEXT("%s weapon damage"), Label),
+			FMath::IsNearlyEqual(Result.WeaponDamage, ExpectedDamage, 0.001f));
+		TestTrue(FString::Printf(TEXT("%s base damage"), Label),
+			FMath::IsNearlyEqual(Result.BaseDamage, ExpectedBaseDamage, 0.001f));
+		TestTrue(FString::Printf(TEXT("%s bonus damage"), Label),
+			FMath::IsNearlyEqual(Result.BonusDamage, ExpectedBonusDamage, 0.001f));
+		TestEqual(FString::Printf(TEXT("%s total hit count"), Label), Result.HitCount, ExpectedHitCount);
+		TestEqual(FString::Printf(TEXT("%s additional hit count"), Label), Result.AdditionalHitCount, ExpectedAdditionalHitCount);
+		TestEqual(FString::Printf(TEXT("%s vector reset flag"), Label), Result.bResetVectorDistance, bExpectedResetVector);
+		TestEqual(FString::Printf(TEXT("%s pulse counter"), Label), Result.PulseAttackCount, ExpectedPulseCount);
+	};
+
+	ExpectWeapon(EDroneCombatWeaponType::None, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, false, 0, TEXT("empty weapon"));
+	ExpectWeapon(EDroneCombatWeaponType::PulseLaser, 0, 0.0f, 8.0f, 8.0f, 0.0f, 1, 0, false, 1, TEXT("Pulse first"));
+	ExpectWeapon(EDroneCombatWeaponType::PulseLaser, 1, 0.0f, 8.0f, 8.0f, 0.0f, 1, 0, false, 2, TEXT("Pulse second"));
+	ExpectWeapon(EDroneCombatWeaponType::PulseLaser, 2, 0.0f, 18.0f, 8.0f, 10.0f, 1, 0, false, 0, TEXT("Pulse third"));
+	ExpectWeapon(EDroneCombatWeaponType::FractureBurst, 0, 0.0f, 11.0f, 5.0f, 6.0f, 4, 3, false, 0, TEXT("Fracture"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 0.0f, 7.0f, 7.0f, 0.0f, 1, 0, true, 0, TEXT("Vector 0m"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 4.99f, 7.0f, 7.0f, 0.0f, 1, 0, true, 0, TEXT("Vector 4.99m"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 5.0f, 8.0f, 7.0f, 1.0f, 1, 0, true, 0, TEXT("Vector 5m"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 40.0f, 15.0f, 7.0f, 8.0f, 1, 0, true, 0, TEXT("Vector cap"));
+	TestTrue(TEXT("Drain heal is 12 percent before cap"),
+		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(10.0f), 1.2f, 0.001f));
+	TestTrue(TEXT("Drain heal is clamped to zero for negative damage"),
+		FMath::IsNearlyZero(FDroneCombatRules::CalculateDrainHeal(-10.0f), 0.001f));
+	TestTrue(TEXT("Drain heal caps at 3 per attack"),
+		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(100.0f), 3.0f, 0.001f));
+
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneD13DrainActualDamageWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("D13 drain actual damage")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName DrainCore = ADronePartInventory::GetCoreDrainPartID();
+	const FName FractureBurst = ADronePartInventory::GetFractureBurstPartID();
+	TestTrue(TEXT("D13 Drain double Fracture loadout applies"),
+		Context.Drone->ApplyLoadout(DrainCore, FractureBurst, FractureBurst));
+	Context.Drone->ApplyDamageForServer(20, FName(TEXT("Automation")));
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() - 5.0f, Context.PC, Context.Drone);
+	const float HPBeforeClampedDrain = Context.Drone->GetHealthValueForTest();
+	TestTrue(TEXT("Drain uses actual boss damage after HP clamp"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 5.0f, 0.001f));
+	TestTrue(TEXT("Drain heals 12 percent of actual boss damage"),
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeClampedDrain + 0.6f, 0.001f));
+	TestTrue(TEXT("CombatRecord stores actual boss damage after HP clamp"),
+		FMath::IsNearlyEqual(Context.Drone->GetCombatRecordForTest().BossDamage, 5.0f, 0.001f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
 bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 {
 	FDroneCombatRecord CappedBaseRecord;
@@ -2491,6 +2587,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("TEXT(\"Heal\")")));
 	TestTrue(TEXT("weapon calculation summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] WeaponCalc Player=")));
+	TestTrue(TEXT("weapon calculation summary log keeps additional hit count marker"),
+		DroneSource.Contains(TEXT("AdditionalHitCount=")));
 	TestTrue(TEXT("core calculation summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] CoreCalc Player=")));
 	TestTrue(TEXT("Drain heal summary log marker exists"),

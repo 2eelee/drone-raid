@@ -91,6 +91,9 @@ struct DRONEPROTO_API FDroneWeaponCalculationResult
 	int32 HitCount = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	int32 AdditionalHitCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
 	int32 PulseAttackCount = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
@@ -251,7 +254,8 @@ struct DRONEPROTO_API FDroneCombatRules
 
 		case EDroneCombatWeaponType::FractureBurst:
 			Result.BaseDamage = 5.0f;
-			Result.BonusDamage = 3.0f * 2.0f;
+			Result.AdditionalHitCount = 3;
+			Result.BonusDamage = static_cast<float>(Result.AdditionalHitCount) * 2.0f;
 			Result.HitCount = 4;
 			Result.WeaponDamage = Result.BaseDamage + Result.BonusDamage;
 			break;

@@ -1361,13 +1361,14 @@ FDroneWeaponCalculationResult ADrone::CalculateWeaponDamageForServer(FName Weapo
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] WeaponCalc Player=%s Slot=%s WeaponType=%s BaseDamage=%.2f BonusDamage=%.2f HitCount=%d PulseCount=%d VectorDistance=%.2f WeaponDamage=%.2f ResetVector=%s"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] WeaponCalc Player=%s Slot=%s WeaponType=%s BaseDamage=%.2f BonusDamage=%.2f HitCount=%d AdditionalHitCount=%d PulseCount=%d VectorDistance=%.2f WeaponDamage=%.2f ResetVector=%s"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
 		ToWeaponSlotLogString(bIsLeftWeapon),
 		ToCombatWeaponTypeLogString(Input.WeaponType),
 		Result.BaseDamage,
 		Result.BonusDamage,
 		Result.HitCount,
+		Result.AdditionalHitCount,
 		Result.PulseAttackCount,
 		Result.VectorDistance,
 		Result.WeaponDamage,
