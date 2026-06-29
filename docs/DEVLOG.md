@@ -3,6 +3,77 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-29 — 레이드 로비 UI 표시와 상태 전환 검증
+
+### 문제
+
+레이드 입장 A/B/C 배정 로직은 구현됐지만, 로비 UI 쪽에서는 성공 경로와 예외 경로를 PIE에서 분리해 확인하기 어려웠다.
+
+- LobbyMap에서 `WBP_RaidLobby` 표시와 버튼 클릭은 확인됐지만, C++ 부모 위젯이 `Main / Waiting / NoServer / Loading` 상태를 직접 관리해야 했다.
+- A/B/C가 모두 full인 경우의 대기 팝업, timeout 이후 서버 부족 팝업, 취소/확인 버튼 흐름은 에디터에서 강제로 검증할 진입점이 부족했다.
+- 성공 시 이동 대상은 실제 테스트/레이드 맵인 `TestMap`이어야 했다.
+- Loading 상태에서 레이드 참가 버튼이 중복 호출되면 travel 요청이 2회 발생할 수 있는 위험이 있었다.
+- 이 작업은 로비 UI 검증용 C++ hook이며, gameplay RPC, replication, 전투/부품/Report/Dodge/BossAttack 경로를 바꾸면 안 됐다.
+
+### 수정
+
+- `ALobbyPlayerController`가 local controller에서 `LobbyWidgetClass`를 생성하고 viewport에 추가하는 경로에 `[DR_SUMMARY] LobbyPCBeginPlay`, `LobbyWidgetCreateAttempt`, `LobbyWidgetShown` 로그를 추가했다.
+- `URaidLobbyWidget` C++ 부모에 `MainLobbyPanel`, `WaitingPopupPanel`, `NoServerPopupPanel`, `LoadingPanel`, `RaidJoinButton`, `CancelMatchmakingButton`, `NoServerConfirmButton`을 `BindWidgetOptional`로 추가했다.
+- `ERaidLobbyUIState`와 `ShowMainLobby()`, `ShowWaitingPopup()`, `ShowNoServerPopup()`, `ShowLoading()`을 추가해 한 번에 한 상태만 보이도록 했다.
+- `RaidJoinButton`, `CancelMatchmakingButton`, `NoServerConfirmButton`은 `NativeConstruct()`에서 `AddUniqueDynamic`으로 바인딩해 중복 바인딩을 피했다.
+- `URaidSessionSubsystem`이 active lobby widget을 보관하고, 배정 결과에 따라 `Success -> Loading`, `Waiting -> Waiting`, `Failed -> NoServer`, `Canceled -> Main` 상태를 호출하게 했다.
+- `CancelMatchmaking()`은 retry timer를 중단하고 `RaidEntryCancel` 로그를 남긴 뒤 Main으로 돌아가며, 별도 travel을 실행하지 않는다.
+- `ULocalAssignment` 기본 A/B/C 후보의 `TravelTarget`을 `TestMap`으로 맞췄다.
+- 성공 결과의 `FailReason`은 `None`으로 정리해 `Success` 로그에 `NoServerAvailable`이 같이 보이지 않게 했다.
+- PIE 검증용 local UI hook인 `ShowDebugWaitingPopup()`, `ShowDebugNoServerPopup()`, `ResetDebugMainLobby()`을 추가했다.
+- debug hook 로그에는 `Scope=LocalUIOnly GameplayAuthority=Unaffected`를 남겨 서버 권한/게임플레이 상태를 바꾸지 않는 검증용 진입점임을 명시했다.
+- Loading/Waiting 중 `RequestEntry()`가 다시 들어오면 `[DR_SUMMARY] RaidLobbyRequestEntryIgnored Reason=EntryInFlight`로 무시해 중복 travel 요청을 막았다.
+
+### 검증
+
+- TDD red 확인: 새 `DroneProto.RaidEntry.LobbyWidget.*` 테스트를 먼저 추가한 뒤, `GetCurrentLobbyUIState`, `ShowDebugWaitingPopup`, `ConfirmNoServerFromLobby`, `GetTravelRequestCountForTest` 누락 컴파일 에러를 확인했다.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.RaidEntry` 성공, 5 tests found, 5 Success, exit code 0.
+- `Automation RunTests DroneProto` 성공, 39 tests found, all Success, exit code 0.
+- `git diff --check -- Source/DroneProto/Lobby/RaidLobbyWidget.h Source/DroneProto/Lobby/RaidLobbyWidget.cpp Source/DroneProto/Lobby/RaidSessionSubsystem.h Source/DroneProto/Lobby/RaidSessionSubsystem.cpp Source/DroneProto/Tests/DronePartInventoryTests.cpp` 성공. LF/CRLF warning 외 whitespace error 없음.
+- 전체 자동화 로그에는 기존 negative-path 테스트의 warning 로그와 UE 초기화 단계의 `LogAutomationTest: Error: Condition failed` 4줄이 남지만, automation queue는 모두 `Result={Success}`와 `TEST COMPLETE. EXIT CODE: 0`으로 종료됐다.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] LobbyPCBeginPlay`
+- `[DR_SUMMARY] LobbyWidgetCreateAttempt`
+- `[DR_SUMMARY] LobbyWidgetShown`
+- `[DR_SUMMARY] RaidLobbyWidgetNativeConstruct`
+- `[DR_SUMMARY] RaidLobbyRequestEntryClicked`
+- `[DR_SUMMARY] RaidEntryRequest`
+- `[DR_SUMMARY] RaidAssignmentResult`
+- `[DR_SUMMARY] RaidEntryTravel`
+- `[DR_SUMMARY] LobbyUIState State=Main`
+- `[DR_SUMMARY] LobbyUIState State=Waiting`
+- `[DR_SUMMARY] LobbyUIState State=NoServer`
+- `[DR_SUMMARY] LobbyUIState State=Loading`
+- `[DR_SUMMARY] LobbyUIDebugHook`
+- `[DR_SUMMARY] RaidEntryCancel`
+- `[DR_SUMMARY] RaidLobbyRequestEntryIgnored`
+
+### PIE 판정
+
+- LobbyMap 시작 직후 `LobbyWidgetShown`, `RaidLobbyWidgetNativeConstruct`, `LobbyUIState State=Main`이 남아야 한다.
+- 레이드 참가 버튼 성공 경로에서는 `RaidAssignmentResult Result=Success Slot=A`, `LobbyUIState State=Loading`, `RaidEntryTravel Slot=A Target=TestMap`이 이어져야 한다.
+- `ShowDebugWaitingPopup()` 호출 시 `LobbyUIDebugHook Action=ShowWaitingPopup` 뒤 `LobbyUIState State=Waiting`이 남아야 한다.
+- Waiting 상태에서 취소 버튼을 누르면 `RaidEntryCancel` 뒤 `LobbyUIState State=Main`이 남아야 한다.
+- `ShowDebugNoServerPopup()` 호출 시 `LobbyUIDebugHook Action=ShowNoServerPopup` 뒤 `LobbyUIState State=NoServer`가 남아야 한다.
+- NoServer 확인 버튼을 누르면 `LobbyUIState State=Main`으로 돌아와야 한다.
+- Loading 상태에서 레이드 참가 요청이 중복으로 들어오면 `RaidLobbyRequestEntryIgnored Reason=EntryInFlight`가 남고 `RaidEntryTravel`이 추가로 반복되지 않아야 한다.
+
+### SpecDecisionNeeded
+
+- 실제 제품 구조의 server availability, `ServerState`, raid instance 선택은 여전히 backend/권한 layer 결정이 필요하다.
+- Waiting / NoServer / Loading 패널의 최종 디자인, 문구 배치, 애니메이션, 검정 화면 연출은 UMG/에디터 작업으로 남긴다.
+- 별도 load failed 전용 패널을 둘지, 현재 NoServer 계열 표시로 묶을지는 UI 기획 결정이 필요하다.
+- A/B/C의 실제 endpoint와 dedicated/listen 운용 방식은 local prototype 밖의 결정이다.
+
+---
 ## 2026-06-29 — 레이드 입장 A/B/C 배정 및 대기 재탐색
 
 ### 문제
