@@ -3,6 +3,73 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-29 — 레이드 입장 A/B/C 배정 및 대기 재탐색
+
+### 문제
+
+기존 로비 입장 흐름은 `URaidLobbyWidget::RequestEntry()`에서 `URaidSessionSubsystem::RequestRaidEntry()`로 들어온 뒤 `ULocalAssignment::ResolveServer()`가 항상 A 서버와 `Lvl_ThirdPerson`만 반환했다.
+
+- 기존 감사 보고서의 B. 레이드 입장 시스템에는 A/B/C 3개 후보, A -> B -> C 우선순위, 서버별 16인 정원, 만석 시 10초 대기, 1초 재탐색, timeout 실패 처리가 명시되어 있었다.
+- `RaidGameState::CurrentPlayers`는 이미 raid instance에 들어간 뒤의 내부 상태라 pre-travel 배정 판단에 섞으면 안 됐다.
+- 현재 단계는 실제 backend가 아니라 local assignment prototype이므로, 권한 한계를 과장하지 않고 자동화 가능한 모델로 닫아야 했다.
+- Success가 아닌 Waiting / Failed / Canceled 상태에서는 `OpenLevel` 또는 `ClientTravel`이 실행되면 안 됐다.
+
+### 수정
+
+- `FRaidServerCandidate`를 추가해 `FServerEndpoint`, `CurrentPlayers`, `MaxPlayers`, `bIsOnline`, `bAcceptsPlayers`를 표현하게 했다.
+- `FRaidAssignmentResult`와 `ERaidAssignmentResultType`을 추가해 `Success / Waiting / Failed / Canceled` 결과와 실패 사유, 선택 slot, debug reason을 보존하게 했다.
+- `URaidAssignmentBase::ResolveRaidAssignment()`를 추가하고, 기존 `ResolveServer()`는 성공 endpoint만 반환하는 호환 wrapper로 유지했다.
+- `ULocalAssignment` 기본 후보를 A/B/C 3개로 만들고, 모두 `Lvl_ThirdPerson`, `MaxPlayers=16`으로 초기화했다.
+- 배정은 A -> B -> C 순서로 검사하며 offline, unavailable, full 후보를 skip한다.
+- 첫 available 후보의 `TravelTarget`이 비어 있으면 `MapLoadFailed`로 실패 처리한다.
+- 모든 후보가 full/unavailable이면 즉시 travel하지 않고 `Waiting` 상태로 전환한다.
+- `URaidSessionSubsystem`에 10초 timeout / 1초 retry timer를 추가했다.
+- retry 중 후보가 열리면 즉시 `Success`로 전환해 기존 `OpenLevel` / `ClientTravel` 경로를 실행한다.
+- timeout이면 `NoServerAvailable` 실패로 처리하고 travel하지 않는다.
+- `CancelMatchmaking()`은 retry timer를 중단하고 기존 LobbyMap 복귀 경로를 유지한다.
+- 새 gameplay RPC, 새 replicated 변수, `RaidGameState::CurrentPlayers` 기반 capacity 판단, 전투/부품/반환/Report/Dodge/BossAttack 변경은 추가하지 않았다.
+- `[DR_SUMMARY] RaidEntryRequest`, `RaidAssignmentResult`, `RaidEntryTravel`, `RaidEntryWait`, `RaidEntryRetry`, `RaidEntryFail`, `RaidEntryCancel` 로그를 추가했다.
+- 로그에는 `AuthorityModel=LocalPrototype`을 남겨 현재 구조가 실제 server-authoritative backend가 아니라 테스트 가능한 local model임을 명시했다.
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.RaidEntry` 성공, 3 tests performed, warnings 0.
+- `Automation RunTests DroneProto.D15` 성공, 1 test performed, warnings 0.
+- `Automation RunTests DroneProto.D14` 성공, 2 tests performed, warnings 0.
+- `Automation RunTests DroneProto.D7` 성공, 4 tests performed, warnings 0.
+- `Automation RunTests DroneProto` 성공, 37 tests performed, failed 0. 기존 negative-path warning 로그 때문에 `succeededWithWarnings=5`로 분류된다.
+- `git diff --check` 성공. LF/CRLF warning 외 whitespace error 없음.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] RaidEntryRequest`
+- `[DR_SUMMARY] RaidAssignmentResult`
+- `[DR_SUMMARY] RaidEntryTravel`
+- `[DR_SUMMARY] RaidEntryWait`
+- `[DR_SUMMARY] RaidEntryRetry`
+- `[DR_SUMMARY] RaidEntryFail`
+- `[DR_SUMMARY] RaidEntryCancel`
+- `[Server] PostLogin: CurrentPlayers =`
+- `[DR_SUMMARY] Spawn PC=`
+
+### PIE 판정
+
+- 기본 로비 버튼 요청 시 `RaidEntryRequest` 뒤 `RaidAssignmentResult Result=Success Slot=A`와 `RaidEntryTravel Slot=A`가 남아야 한다.
+- A가 full이면 `Slot=B`, A/B가 full이면 `Slot=C`가 선택되어야 한다.
+- A/B/C가 모두 full이면 `RaidEntryWait`가 남고 `RaidEntryTravel`이 없어야 한다.
+- 대기 중 후보가 열리면 `RaidEntryRetry` 뒤 `RaidAssignmentResult Result=Success`와 `RaidEntryTravel`이 이어져야 한다.
+- 10초 timeout이면 `RaidEntryFail FailReason=NoServerAvailable`이 남고 travel하지 않아야 한다.
+- cancel이면 `RaidEntryCancel`이 남고 retry가 중단되어야 한다.
+
+### SpecDecisionNeeded
+
+- 실제 제품 구조에서 server availability, `CurrentPlayers`, `ServerState`, raid instance 선택을 확정할 backend/권한 layer가 필요하다.
+- B/C의 실제 dedicated/listen endpoint 또는 최종 travel target은 아직 미정이다.
+- `ServerState`의 최종 소유 위치와 갱신 주체는 아직 local assignment prototype 밖의 결정이다.
+- UMG 팝업 widget class 지정, 대기/실패/로드 실패 화면 배치, 로비 UX polish는 에디터/UMG 작업으로 남긴다.
+
+---
 ## 2026-06-28 — POR-12 D15 Boss Attack / Drone Hit 최소 수직 슬라이스
 
 ### 문제
