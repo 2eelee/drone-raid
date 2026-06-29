@@ -1,20 +1,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Subsystems/GameInstanceSubsystem.h"
 #include "Blueprint/UserWidget.h"
 #include "RaidAssignmentBase.h"
+#include "Subsystems/GameInstanceSubsystem.h"
+#include "TimerManager.h"
 #include "RaidSessionSubsystem.generated.h"
-
-UENUM(BlueprintType)
-enum class ERaidEntryFailReason : uint8
-{
-	ServerListFailed,
-	NoServerAvailable,
-	MapLoadFailed,
-	SpawnFailed,
-	Cancelled,
-};
 
 UCLASS()
 class DRONEPROTO_API URaidSessionSubsystem : public UGameInstanceSubsystem
@@ -30,8 +21,6 @@ public:
 	UFUNCTION(BlueprintPure, Category="Raid")
 	bool IsSlotEnabled(const FString& SlotId) const;
 
-	// --- 팝업 제어 ---
-
 	UFUNCTION(BlueprintCallable, Category="Raid|Popups")
 	void ShowMatchmakingWait();
 
@@ -44,11 +33,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Raid|Popups")
 	void HideEntryPopups();
 
-	// 팝업 닫고 LobbyMap으로 복귀 — MatchmakingWait 취소 버튼 + NoServer 확인 버튼 공용
 	UFUNCTION(BlueprintCallable, Category="Raid|Popups")
 	void CancelMatchmaking();
 
-	// 에디터(BP 서브시스템 서브클래스)에서 WBP 클래스 지정
 	UPROPERTY(EditDefaultsOnly, Category="Raid|Popups")
 	TSubclassOf<UUserWidget> MatchmakingWaitWidgetClass;
 
@@ -58,8 +45,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category="Raid|Popups")
 	TSubclassOf<UUserWidget> LoadFailedWidgetClass;
 
+#if WITH_DEV_AUTOMATION_TESTS
+	void SetAssignmentForTest(URaidAssignmentBase* InAssignment);
+	void SetSuppressTravelForTest(bool bInSuppressTravel);
+	bool IsMatchmakingRetryActiveForTest() const { return bMatchmakingRetryActive; }
+	FRaidAssignmentResult GetLastAssignmentResultForTest() const { return LastAssignmentResult; }
+	bool WasTravelRequestedForTest() const { return bTravelRequestedForTest; }
+	void ResetTravelRequestedForTest();
+	void RetryRaidEntryForTest();
+	void ExpireMatchmakingWaitForTest();
+#endif
+
 private:
-	// D11 교체 지점: 멀티 인스턴스 배정 전략으로 바꿀 때 이 한 줄만 수정
 	UPROPERTY()
 	TObjectPtr<URaidAssignmentBase> Assignment;
 
@@ -72,5 +69,27 @@ private:
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ActiveLoadFailedWidget;
 
+	FTimerHandle MatchmakingRetryTimerHandle;
+	FString PendingRaidEntrySlotId;
+	double MatchmakingWaitStartTimeSeconds = 0.0;
+	bool bMatchmakingRetryActive = false;
+	FRaidAssignmentResult LastAssignmentResult;
+
+	static constexpr double MatchmakingTimeoutSeconds = 10.0;
+	static constexpr float MatchmakingRetryIntervalSeconds = 1.0f;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	bool bSuppressTravelForTest = false;
+	bool bTravelRequestedForTest = false;
+#endif
+
 	UUserWidget* CreateAndShowPopup(TSubclassOf<UUserWidget> WidgetClass);
+	void EvaluateRaidEntry(bool bIsRetry);
+	void StartMatchmakingWait();
+	void StopMatchmakingRetry();
+	void HandleMatchmakingRetry();
+	void HandleRaidEntryFailure(const FRaidAssignmentResult& Result);
+	void TravelToRaidEndpoint(const FRaidAssignmentResult& Result);
+	void RecordAssignmentResult(const FRaidAssignmentResult& Result);
+	double GetMatchmakingNowSeconds() const;
 };

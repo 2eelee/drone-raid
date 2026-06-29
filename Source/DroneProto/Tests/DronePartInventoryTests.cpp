@@ -14,6 +14,9 @@
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
+#include "Lobby/LocalAssignment.h"
+#include "Lobby/RaidSessionSubsystem.h"
+#include "Lobby/ServerEndpoint.h"
 
 #include "Engine/World.h"
 #include "GameFramework/DefaultPawn.h"
@@ -166,6 +169,199 @@ bool SetPawnControllerForAutomationTest(APawn* Pawn, AController* Controller)
 	return true;
 }
 
+FRaidServerCandidate MakeRaidServerCandidate(
+	const TCHAR* SlotId,
+	int32 CurrentPlayers,
+	int32 MaxPlayers = 16,
+	bool bIsOnline = true,
+	bool bAcceptsPlayers = true,
+	const TCHAR* TravelTarget = TEXT("Lvl_ThirdPerson"))
+{
+	FRaidServerCandidate Candidate;
+	Candidate.Endpoint.SlotId = SlotId;
+	Candidate.Endpoint.TravelTarget = TravelTarget;
+	Candidate.Endpoint.bIsLevelName = true;
+	Candidate.CurrentPlayers = CurrentPlayers;
+	Candidate.MaxPlayers = MaxPlayers;
+	Candidate.bIsOnline = bIsOnline;
+	Candidate.bAcceptsPlayers = bAcceptsPlayers;
+	return Candidate;
+}
+
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEntryLocalAssignmentDefaultsTest,
+	"DroneProto.RaidEntry.Assignment.DefaultCandidates",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEntryLocalAssignmentDefaultsTest::RunTest(const FString& Parameters)
+{
+	ULocalAssignment* Assignment = NewObject<ULocalAssignment>();
+	TestNotNull(TEXT("local assignment is created"), Assignment);
+	if (!Assignment)
+	{
+		return false;
+	}
+
+	const TArray<FRaidServerCandidate>& Candidates = Assignment->GetCandidatesForTest();
+	TestEqual(TEXT("default local assignment creates three candidates"), Candidates.Num(), 3);
+	if (Candidates.Num() != 3)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("default candidate A slot"), Candidates[0].Endpoint.SlotId, FString(TEXT("A")));
+	TestEqual(TEXT("default candidate B slot"), Candidates[1].Endpoint.SlotId, FString(TEXT("B")));
+	TestEqual(TEXT("default candidate C slot"), Candidates[2].Endpoint.SlotId, FString(TEXT("C")));
+	for (const FRaidServerCandidate& Candidate : Candidates)
+	{
+		TestEqual(TEXT("default max players is 16"), Candidate.MaxPlayers, 16);
+		TestEqual(TEXT("default travel target preserves current prototype map"), Candidate.Endpoint.TravelTarget, FString(TEXT("Lvl_ThirdPerson")));
+		TestTrue(TEXT("default candidate is online"), Candidate.bIsOnline);
+		TestTrue(TEXT("default candidate accepts players"), Candidate.bAcceptsPlayers);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEntryLocalAssignmentPriorityTest,
+	"DroneProto.RaidEntry.Assignment.PriorityAndFailure",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
+{
+	ULocalAssignment* Assignment = NewObject<ULocalAssignment>();
+	TestNotNull(TEXT("local assignment is created"), Assignment);
+	if (!Assignment)
+	{
+		return false;
+	}
+
+	auto ResolveWithCandidates = [Assignment](const TArray<FRaidServerCandidate>& Candidates)
+	{
+		Assignment->SetCandidatesForTest(Candidates);
+		return Assignment->ResolveRaidAssignment(TEXT("A"));
+	};
+
+	FRaidAssignmentResult Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 0),
+		MakeRaidServerCandidate(TEXT("B"), 0),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	TestEqual(TEXT("available A succeeds"), Result.Result, ERaidAssignmentResultType::Success);
+	TestEqual(TEXT("available A is selected"), Result.SelectedSlotId, FName(TEXT("A")));
+
+	Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 0),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	TestEqual(TEXT("full A skips to B"), Result.Result, ERaidAssignmentResultType::Success);
+	TestEqual(TEXT("B is selected when A is full"), Result.SelectedSlotId, FName(TEXT("B")));
+
+	Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 16),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	TestEqual(TEXT("full A and B skip to C"), Result.Result, ERaidAssignmentResultType::Success);
+	TestEqual(TEXT("C is selected when A and B are full"), Result.SelectedSlotId, FName(TEXT("C")));
+
+	Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 16),
+		MakeRaidServerCandidate(TEXT("C"), 16),
+	});
+	TestEqual(TEXT("all full returns waiting"), Result.Result, ERaidAssignmentResultType::Waiting);
+	TestEqual(TEXT("all full preserves no-server reason"), Result.FailReason, ERaidEntryFailReason::NoServerAvailable);
+
+	Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 0, 16, false),
+		MakeRaidServerCandidate(TEXT("B"), 0, 16, true, false),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	TestEqual(TEXT("offline and unavailable candidates are skipped"), Result.Result, ERaidAssignmentResultType::Success);
+	TestEqual(TEXT("C is selected after offline and unavailable candidates"), Result.SelectedSlotId, FName(TEXT("C")));
+
+	Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 0, 16, true, true, TEXT("")),
+		MakeRaidServerCandidate(TEXT("B"), 0),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	TestEqual(TEXT("invalid travel target fails immediately"), Result.Result, ERaidAssignmentResultType::Failed);
+	TestEqual(TEXT("invalid travel target preserves map-load fail reason"), Result.FailReason, ERaidEntryFailReason::MapLoadFailed);
+
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 0),
+		MakeRaidServerCandidate(TEXT("B"), 0),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	const FServerEndpoint CompatEndpoint = Assignment->ResolveServer(TEXT("A"));
+	TestEqual(TEXT("legacy ResolveServer wrapper returns selected endpoint"), CompatEndpoint.SlotId, FString(TEXT("A")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEntrySessionWaitRetryCancelTest,
+	"DroneProto.RaidEntry.Session.WaitRetryTimeoutCancel",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEntrySessionWaitRetryCancelTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* Session = NewObject<URaidSessionSubsystem>(GameInstance);
+	ULocalAssignment* Assignment = NewObject<ULocalAssignment>(Session);
+	TestNotNull(TEXT("game instance test outer is created"), GameInstance);
+	TestNotNull(TEXT("raid session subsystem is created"), Session);
+	TestNotNull(TEXT("local assignment is created"), Assignment);
+	if (!GameInstance || !Session || !Assignment)
+	{
+		return false;
+	}
+
+	Session->SetAssignmentForTest(Assignment);
+	Session->SetSuppressTravelForTest(true);
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 16),
+		MakeRaidServerCandidate(TEXT("C"), 16),
+	});
+
+	Session->RequestRaidEntry(TEXT("A"));
+	TestEqual(TEXT("all full enters waiting state"), Session->GetLastAssignmentResultForTest().Result, ERaidAssignmentResultType::Waiting);
+	TestTrue(TEXT("waiting starts retry state"), Session->IsMatchmakingRetryActiveForTest());
+	TestFalse(TEXT("waiting does not travel"), Session->WasTravelRequestedForTest());
+
+	Assignment->SetCandidateCurrentPlayersForTest(TEXT("B"), 15);
+	Session->RetryRaidEntryForTest();
+	TestEqual(TEXT("retry succeeds when B opens"), Session->GetLastAssignmentResultForTest().Result, ERaidAssignmentResultType::Success);
+	TestEqual(TEXT("retry selects opened B"), Session->GetLastAssignmentResultForTest().SelectedSlotId, FName(TEXT("B")));
+	TestTrue(TEXT("success requests travel"), Session->WasTravelRequestedForTest());
+	TestFalse(TEXT("success stops retry state"), Session->IsMatchmakingRetryActiveForTest());
+
+	Session->ResetTravelRequestedForTest();
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 16),
+		MakeRaidServerCandidate(TEXT("C"), 16),
+	});
+	Session->RequestRaidEntry(TEXT("A"));
+	Session->ExpireMatchmakingWaitForTest();
+	TestEqual(TEXT("timeout fails with no server"), Session->GetLastAssignmentResultForTest().Result, ERaidAssignmentResultType::Failed);
+	TestEqual(TEXT("timeout preserves no-server reason"), Session->GetLastAssignmentResultForTest().FailReason, ERaidEntryFailReason::NoServerAvailable);
+	TestFalse(TEXT("timeout does not travel"), Session->WasTravelRequestedForTest());
+
+	Session->RequestRaidEntry(TEXT("A"));
+	Session->CancelMatchmaking();
+	TestEqual(TEXT("cancel marks canceled result"), Session->GetLastAssignmentResultForTest().Result, ERaidAssignmentResultType::Canceled);
+	TestEqual(TEXT("cancel preserves cancel reason"), Session->GetLastAssignmentResultForTest().FailReason, ERaidEntryFailReason::Cancelled);
+	TestFalse(TEXT("cancel stops retry state"), Session->IsMatchmakingRetryActiveForTest());
+	TestFalse(TEXT("cancel does not request raid travel"), Session->WasTravelRequestedForTest());
+
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -2935,6 +3131,7 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	FString DroneReportWidgetSource;
 	FString DroneSource;
 	FString RaidBossSource;
+	FString RaidSessionSubsystemSource;
 
 	if (!LoadSourceFile(TEXT("Raid/RaidGameMode.cpp"), RaidGameModeSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidPlayerController.cpp"), RaidPlayerControllerSource)
@@ -2942,7 +3139,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		|| !LoadSourceFile(TEXT("Raid/DronePartSelectWidget.cpp"), DronePartSelectWidgetSource)
 		|| !LoadSourceFile(TEXT("Raid/DroneReportWidget.cpp"), DroneReportWidgetSource)
 		|| !LoadSourceFile(TEXT("Drone.cpp"), DroneSource)
-		|| !LoadSourceFile(TEXT("Raid/RaidBoss.cpp"), RaidBossSource))
+		|| !LoadSourceFile(TEXT("Raid/RaidBoss.cpp"), RaidBossSource)
+		|| !LoadSourceFile(TEXT("Lobby/RaidSessionSubsystem.cpp"), RaidSessionSubsystemSource))
 	{
 		return false;
 	}
@@ -2991,6 +3189,20 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackMiss")));
 	TestTrue(TEXT("boss area attack ignored summary log marker exists"),
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackIgnored")));
+	TestTrue(TEXT("raid entry request summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryRequest")));
+	TestTrue(TEXT("raid assignment result summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidAssignmentResult")));
+	TestTrue(TEXT("raid entry travel summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryTravel")));
+	TestTrue(TEXT("raid entry wait summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryWait")));
+	TestTrue(TEXT("raid entry retry summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryRetry")));
+	TestTrue(TEXT("raid entry fail summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryFail")));
+	TestTrue(TEXT("raid entry cancel summary log marker exists"),
+		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryCancel")));
 	TestTrue(TEXT("boss max HP is replicated with current HP"),
 		RaidBossSource.Contains(TEXT("DOREPLIFETIME(ARaidBoss, MaxHP)")));
 	TestTrue(TEXT("selection timer start summary log marker exists"),
