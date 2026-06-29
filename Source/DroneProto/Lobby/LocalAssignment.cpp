@@ -6,7 +6,7 @@ FRaidServerCandidate MakeDefaultRaidCandidate(const FString& SlotId)
 {
 	FRaidServerCandidate Candidate;
 	Candidate.Endpoint.SlotId = SlotId;
-	Candidate.Endpoint.TravelTarget = TEXT("Lvl_ThirdPerson");
+	Candidate.Endpoint.TravelTarget = TEXT("TestMap");
 	Candidate.Endpoint.bIsLevelName = true;
 	Candidate.CurrentPlayers = 0;
 	Candidate.MaxPlayers = 16;

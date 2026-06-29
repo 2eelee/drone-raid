@@ -11,10 +11,14 @@ class DRONEPROTO_API ALobbyPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
-	// WBP_RaidLobby(URaidLobbyWidget 상속)를 에디터에서 지정
-	UPROPERTY(EditDefaultsOnly, Category="UI")
+	// Set this to WBP_RaidLobby in BP_LobbyPlayerController.
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
 	TSubclassOf<URaidLobbyWidget> LobbyWidgetClass;
 
 protected:
 	virtual void BeginPlay() override;
+
+private:
+	UPROPERTY()
+	TObjectPtr<URaidLobbyWidget> ActiveLobbyWidget;
 };

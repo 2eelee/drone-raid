@@ -15,6 +15,7 @@
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
 #include "Lobby/LocalAssignment.h"
+#include "Lobby/RaidLobbyWidget.h"
 #include "Lobby/RaidSessionSubsystem.h"
 #include "Lobby/ServerEndpoint.h"
 
@@ -175,7 +176,7 @@ FRaidServerCandidate MakeRaidServerCandidate(
 	int32 MaxPlayers = 16,
 	bool bIsOnline = true,
 	bool bAcceptsPlayers = true,
-	const TCHAR* TravelTarget = TEXT("Lvl_ThirdPerson"))
+	const TCHAR* TravelTarget = TEXT("TestMap"))
 {
 	FRaidServerCandidate Candidate;
 	Candidate.Endpoint.SlotId = SlotId;
@@ -217,7 +218,7 @@ bool FRaidEntryLocalAssignmentDefaultsTest::RunTest(const FString& Parameters)
 	for (const FRaidServerCandidate& Candidate : Candidates)
 	{
 		TestEqual(TEXT("default max players is 16"), Candidate.MaxPlayers, 16);
-		TestEqual(TEXT("default travel target preserves current prototype map"), Candidate.Endpoint.TravelTarget, FString(TEXT("Lvl_ThirdPerson")));
+		TestEqual(TEXT("default travel target points at the current raid test map"), Candidate.Endpoint.TravelTarget, FString(TEXT("TestMap")));
 		TestTrue(TEXT("default candidate is online"), Candidate.bIsOnline);
 		TestTrue(TEXT("default candidate accepts players"), Candidate.bAcceptsPlayers);
 	}
@@ -252,6 +253,8 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("available A succeeds"), Result.Result, ERaidAssignmentResultType::Success);
 	TestEqual(TEXT("available A is selected"), Result.SelectedSlotId, FName(TEXT("A")));
+	TestEqual(TEXT("successful assignment has neutral fail reason"), Result.FailReason, ERaidEntryFailReason::None);
+	TestEqual(TEXT("successful assignment points at TestMap"), Result.Endpoint.TravelTarget, FString(TEXT("TestMap")));
 
 	Result = ResolveWithCandidates({
 		MakeRaidServerCandidate(TEXT("A"), 16),
@@ -260,6 +263,7 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("full A skips to B"), Result.Result, ERaidAssignmentResultType::Success);
 	TestEqual(TEXT("B is selected when A is full"), Result.SelectedSlotId, FName(TEXT("B")));
+	TestEqual(TEXT("successful fallback assignment has neutral fail reason"), Result.FailReason, ERaidEntryFailReason::None);
 
 	Result = ResolveWithCandidates({
 		MakeRaidServerCandidate(TEXT("A"), 16),
@@ -300,6 +304,7 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	const FServerEndpoint CompatEndpoint = Assignment->ResolveServer(TEXT("A"));
 	TestEqual(TEXT("legacy ResolveServer wrapper returns selected endpoint"), CompatEndpoint.SlotId, FString(TEXT("A")));
+	TestEqual(TEXT("legacy ResolveServer wrapper returns TestMap target"), CompatEndpoint.TravelTarget, FString(TEXT("TestMap")));
 
 	return true;
 }
@@ -339,6 +344,7 @@ bool FRaidEntrySessionWaitRetryCancelTest::RunTest(const FString& Parameters)
 	Session->RetryRaidEntryForTest();
 	TestEqual(TEXT("retry succeeds when B opens"), Session->GetLastAssignmentResultForTest().Result, ERaidAssignmentResultType::Success);
 	TestEqual(TEXT("retry selects opened B"), Session->GetLastAssignmentResultForTest().SelectedSlotId, FName(TEXT("B")));
+	TestEqual(TEXT("retry success has neutral fail reason"), Session->GetLastAssignmentResultForTest().FailReason, ERaidEntryFailReason::None);
 	TestTrue(TEXT("success requests travel"), Session->WasTravelRequestedForTest());
 	TestFalse(TEXT("success stops retry state"), Session->IsMatchmakingRetryActiveForTest());
 
@@ -360,6 +366,107 @@ bool FRaidEntrySessionWaitRetryCancelTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("cancel preserves cancel reason"), Session->GetLastAssignmentResultForTest().FailReason, ERaidEntryFailReason::Cancelled);
 	TestFalse(TEXT("cancel stops retry state"), Session->IsMatchmakingRetryActiveForTest());
 	TestFalse(TEXT("cancel does not request raid travel"), Session->WasTravelRequestedForTest());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidLobbyWidgetDebugStateTransitionsTest,
+	"DroneProto.RaidEntry.LobbyWidget.DebugStateTransitions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidLobbyWidgetDebugStateTransitionsTest::RunTest(const FString& Parameters)
+{
+	URaidLobbyWidget* Widget = NewObject<URaidLobbyWidget>();
+	TestNotNull(TEXT("raid lobby widget is created"), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("initial lobby UI state is main"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Main);
+
+	Widget->ShowDebugWaitingPopup();
+	TestEqual(TEXT("debug waiting hook switches to waiting"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Waiting);
+
+	Widget->CancelMatchmakingFromLobby();
+	TestEqual(TEXT("cancel returns waiting state to main"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Main);
+
+	Widget->ShowDebugNoServerPopup();
+	TestEqual(TEXT("debug no-server hook switches to no-server"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::NoServer);
+
+	Widget->ConfirmNoServerFromLobby();
+	TestEqual(TEXT("confirm returns no-server state to main"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Main);
+
+	Widget->ShowLoading();
+	TestEqual(TEXT("loading helper switches to loading"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Loading);
+
+	Widget->ResetDebugMainLobby();
+	TestEqual(TEXT("debug reset returns loading state to main"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Main);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidLobbyWidgetSessionStateTransitionsTest,
+	"DroneProto.RaidEntry.LobbyWidget.SessionStateTransitions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidLobbyWidgetSessionStateTransitionsTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* Session = NewObject<URaidSessionSubsystem>(GameInstance);
+	ULocalAssignment* Assignment = NewObject<ULocalAssignment>(Session);
+	URaidLobbyWidget* Widget = NewObject<URaidLobbyWidget>();
+	TestNotNull(TEXT("game instance test outer is created"), GameInstance);
+	TestNotNull(TEXT("raid session subsystem is created"), Session);
+	TestNotNull(TEXT("local assignment is created"), Assignment);
+	TestNotNull(TEXT("raid lobby widget is created"), Widget);
+	if (!GameInstance || !Session || !Assignment || !Widget)
+	{
+		return false;
+	}
+
+	Session->SetAssignmentForTest(Assignment);
+	Session->SetSuppressTravelForTest(true);
+	Session->SetActiveLobbyWidget(Widget);
+	Widget->SetRaidSubsystemForTest(Session);
+
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 16),
+		MakeRaidServerCandidate(TEXT("C"), 16),
+	});
+	Session->RequestRaidEntry(TEXT("A"));
+	TestEqual(TEXT("all full session result switches lobby to waiting"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Waiting);
+	TestFalse(TEXT("waiting does not request travel"), Session->WasTravelRequestedForTest());
+
+	Session->CancelMatchmaking();
+	TestEqual(TEXT("cancel switches lobby back to main"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Main);
+
+	Session->ResetTravelRequestedForTest();
+	Session->RequestRaidEntry(TEXT("A"));
+	Session->ExpireMatchmakingWaitForTest();
+	TestEqual(TEXT("timeout switches lobby to no-server"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::NoServer);
+	TestFalse(TEXT("timeout does not request travel"), Session->WasTravelRequestedForTest());
+
+	Widget->ConfirmNoServerFromLobby();
+	TestEqual(TEXT("no-server confirm switches lobby back to main"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Main);
+
+	Session->ResetTravelRequestedForTest();
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 0),
+		MakeRaidServerCandidate(TEXT("B"), 0),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+	Widget->RequestEntry(TEXT("A"));
+	TestEqual(TEXT("success switches lobby to loading before travel"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Loading);
+	TestTrue(TEXT("success requests travel once"), Session->WasTravelRequestedForTest());
+	TestEqual(TEXT("success records one travel request"), Session->GetTravelRequestCountForTest(), 1);
+
+	Widget->RequestEntry(TEXT("A"));
+	TestEqual(TEXT("duplicate join while loading keeps lobby in loading"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Loading);
+	TestEqual(TEXT("duplicate join while loading does not request a second travel"), Session->GetTravelRequestCountForTest(), 1);
 
 	return true;
 }
@@ -3132,6 +3239,9 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	FString DroneSource;
 	FString RaidBossSource;
 	FString RaidSessionSubsystemSource;
+	FString LobbyPlayerControllerHeaderSource;
+	FString LobbyPlayerControllerSource;
+	FString RaidLobbyWidgetSource;
 
 	if (!LoadSourceFile(TEXT("Raid/RaidGameMode.cpp"), RaidGameModeSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidPlayerController.cpp"), RaidPlayerControllerSource)
@@ -3140,7 +3250,10 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		|| !LoadSourceFile(TEXT("Raid/DroneReportWidget.cpp"), DroneReportWidgetSource)
 		|| !LoadSourceFile(TEXT("Drone.cpp"), DroneSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidBoss.cpp"), RaidBossSource)
-		|| !LoadSourceFile(TEXT("Lobby/RaidSessionSubsystem.cpp"), RaidSessionSubsystemSource))
+		|| !LoadSourceFile(TEXT("Lobby/RaidSessionSubsystem.cpp"), RaidSessionSubsystemSource)
+		|| !LoadSourceFile(TEXT("Lobby/LobbyPlayerController.h"), LobbyPlayerControllerHeaderSource)
+		|| !LoadSourceFile(TEXT("Lobby/LobbyPlayerController.cpp"), LobbyPlayerControllerSource)
+		|| !LoadSourceFile(TEXT("Lobby/RaidLobbyWidget.cpp"), RaidLobbyWidgetSource))
 	{
 		return false;
 	}
@@ -3203,6 +3316,68 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryFail")));
 	TestTrue(TEXT("raid entry cancel summary log marker exists"),
 		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryCancel")));
+	TestTrue(TEXT("lobby widget class is reflected for Blueprint assignment"),
+		LobbyPlayerControllerHeaderSource.Contains(TEXT("UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category=\"UI\")")));
+	TestTrue(TEXT("lobby begin play summary log marker exists"),
+		LobbyPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] LobbyPCBeginPlay")));
+	TestTrue(TEXT("lobby widget create attempt summary log marker exists"),
+		LobbyPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] LobbyWidgetCreateAttempt")));
+	TestTrue(TEXT("lobby widget missing class summary log marker exists"),
+		LobbyPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] LobbyWidgetMissingClass")));
+	TestTrue(TEXT("lobby widget create failed summary log marker exists"),
+		LobbyPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] LobbyWidgetCreateFailed")));
+	TestTrue(TEXT("lobby widget shown summary log marker exists"),
+		LobbyPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] LobbyWidgetShown")));
+	TestTrue(TEXT("raid lobby native construct summary log marker exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("[DR_SUMMARY] RaidLobbyWidgetNativeConstruct")));
+	TestTrue(TEXT("raid lobby request entry click summary log marker exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("[DR_SUMMARY] RaidLobbyRequestEntryClicked")));
+	TestTrue(TEXT("raid lobby UI state summary log marker exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("[DR_SUMMARY] LobbyUIState State=")));
+	TestTrue(TEXT("raid lobby main state helper exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ShowMainLobby")));
+	TestTrue(TEXT("raid lobby waiting state helper exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ShowWaitingPopup")));
+	TestTrue(TEXT("raid lobby no-server state helper exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ShowNoServerPopup")));
+	TestTrue(TEXT("raid lobby loading state helper exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ShowLoading")));
+	TestTrue(TEXT("raid lobby main panel optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("MainLobbyPanel")));
+	TestTrue(TEXT("raid lobby waiting popup optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("WaitingPopupPanel")));
+	TestTrue(TEXT("raid lobby no-server popup optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("NoServerPopupPanel")));
+	TestTrue(TEXT("raid lobby loading panel optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("LoadingPanel")));
+	TestTrue(TEXT("raid lobby join button optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("RaidJoinButton")));
+	TestTrue(TEXT("raid lobby cancel matchmaking button optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("CancelMatchmakingButton")));
+	TestTrue(TEXT("raid lobby no-server confirm button optional binding exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("NoServerConfirmButton")));
+	TestTrue(TEXT("raid session tracks active lobby widget"),
+		RaidSessionSubsystemSource.Contains(TEXT("ActiveLobbyWidget")));
+	TestTrue(TEXT("raid session success state shows loading before travel"),
+		RaidSessionSubsystemSource.Contains(TEXT("ShowLoading()")));
+	TestTrue(TEXT("raid session waiting state shows lobby wait panel"),
+		RaidSessionSubsystemSource.Contains(TEXT("ShowWaitingPopup()")));
+	TestTrue(TEXT("raid session failed state shows lobby no-server panel"),
+		RaidSessionSubsystemSource.Contains(TEXT("ShowNoServerPopup()")));
+	TestTrue(TEXT("raid session cancel state returns to main lobby panel"),
+		RaidSessionSubsystemSource.Contains(TEXT("ShowMainLobby()")));
+	TestTrue(TEXT("raid lobby debug waiting hook exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ShowDebugWaitingPopup")));
+	TestTrue(TEXT("raid lobby debug no-server hook exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ShowDebugNoServerPopup")));
+	TestTrue(TEXT("raid lobby debug main reset hook exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("ResetDebugMainLobby")));
+	TestTrue(TEXT("raid lobby debug hook summary log marker exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("[DR_SUMMARY] LobbyUIDebugHook")));
+	TestTrue(TEXT("raid lobby duplicate request guard summary log marker exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("[DR_SUMMARY] RaidLobbyRequestEntryIgnored")));
+	TestTrue(TEXT("raid lobby duplicate request guard state exists"),
+		RaidLobbyWidgetSource.Contains(TEXT("bRaidEntryRequestInFlight")));
 	TestTrue(TEXT("boss max HP is replicated with current HP"),
 		RaidBossSource.Contains(TEXT("DOREPLIFETIME(ARaidBoss, MaxHP)")));
 	TestTrue(TEXT("selection timer start summary log marker exists"),

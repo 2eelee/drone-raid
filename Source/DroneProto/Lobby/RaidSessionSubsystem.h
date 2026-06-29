@@ -7,6 +7,8 @@
 #include "TimerManager.h"
 #include "RaidSessionSubsystem.generated.h"
 
+class URaidLobbyWidget;
+
 UCLASS()
 class DRONEPROTO_API URaidSessionSubsystem : public UGameInstanceSubsystem
 {
@@ -14,6 +16,9 @@ class DRONEPROTO_API URaidSessionSubsystem : public UGameInstanceSubsystem
 
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+
+	void SetActiveLobbyWidget(URaidLobbyWidget* InWidget);
+	void ClearActiveLobbyWidget(URaidLobbyWidget* InWidget);
 
 	UFUNCTION(BlueprintCallable, Category="Raid")
 	void RequestRaidEntry(const FString& SlotId);
@@ -51,6 +56,7 @@ public:
 	bool IsMatchmakingRetryActiveForTest() const { return bMatchmakingRetryActive; }
 	FRaidAssignmentResult GetLastAssignmentResultForTest() const { return LastAssignmentResult; }
 	bool WasTravelRequestedForTest() const { return bTravelRequestedForTest; }
+	int32 GetTravelRequestCountForTest() const { return TravelRequestCountForTest; }
 	void ResetTravelRequestedForTest();
 	void RetryRaidEntryForTest();
 	void ExpireMatchmakingWaitForTest();
@@ -69,6 +75,9 @@ private:
 	UPROPERTY()
 	TObjectPtr<UUserWidget> ActiveLoadFailedWidget;
 
+	UPROPERTY()
+	TObjectPtr<URaidLobbyWidget> ActiveLobbyWidget;
+
 	FTimerHandle MatchmakingRetryTimerHandle;
 	FString PendingRaidEntrySlotId;
 	double MatchmakingWaitStartTimeSeconds = 0.0;
@@ -81,6 +90,7 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
 	bool bSuppressTravelForTest = false;
 	bool bTravelRequestedForTest = false;
+	int32 TravelRequestCountForTest = 0;
 #endif
 
 	UUserWidget* CreateAndShowPopup(TSubclassOf<UUserWidget> WidgetClass);

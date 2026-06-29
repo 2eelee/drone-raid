@@ -3,6 +3,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "LocalAssignment.h"
+#include "RaidLobbyWidget.h"
 
 namespace
 {
@@ -27,6 +28,8 @@ const TCHAR* ToRaidFailReasonText(ERaidEntryFailReason Reason)
 {
 	switch (Reason)
 	{
+	case ERaidEntryFailReason::None:
+		return TEXT("None");
 	case ERaidEntryFailReason::ServerListFailed:
 		return TEXT("ServerListFailed");
 	case ERaidEntryFailReason::NoServerAvailable:
@@ -48,6 +51,19 @@ void URaidSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 	Assignment = NewObject<ULocalAssignment>(this);
+}
+
+void URaidSessionSubsystem::SetActiveLobbyWidget(URaidLobbyWidget* InWidget)
+{
+	ActiveLobbyWidget = InWidget;
+}
+
+void URaidSessionSubsystem::ClearActiveLobbyWidget(URaidLobbyWidget* InWidget)
+{
+	if (ActiveLobbyWidget == InWidget)
+	{
+		ActiveLobbyWidget = nullptr;
+	}
 }
 
 void URaidSessionSubsystem::RequestRaidEntry(const FString& SlotId)
@@ -109,6 +125,10 @@ void URaidSessionSubsystem::EvaluateRaidEntry(bool bIsRetry)
 	case ERaidAssignmentResultType::Success:
 		StopMatchmakingRetry();
 		HideEntryPopups();
+		if (ActiveLobbyWidget)
+		{
+			ActiveLobbyWidget->ShowLoading();
+		}
 		TravelToRaidEndpoint(Result);
 		break;
 
@@ -123,6 +143,11 @@ void URaidSessionSubsystem::EvaluateRaidEntry(bool bIsRetry)
 
 	case ERaidAssignmentResultType::Canceled:
 		StopMatchmakingRetry();
+		HideEntryPopups();
+		if (ActiveLobbyWidget)
+		{
+			ActiveLobbyWidget->ShowMainLobby();
+		}
 		break;
 
 	default:
@@ -210,6 +235,7 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 
 #if WITH_DEV_AUTOMATION_TESTS
 	bTravelRequestedForTest = true;
+	++TravelRequestCountForTest;
 	if (bSuppressTravelForTest)
 	{
 		return;
@@ -296,18 +322,36 @@ UUserWidget* URaidSessionSubsystem::CreateAndShowPopup(TSubclassOf<UUserWidget> 
 void URaidSessionSubsystem::ShowMatchmakingWait()
 {
 	HideEntryPopups();
+	if (ActiveLobbyWidget)
+	{
+		ActiveLobbyWidget->ShowWaitingPopup();
+		return;
+	}
+
 	ActiveMatchmakingWidget = CreateAndShowPopup(MatchmakingWaitWidgetClass);
 }
 
 void URaidSessionSubsystem::ShowNoServer()
 {
 	HideEntryPopups();
+	if (ActiveLobbyWidget)
+	{
+		ActiveLobbyWidget->ShowNoServerPopup();
+		return;
+	}
+
 	ActiveNoServerWidget = CreateAndShowPopup(NoServerWidgetClass);
 }
 
 void URaidSessionSubsystem::ShowLoadFailed()
 {
 	HideEntryPopups();
+	if (ActiveLobbyWidget)
+	{
+		ActiveLobbyWidget->ShowNoServerPopup();
+		return;
+	}
+
 	ActiveLoadFailedWidget = CreateAndShowPopup(LoadFailedWidgetClass);
 }
 
@@ -341,12 +385,9 @@ void URaidSessionSubsystem::CancelMatchmaking()
 		*PendingRaidEntrySlotId);
 
 	HideEntryPopups();
-
-	UGameInstance* GameInstance = GetGameInstance();
-	UWorld* World = GameInstance ? GameInstance->GetWorld() : nullptr;
-	if (World)
+	if (ActiveLobbyWidget)
 	{
-		UGameplayStatics::OpenLevel(World, FName(TEXT("LobbyMap")));
+		ActiveLobbyWidget->ShowMainLobby();
 	}
 }
 
@@ -364,6 +405,7 @@ void URaidSessionSubsystem::SetSuppressTravelForTest(bool bInSuppressTravel)
 void URaidSessionSubsystem::ResetTravelRequestedForTest()
 {
 	bTravelRequestedForTest = false;
+	TravelRequestCountForTest = 0;
 }
 
 void URaidSessionSubsystem::RetryRaidEntryForTest()

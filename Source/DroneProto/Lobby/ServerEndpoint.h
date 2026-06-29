@@ -6,6 +6,7 @@
 UENUM(BlueprintType)
 enum class ERaidEntryFailReason : uint8
 {
+	None,
 	ServerListFailed,
 	NoServerAvailable,
 	MapLoadFailed,
@@ -71,7 +72,7 @@ struct DRONEPROTO_API FRaidAssignmentResult
 	FServerEndpoint Endpoint;
 
 	UPROPERTY(BlueprintReadOnly)
-	ERaidEntryFailReason FailReason = ERaidEntryFailReason::NoServerAvailable;
+	ERaidEntryFailReason FailReason = ERaidEntryFailReason::None;
 
 	UPROPERTY(BlueprintReadOnly)
 	FName SelectedSlotId = NAME_None;
@@ -84,6 +85,7 @@ struct DRONEPROTO_API FRaidAssignmentResult
 		FRaidAssignmentResult Out;
 		Out.Result = ERaidAssignmentResultType::Success;
 		Out.Endpoint = Candidate.Endpoint;
+		Out.FailReason = ERaidEntryFailReason::None;
 		Out.SelectedSlotId = Candidate.Endpoint.SlotId.IsEmpty()
 			? NAME_None
 			: FName(*Candidate.Endpoint.SlotId);
