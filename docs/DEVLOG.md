@@ -3,6 +3,61 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-30 — Drone Report 후 메인 로비 복귀
+
+### 문제
+
+LobbyMap에서 레이드에 입장해 TestMap 전투와 DroneReport 표시까지 이어지는 경로는 연결됐지만, Report 화면에서 사용자가 직접 메인 로비로 돌아가는 C++ 부모 위젯 경로가 없었다.
+
+- `UDroneReportWidget`은 Report 데이터 표시와 텍스트 갱신을 담당하고 있었지만, `WBP_DroneReport` 안의 로비 복귀 버튼을 받을 `BindWidgetOptional` 경로가 없었다.
+- Report 후 로비 복귀는 gameplay state를 다시 정리하는 기능이 아니라, 이미 RaidEnd/Death/Logout 경로에서 정리된 뒤 local client가 LobbyMap으로 나가는 UX여야 했다.
+- 버튼 연타로 travel 요청이 중복 발생하지 않도록 C++ guard가 필요했다.
+- Dedicated server나 non-local controller에서 UI travel이 실행되면 안 됐다.
+- 이 작업은 Report 점수/등급/보너스 공식, RaidEnd/Death/Logout 반환, RaidEntry 정책, 전투/부품/Dodge/BossAttack 로직을 바꾸면 안 됐다.
+
+### 수정
+
+- `UDroneReportWidget` C++ 부모에 `ReturnToLobbyButton`을 `BindWidgetOptional`로 추가했다.
+- `NativeConstruct()`에서 `ReturnToLobbyButton`이 있으면 `AddUniqueDynamic`으로 클릭 이벤트를 바인딩하고, 없으면 `[DR_SUMMARY] ReportReturnToLobbyButtonMissing` 로그를 남기도록 했다.
+- 버튼 클릭은 `RequestReturnToLobby()`로 모아 처리하고, 첫 클릭 이후 `bReturnToLobbyRequested` guard와 버튼 비활성화로 중복 travel 요청을 막았다.
+- owning local player UI에서만 LobbyMap으로 `OpenLevel`을 호출하며, target은 `LobbyMap`으로 고정했다.
+- invalid world, dedicated server, non-local controller에서는 travel하지 않고 ignored 로그를 남기도록 했다.
+- 자동화 테스트에서는 실제 map travel을 수행하지 않도록 `WITH_DEV_AUTOMATION_TESTS` 전용 suppress hook과 request count를 추가했다.
+- `WBP_DroneReport` 에디터 자산에는 `ReturnToLobbyButton` 배치/이름 지정 변경을 별도 자산 변경으로 반영했다.
+
+### 검증
+
+- TDD red 확인: `DroneProto.D11.DroneReport.ReturnToLobbyGuard` 테스트를 먼저 추가한 뒤, `SetSuppressReturnToLobbyTravelForTest`, `RequestReturnToLobby`, `GetReturnToLobbyTravelRequestCountForTest` 누락 컴파일 에러를 확인했다.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto` 성공, 40 tests found, all Success, exit code 0.
+- 신규 테스트 `DroneProto.D11.DroneReport.ReturnToLobbyGuard` 성공.
+- source-marker 테스트에 `ReturnToLobbyButton`, `ReportReturnToLobbyClicked`, `ReportReturnToLobbyTravel Target=LobbyMap`, `ReportReturnToLobbyIgnored Reason=AlreadyRequested`, `ReportReturnToLobbyButtonMissing` 확인을 추가했다.
+- `git diff --check -- Source/DroneProto/Raid/DroneReportWidget.h Source/DroneProto/Raid/DroneReportWidget.cpp Source/DroneProto/Tests/DronePartInventoryTests.cpp` 성공. LF/CRLF warning 외 whitespace error 없음.
+- 전체 자동화 로그에는 UE 초기화 단계의 `LogAutomationTest: Error: Condition failed` 4줄이 남지만, automation queue는 모두 `Result={Success}`와 `TEST COMPLETE. EXIT CODE: 0`으로 종료됐다.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] ReportWidgetShown`
+- `[DR_SUMMARY] ReportReturnToLobbyButtonMissing`
+- `[DR_SUMMARY] ReportReturnToLobbyClicked`
+- `[DR_SUMMARY] ReportReturnToLobbyTravel Target=LobbyMap`
+- `[DR_SUMMARY] ReportReturnToLobbyIgnored Reason=AlreadyRequested`
+- `[DR_SUMMARY] LobbyWidgetShown`
+
+### PIE 판정
+
+- Report 화면에서 `ReturnToLobbyButton`을 누르면 `ReportReturnToLobbyClicked` 다음 `ReportReturnToLobbyTravel Target=LobbyMap`이 떠야 한다.
+- travel 이후 LobbyMap에서 `LobbyWidgetShown`이 다시 떠야 한다.
+- 버튼을 연타해도 travel 로그가 2회 반복되면 안 되며, 두 번째 요청은 `ReportReturnToLobbyIgnored Reason=AlreadyRequested`로 남아야 한다.
+- `ReportReturnToLobbyButtonMissing`이 뜨면 `WBP_DroneReport` 안에 `ReturnToLobbyButton` 이름의 버튼이 없거나 parent binding이 맞지 않는 상태다.
+
+### SpecDecisionNeeded
+
+- Report 화면의 최종 버튼 문구, 배치, 애니메이션, 검정 화면 전환 연출은 UMG/에디터 작업으로 남긴다.
+- 실제 서비스 구조에서 Report 확인 후 로비 복귀가 클라이언트 단독 map travel인지, backend session leave/party state 정리와 함께 가야 하는지는 별도 서버/세션 설계 결정이 필요하다.
+- LobbyMap 복귀 후 파티 유지, 재매칭, 결과 보상 수령 상태를 어떻게 보존할지는 아직 기획 결정 대상이다.
+
+---
 ## 2026-06-29 — 레이드 로비 UI 표시와 상태 전환 검증
 
 ### 문제
