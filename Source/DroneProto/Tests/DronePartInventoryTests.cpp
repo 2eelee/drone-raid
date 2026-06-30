@@ -176,7 +176,8 @@ FRaidServerCandidate MakeRaidServerCandidate(
 	int32 MaxPlayers = 16,
 	bool bIsOnline = true,
 	bool bAcceptsPlayers = true,
-	const TCHAR* TravelTarget = TEXT("TestMap"))
+	const TCHAR* TravelTarget = TEXT("TestMap"),
+	ERaidServerState ServerState = ERaidServerState::Unknown)
 {
 	FRaidServerCandidate Candidate;
 	Candidate.Endpoint.SlotId = SlotId;
@@ -186,6 +187,18 @@ FRaidServerCandidate MakeRaidServerCandidate(
 	Candidate.MaxPlayers = MaxPlayers;
 	Candidate.bIsOnline = bIsOnline;
 	Candidate.bAcceptsPlayers = bAcceptsPlayers;
+	Candidate.Availability.SlotId = SlotId;
+	Candidate.Availability.CurrentPlayers = CurrentPlayers;
+	Candidate.Availability.MaxPlayers = MaxPlayers;
+	Candidate.Availability.bAcceptsPlayers = bAcceptsPlayers;
+	Candidate.Availability.ServerState = ServerState != ERaidServerState::Unknown
+		? ServerState
+		: (!bIsOnline
+			? ERaidServerState::Offline
+			: (!bAcceptsPlayers
+				? ERaidServerState::Unavailable
+				: (CurrentPlayers >= MaxPlayers ? ERaidServerState::Full : ERaidServerState::Online)));
+	Candidate.Availability.DebugReason = FString::Printf(TEXT("TestAvailability Slot=%s"), SlotId);
 	return Candidate;
 }
 
@@ -218,9 +231,12 @@ bool FRaidEntryLocalAssignmentDefaultsTest::RunTest(const FString& Parameters)
 	for (const FRaidServerCandidate& Candidate : Candidates)
 	{
 		TestEqual(TEXT("default max players is 16"), Candidate.MaxPlayers, 16);
+		TestEqual(TEXT("default availability max players is 16"), Candidate.Availability.MaxPlayers, 16);
 		TestEqual(TEXT("default travel target points at the current raid test map"), Candidate.Endpoint.TravelTarget, FString(TEXT("TestMap")));
 		TestTrue(TEXT("default candidate is online"), Candidate.bIsOnline);
+		TestEqual(TEXT("default availability state is online"), Candidate.Availability.ServerState, ERaidServerState::Online);
 		TestTrue(TEXT("default candidate accepts players"), Candidate.bAcceptsPlayers);
+		TestTrue(TEXT("default availability accepts players"), Candidate.Availability.bAcceptsPlayers);
 	}
 
 	return true;
@@ -253,6 +269,7 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("available A succeeds"), Result.Result, ERaidAssignmentResultType::Success);
 	TestEqual(TEXT("available A is selected"), Result.SelectedSlotId, FName(TEXT("A")));
+	TestEqual(TEXT("available A records selected server state"), Result.Availability.ServerState, ERaidServerState::Online);
 	TestEqual(TEXT("successful assignment has neutral fail reason"), Result.FailReason, ERaidEntryFailReason::None);
 	TestEqual(TEXT("successful assignment points at TestMap"), Result.Endpoint.TravelTarget, FString(TEXT("TestMap")));
 
@@ -263,6 +280,7 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("full A skips to B"), Result.Result, ERaidAssignmentResultType::Success);
 	TestEqual(TEXT("B is selected when A is full"), Result.SelectedSlotId, FName(TEXT("B")));
+	TestEqual(TEXT("B selection records online server state"), Result.Availability.ServerState, ERaidServerState::Online);
 	TestEqual(TEXT("successful fallback assignment has neutral fail reason"), Result.FailReason, ERaidEntryFailReason::None);
 
 	Result = ResolveWithCandidates({
@@ -280,6 +298,7 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("all full returns waiting"), Result.Result, ERaidAssignmentResultType::Waiting);
 	TestEqual(TEXT("all full preserves no-server reason"), Result.FailReason, ERaidEntryFailReason::NoServerAvailable);
+	TestTrue(TEXT("full slot remains enabled so request can enter waiting"), Assignment->IsSlotEnabled(TEXT("A")));
 
 	Result = ResolveWithCandidates({
 		MakeRaidServerCandidate(TEXT("A"), 0, 16, false),
@@ -288,6 +307,16 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("offline and unavailable candidates are skipped"), Result.Result, ERaidAssignmentResultType::Success);
 	TestEqual(TEXT("C is selected after offline and unavailable candidates"), Result.SelectedSlotId, FName(TEXT("C")));
+	TestEqual(TEXT("C selection records online server state"), Result.Availability.ServerState, ERaidServerState::Online);
+	TestFalse(TEXT("offline slot is disabled for direct entry"), Assignment->IsSlotEnabled(TEXT("A")));
+
+	Result = ResolveWithCandidates({
+		MakeRaidServerCandidate(TEXT("A"), 0, 16, false, true, TEXT("TestMap"), ERaidServerState::Offline),
+		MakeRaidServerCandidate(TEXT("B"), 0, 16, true, false, TEXT("TestMap"), ERaidServerState::Unavailable),
+		MakeRaidServerCandidate(TEXT("C"), 0, 16, true, true, TEXT("TestMap"), ERaidServerState::Error),
+	});
+	TestEqual(TEXT("all offline unavailable or error returns waiting"), Result.Result, ERaidAssignmentResultType::Waiting);
+	TestEqual(TEXT("all unavailable preserves no-server reason"), Result.FailReason, ERaidEntryFailReason::NoServerAvailable);
 
 	Result = ResolveWithCandidates({
 		MakeRaidServerCandidate(TEXT("A"), 0, 16, true, true, TEXT("")),
@@ -296,6 +325,7 @@ bool FRaidEntryLocalAssignmentPriorityTest::RunTest(const FString& Parameters)
 	});
 	TestEqual(TEXT("invalid travel target fails immediately"), Result.Result, ERaidAssignmentResultType::Failed);
 	TestEqual(TEXT("invalid travel target preserves map-load fail reason"), Result.FailReason, ERaidEntryFailReason::MapLoadFailed);
+	TestEqual(TEXT("invalid travel target records candidate server state"), Result.Availability.ServerState, ERaidServerState::Online);
 
 	Assignment->SetCandidatesForTest({
 		MakeRaidServerCandidate(TEXT("A"), 0),
@@ -3264,6 +3294,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	FString DroneSource;
 	FString RaidBossSource;
 	FString RaidSessionSubsystemSource;
+	FString LocalAssignmentSource;
+	FString ServerEndpointSource;
 	FString LobbyPlayerControllerHeaderSource;
 	FString LobbyPlayerControllerSource;
 	FString RaidLobbyWidgetSource;
@@ -3276,6 +3308,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		|| !LoadSourceFile(TEXT("Drone.cpp"), DroneSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidBoss.cpp"), RaidBossSource)
 		|| !LoadSourceFile(TEXT("Lobby/RaidSessionSubsystem.cpp"), RaidSessionSubsystemSource)
+		|| !LoadSourceFile(TEXT("Lobby/LocalAssignment.cpp"), LocalAssignmentSource)
+		|| !LoadSourceFile(TEXT("Lobby/ServerEndpoint.h"), ServerEndpointSource)
 		|| !LoadSourceFile(TEXT("Lobby/LobbyPlayerController.h"), LobbyPlayerControllerHeaderSource)
 		|| !LoadSourceFile(TEXT("Lobby/LobbyPlayerController.cpp"), LobbyPlayerControllerSource)
 		|| !LoadSourceFile(TEXT("Lobby/RaidLobbyWidget.cpp"), RaidLobbyWidgetSource))
@@ -3331,6 +3365,14 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryRequest")));
 	TestTrue(TEXT("raid assignment result summary log marker exists"),
 		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidAssignmentResult")));
+	TestTrue(TEXT("raid server state summary log marker exists"),
+		LocalAssignmentSource.Contains(TEXT("[DR_SUMMARY] RaidServerState")));
+	TestTrue(TEXT("raid assignment result records server state"),
+		RaidSessionSubsystemSource.Contains(TEXT("ServerState=%s")));
+	TestTrue(TEXT("raid assignment result records local prototype authority"),
+		RaidSessionSubsystemSource.Contains(TEXT("AuthorityModel=LocalPrototype")));
+	TestTrue(TEXT("raid server availability type exists outside RaidGameState"),
+		ServerEndpointSource.Contains(TEXT("FRaidServerAvailability")));
 	TestTrue(TEXT("raid entry travel summary log marker exists"),
 		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryTravel")));
 	TestTrue(TEXT("raid entry wait summary log marker exists"),

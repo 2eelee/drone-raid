@@ -279,8 +279,10 @@ void URaidSessionSubsystem::RecordAssignmentResult(const FRaidAssignmentResult& 
 	LastAssignmentResult = Result;
 
 	const FString SelectedSlot = Result.SelectedSlotId.ToString();
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidAssignmentResult Result=%s Slot=%s FailReason=%s AuthorityModel=LocalPrototype DebugReason=%s"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidAssignmentResult Result=%s Slot=%s ServerState=%s AuthorityModel=LocalPrototype SelectedSlot=%s FailReason=%s DebugReason=%s"),
 		ToRaidAssignmentResultText(Result.Result),
+		*SelectedSlot,
+		ToRaidServerStateText(Result.Availability.ServerState),
 		*SelectedSlot,
 		ToRaidFailReasonText(Result.FailReason),
 		*Result.DebugReason);

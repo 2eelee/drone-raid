@@ -27,4 +27,9 @@ private:
 	TArray<FRaidServerCandidate> Candidates;
 
 	void ResetDefaultCandidates();
+	FRaidServerCandidate NormalizeCandidateAvailability(const FRaidServerCandidate& Candidate) const;
+	FRaidServerAvailability EvaluateAvailability(const FRaidServerCandidate& Candidate) const;
+	FRaidAssignmentResult SelectCandidateByPriority(const FString& RequestedSlot) const;
+	bool CanAttemptTravel(const FRaidServerCandidate& Candidate) const;
+	void LogServerAvailability(const FRaidServerAvailability& Availability) const;
 };

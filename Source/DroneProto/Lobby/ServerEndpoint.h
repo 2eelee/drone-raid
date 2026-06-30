@@ -23,6 +23,41 @@ enum class ERaidAssignmentResultType : uint8
 	Canceled,
 };
 
+UENUM(BlueprintType)
+enum class ERaidServerState : uint8
+{
+	Unknown,
+	Online,
+	Offline,
+	Full,
+	Unavailable,
+	Loading,
+	Error,
+};
+
+inline const TCHAR* ToRaidServerStateText(ERaidServerState State)
+{
+	switch (State)
+	{
+	case ERaidServerState::Unknown:
+		return TEXT("Unknown");
+	case ERaidServerState::Online:
+		return TEXT("Online");
+	case ERaidServerState::Offline:
+		return TEXT("Offline");
+	case ERaidServerState::Full:
+		return TEXT("Full");
+	case ERaidServerState::Unavailable:
+		return TEXT("Unavailable");
+	case ERaidServerState::Loading:
+		return TEXT("Loading");
+	case ERaidServerState::Error:
+		return TEXT("Error");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
 USTRUCT(BlueprintType)
 struct DRONEPROTO_API FServerEndpoint
 {
@@ -40,12 +75,12 @@ struct DRONEPROTO_API FServerEndpoint
 };
 
 USTRUCT(BlueprintType)
-struct DRONEPROTO_API FRaidServerCandidate
+struct DRONEPROTO_API FRaidServerAvailability
 {
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly)
-	FServerEndpoint Endpoint;
+	FString SlotId;
 
 	UPROPERTY(BlueprintReadOnly)
 	int32 CurrentPlayers = 0;
@@ -54,8 +89,39 @@ struct DRONEPROTO_API FRaidServerCandidate
 	int32 MaxPlayers = 16;
 
 	UPROPERTY(BlueprintReadOnly)
+	ERaidServerState ServerState = ERaidServerState::Unknown;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bAcceptsPlayers = true;
+
+	UPROPERTY(BlueprintReadOnly)
+	FString DebugReason;
+};
+
+USTRUCT(BlueprintType)
+struct DRONEPROTO_API FRaidServerCandidate
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	FServerEndpoint Endpoint;
+
+	UPROPERTY(BlueprintReadOnly)
+	FRaidServerAvailability Availability;
+
+	// Legacy compatibility mirrors. New assignment evaluation should read Availability.
+	UPROPERTY(BlueprintReadOnly)
+	int32 CurrentPlayers = 0;
+
+	// Legacy compatibility mirror. New assignment evaluation should read Availability.
+	UPROPERTY(BlueprintReadOnly)
+	int32 MaxPlayers = 16;
+
+	// Legacy compatibility mirror. New assignment evaluation should read Availability.ServerState.
+	UPROPERTY(BlueprintReadOnly)
 	bool bIsOnline = true;
 
+	// Legacy compatibility mirror. New assignment evaluation should read Availability.bAcceptsPlayers.
 	UPROPERTY(BlueprintReadOnly)
 	bool bAcceptsPlayers = true;
 };
@@ -72,6 +138,9 @@ struct DRONEPROTO_API FRaidAssignmentResult
 	FServerEndpoint Endpoint;
 
 	UPROPERTY(BlueprintReadOnly)
+	FRaidServerAvailability Availability;
+
+	UPROPERTY(BlueprintReadOnly)
 	ERaidEntryFailReason FailReason = ERaidEntryFailReason::None;
 
 	UPROPERTY(BlueprintReadOnly)
@@ -85,6 +154,11 @@ struct DRONEPROTO_API FRaidAssignmentResult
 		FRaidAssignmentResult Out;
 		Out.Result = ERaidAssignmentResultType::Success;
 		Out.Endpoint = Candidate.Endpoint;
+		Out.Availability = Candidate.Availability;
+		if (Out.Availability.SlotId.IsEmpty())
+		{
+			Out.Availability.SlotId = Candidate.Endpoint.SlotId;
+		}
 		Out.FailReason = ERaidEntryFailReason::None;
 		Out.SelectedSlotId = Candidate.Endpoint.SlotId.IsEmpty()
 			? NAME_None
@@ -105,11 +179,13 @@ struct DRONEPROTO_API FRaidAssignmentResult
 	static FRaidAssignmentResult Failed(
 		ERaidEntryFailReason InFailReason,
 		const FString& InDebugReason,
-		const FServerEndpoint& InEndpoint = FServerEndpoint{})
+		const FServerEndpoint& InEndpoint = FServerEndpoint{},
+		const FRaidServerAvailability& InAvailability = FRaidServerAvailability())
 	{
 		FRaidAssignmentResult Out;
 		Out.Result = ERaidAssignmentResultType::Failed;
 		Out.Endpoint = InEndpoint;
+		Out.Availability = InAvailability;
 		Out.FailReason = InFailReason;
 		Out.SelectedSlotId = InEndpoint.SlotId.IsEmpty() ? NAME_None : FName(*InEndpoint.SlotId);
 		Out.DebugReason = InDebugReason;
