@@ -3,6 +3,73 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-06-30 — POR-6 ServerState / raid instance availability 분리
+
+### 문제
+
+RaidEntry local prototype은 A/B/C 후보, 16인 정원, wait/retry/timeout/cancel 흐름까지 갖췄지만, raid instance 가용성 판단에 쓰는 값이 기존 `FRaidServerCandidate`의 `CurrentPlayers`, `MaxPlayers`, `bIsOnline`, `bAcceptsPlayers` mirror 필드에 섞여 있었다.
+
+- `RaidState`는 TestMap 내부의 `Waiting / Drafting / Battle / End` 진행 상태인데, pre-travel server availability와 이름/책임이 섞일 위험이 있었다.
+- `RaidGameState::CurrentPlayers`는 이미 raid instance에 들어간 뒤의 gameplay state이므로, Lobby/RaidEntry 단계의 capacity source로 쓰면 안 됐다.
+- 현재 구현은 실제 backend가 아니라 local assignment prototype이므로, 나중에 backend/server-authoritative availability provider로 바꿔 끼울 수 있는 모델과 평가 함수 경계가 필요했다.
+- 기존 RaidEntry 동작인 A -> B -> C 우선순위, `MaxPlayers=16`, `TestMap`, 1초 retry, 10초 timeout, cancel, duplicate request guard는 유지해야 했다.
+
+### 수정
+
+- Lobby 전용 `ERaidServerState`를 추가했다: `Unknown / Online / Offline / Full / Unavailable / Loading / Error`.
+- `FRaidServerAvailability`를 추가해 `SlotId`, `CurrentPlayers`, `MaxPlayers`, `ServerState`, `bAcceptsPlayers`, `DebugReason`을 endpoint와 분리해 표현하게 했다.
+- `FRaidServerCandidate`는 `Endpoint`와 `Availability`를 함께 들고, 기존 `CurrentPlayers / MaxPlayers / bIsOnline / bAcceptsPlayers` 필드는 호환 mirror로 유지했다.
+- `FRaidAssignmentResult`에도 선택된 후보의 `Availability`를 보존해 `RaidAssignmentResult` 로그와 테스트에서 `ServerState`를 확인할 수 있게 했다.
+- `ULocalAssignment` 안에서 후보 목록 생성, availability 정규화/평가, A -> B -> C 우선순위 선택, travel 가능 판정을 helper로 분리했다.
+- success 조건을 `ServerState == Online`, `bAcceptsPlayers == true`, `CurrentPlayers < MaxPlayers`, valid `TravelTarget`으로 고정했다.
+- `Full`, `Offline`, `Unavailable`, `Error`, `Loading`, `Unknown` 후보는 assignment 선택에서 skip한다.
+- all full, all offline/unavailable/error 상태는 기존 no-server popup 흐름과 맞춰 `Waiting` + `NoServerAvailable`로 유지했다.
+- full slot은 UI request가 waiting 상태로 진입할 수 있도록 `IsSlotEnabled()`에서는 허용하고, offline/unavailable/error는 직접 entry disabled로 남겼다.
+- invalid `TravelTarget`은 기존 정책대로 `MapLoadFailed`로 실패 처리한다.
+- `[DR_SUMMARY] RaidServerState` 로그를 추가하고, `RaidAssignmentResult` 로그에 `ServerState`와 `AuthorityModel=LocalPrototype`을 남겼다.
+- `RaidGameMode`, `RaidGameState`, gameplay RPC, replicated 변수, 전투/부품/반환/Report/Dodge/BossAttack 경로는 수정하지 않았다.
+
+### 검증
+
+- TDD red 확인: `ERaidServerState`, `FRaidServerAvailability`, `FRaidServerCandidate::Availability`, `FRaidAssignmentResult::Availability`를 기대하는 RaidEntry 테스트를 먼저 추가한 뒤 컴파일 실패를 확인했다.
+- 회귀 red 확인: full slot이 disabled가 되어 waiting 진입이 막히는 `IsSlotEnabled` 회귀 테스트를 추가하고, `full slot remains enabled so request can enter waiting` 실패를 확인한 뒤 수정했다.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.RaidEntry` 성공, 5 tests found, 5 Success, exit code 0.
+- `Automation RunTests DroneProto` 성공, 40 tests found, exit code 0.
+- `git diff --check` 성공. LF/CRLF warning 외 whitespace error 없음.
+- 전체 자동화 로그에는 UE 초기화 단계의 `LogAutomationTest: Error: Condition failed` 4줄이 남을 수 있지만, automation queue는 `TEST COMPLETE. EXIT CODE: 0`으로 종료됐다.
+- Linear `POR-6`에 branch와 검증 결과를 코멘트로 남겼다.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] RaidEntryRequest`
+- `[DR_SUMMARY] RaidServerState`
+- `[DR_SUMMARY] RaidAssignmentResult`
+- `[DR_SUMMARY] RaidEntryWait`
+- `[DR_SUMMARY] RaidEntryRetry`
+- `[DR_SUMMARY] RaidEntryFail`
+- `[DR_SUMMARY] RaidEntryTravel`
+- `[DR_SUMMARY] RaidEntryCancel`
+- `[DR_SUMMARY] LobbyUIState State=Loading`
+- `[DR_SUMMARY] LobbyUIState State=Waiting`
+- `[DR_SUMMARY] LobbyUIState State=Main`
+
+### PIE 판정
+
+- 기본 성공 경로에서는 `RaidEntryRequest` 뒤 `RaidServerState Slot=A State=Online`, `RaidAssignmentResult Result=Success Slot=A ServerState=Online AuthorityModel=LocalPrototype`, `LobbyUIState State=Loading`, `RaidEntryTravel Slot=A Target=TestMap`이 이어져야 한다.
+- A가 full이면 `RaidServerState Slot=A State=Full` 뒤 B가 online일 때 `RaidAssignmentResult Result=Success Slot=B ServerState=Online`이 남아야 한다.
+- A offline, B unavailable, C online이면 A/B는 skip되고 C가 선택되어야 한다.
+- A/B/C가 모두 full이면 `RaidEntryWait`와 `LobbyUIState State=Waiting`이 남고, 즉시 `RaidEntryTravel`이 남으면 안 된다.
+- all offline/unavailable/error도 현재 no-server popup 흐름과 맞춰 waiting/fail 경로로 이어져야 하며, success travel이 발생하면 안 된다.
+- cancel 후에는 `RaidEntryCancel`과 `LobbyUIState State=Main`이 남고, TestMap 내부 `RaidState`는 바뀌면 안 된다.
+
+### SpecDecisionNeeded
+
+- 실제 backend/server-authoritative availability provider의 소유 위치, 갱신 주기, 실패 원인 분류는 아직 미정이다.
+- `ERaidServerState::Loading`과 `Unknown`을 UI에서 waiting으로 보여줄지 no-server 계열로 보여줄지는 최종 UX 결정이 필요하다.
+- B/C의 실제 dedicated/listen endpoint와 운영 방식은 local prototype 밖의 결정이다.
+
+---
 ## 2026-06-30 — Drone Report 후 메인 로비 복귀
 
 ### 문제
