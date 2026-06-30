@@ -1,6 +1,29 @@
 #include "DroneReportWidget.h"
 
+#include "Components/Button.h"
 #include "Components/TextBlock.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+
+namespace
+{
+constexpr const TCHAR* ReturnToLobbyMapName = TEXT("LobbyMap");
+}
+
+void UDroneReportWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	if (ReturnToLobbyButton)
+	{
+		ReturnToLobbyButton->OnClicked.AddUniqueDynamic(this, &UDroneReportWidget::HandleReturnToLobbyClicked);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyButtonMissing Widget=%s"),
+			*GetName());
+	}
+}
 
 void UDroneReportWidget::RefreshReport(const FDroneReportData& InReportData)
 {
@@ -23,6 +46,63 @@ void UDroneReportWidget::RefreshReport(const FDroneReportData& InReportData)
 	SetOptionalText(GradeText, CachedGradeText);
 	SetOptionalText(ResultTitleText, FText::FromString(TEXT("Drone Report")));
 	SetOptionalText(ReportTitleText, FText::FromString(TEXT("Drone Report")));
+}
+
+void UDroneReportWidget::RequestReturnToLobby()
+{
+	if (bReturnToLobbyRequested)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyIgnored Reason=AlreadyRequested Widget=%s"),
+			*GetName());
+		return;
+	}
+
+	bReturnToLobbyRequested = true;
+
+	if (ReturnToLobbyButton)
+	{
+		ReturnToLobbyButton->SetIsEnabled(false);
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyClicked Widget=%s"),
+		*GetName());
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bSuppressReturnToLobbyTravelForTest)
+	{
+		++ReturnToLobbyTravelRequestCountForTest;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyTravel Target=LobbyMap Widget=%s Mode=SuppressedForAutomation"),
+			*GetName());
+		return;
+	}
+#endif
+
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyIgnored Reason=InvalidWorldOrDedicatedServer Widget=%s"),
+			*GetName());
+		return;
+	}
+
+	APlayerController* OwningPC = GetOwningPlayer();
+	if (!OwningPC || !OwningPC->IsLocalController())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyIgnored Reason=NotOwningLocalController Widget=%s PC=%s"),
+			*GetName(),
+			*GetNameSafe(OwningPC));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyTravel Target=LobbyMap Widget=%s Method=OpenLevel"),
+		*GetName());
+
+	UGameplayStatics::OpenLevel(World, FName(ReturnToLobbyMapName));
+}
+
+void UDroneReportWidget::HandleReturnToLobbyClicked()
+{
+	RequestReturnToLobby();
 }
 
 FText UDroneReportWidget::GetSurvivalTimeText() const

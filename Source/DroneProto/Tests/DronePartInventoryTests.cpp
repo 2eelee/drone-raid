@@ -762,6 +762,31 @@ bool FDroneReportWidgetTextTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportWidgetReturnToLobbyTest,
+	"DroneProto.D11.DroneReport.ReturnToLobbyGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportWidgetReturnToLobbyTest::RunTest(const FString& Parameters)
+{
+	UDroneReportWidget* Widget = NewObject<UDroneReportWidget>();
+	TestNotNull(TEXT("drone report widget is created"), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+
+	Widget->SetSuppressReturnToLobbyTravelForTest(true);
+
+	Widget->RequestReturnToLobby();
+	TestEqual(TEXT("first return-to-lobby request records one travel"), Widget->GetReturnToLobbyTravelRequestCountForTest(), 1);
+
+	Widget->RequestReturnToLobby();
+	TestEqual(TEXT("duplicate return-to-lobby request is ignored"), Widget->GetReturnToLobbyTravelRequestCountForTest(), 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartInventoryStockTest,
 	"DroneProto.D4.DronePartInventory.StockConsumeReturn",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -3462,6 +3487,18 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetMissingClass Player=")));
 	TestTrue(TEXT("report widget hidden summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetHidden Player=")));
+	TestTrue(TEXT("report return-to-lobby button optional binding exists"),
+		DroneReportWidgetSource.Contains(TEXT("ReturnToLobbyButton")));
+	TestTrue(TEXT("report return-to-lobby click summary log marker exists"),
+		DroneReportWidgetSource.Contains(TEXT("[DR_SUMMARY] ReportReturnToLobbyClicked")));
+	TestTrue(TEXT("report return-to-lobby travel summary log marker exists"),
+		DroneReportWidgetSource.Contains(TEXT("[DR_SUMMARY] ReportReturnToLobbyTravel Target=LobbyMap")));
+	TestTrue(TEXT("report return-to-lobby duplicate guard marker exists"),
+		DroneReportWidgetSource.Contains(TEXT("[DR_SUMMARY] ReportReturnToLobbyIgnored Reason=AlreadyRequested")));
+	TestTrue(TEXT("report return-to-lobby missing button marker exists"),
+		DroneReportWidgetSource.Contains(TEXT("[DR_SUMMARY] ReportReturnToLobbyButtonMissing")));
+	TestTrue(TEXT("report return-to-lobby target stays LobbyMap"),
+		DroneReportWidgetSource.Contains(TEXT("LobbyMap")));
 	TestFalse(TEXT("report widget does not expose ReportScore getter"),
 		DroneReportWidgetSource.Contains(TEXT("GetReportScoreText")));
 	TestTrue(TEXT("return after report summary log marker exists"),
