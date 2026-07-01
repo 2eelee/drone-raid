@@ -3,6 +3,54 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-07-01 - D18.5 Fixed Boss-Facing Camera 화면 기준 입력 변환
+
+### 문제
+
+Fixed Boss-Facing Quarter View Camera와 RaidBoss 시각화/타겟 판정은 정상화되었지만, PIE 수동 확인에서 조작감 문제가 남았다.
+
+- 카메라는 보스를 바라보며 플레이어 위치에 따라 360도 회전한다.
+- 기존 이동/회피 입력은 월드 기준 축 또는 Controller yaw 기준 재해석에 묶여 있어, 카메라가 돌 때 방향키 체감이 계속 바뀌었다.
+- 사용자는 "월드 기준 방향은 일정하지만 카메라가 돌아서 헷갈린다"고 확인했다.
+- 이동/회피 서버 권한 구조는 유지하면서, 로컬 클라이언트의 입력 요청만 화면/카메라 기준으로 변환해야 했다.
+
+### 수정
+
+- `ADrone::ConvertScreenInputToWorldMoveDirection()`을 추가해 RawAxis를 현재 카메라 forward/right 기준 XY 평면 world direction으로 변환했다.
+- 입력 기준은 `RawAxis.X = 화면 오른쪽/왼쪽`, `RawAxis.Y = 화면 위/아래`로 고정하고, 대각선은 normalize한다.
+- `ADrone::Move()`는 로컬 입력 RawAxis를 `ConvertLocalScreenInputToWorldMoveDirection()`으로 변환한 뒤 기존 `Server_SetMoveInput` 경로로 전달한다.
+- `ADrone::Dodge()`는 마지막 이동 입력에서 변환/캐시된 world direction을 사용해 기존 `Server_RequestDodge` 경로로 전달한다.
+- 서버는 카메라 값을 신뢰하거나 복제하지 않고, 클라이언트가 요청한 world XY 벡터를 다시 clamp/normalize해서 최종 이동/회피 판정에만 사용한다.
+- 서버 이동/회피 적용부에서 `ControlRotation` 기반 재회전을 제거해, RPC로 들어온 world XY 요청 벡터가 한 번 더 회전하지 않도록 했다.
+- `[DR_SUMMARY] MoveInputConverted`와 `[DR_SUMMARY] DodgeInputConverted` 로그를 추가했다.
+- 입력 변환 로그는 RawAxis 변경 시 즉시 출력하고, 같은 키 유지 중 카메라 yaw 변화로 생기는 반복 로그는 1초 throttle로 제한했다.
+- `Move BossMinClamp` 반복 로그도 같은 플레이어/상황에서 1초 throttle로 줄였다.
+- D16/D17 테스트에 서버 move/dodge 입력이 Controller yaw와 독립적인 world XY 요청 벡터로 처리되는 회귀 테스트를 추가했다.
+- D18 테스트에 카메라 yaw 0/90/180/-90 기준 화면 입력 변환 순수 함수 테스트를 추가했다.
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D16.Drone` 성공, 3 tests found, 3 Success, exit code 0.
+- `Automation RunTests DroneProto.D17.Drone` 성공, 3 tests found, 3 Success, exit code 0.
+- `Automation RunTests DroneProto.D18.Drone` 성공, 6 tests found, 6 Success, exit code 0.
+- PIE 수동 검증에서 보스가 보이는 상태로 카메라는 보스를 계속 바라보고, 이동/회피 입력 체감은 화면 기준으로 통과 확인했다.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] MoveInputConverted`
+- `[DR_SUMMARY] DodgeInputConverted`
+- `[DR_SUMMARY] Camera BossFacing`
+- `[DR_SUMMARY] Move Accepted`
+- `[DR_SUMMARY] Dodge Accepted`
+- `[DR_SUMMARY] Move BossMinClamp`
+
+### SpecDecisionNeeded
+
+- 현재 C++ helper의 입력 규약은 `RawAxis.X = 화면 좌우`, `RawAxis.Y = 화면 상하`다. 추후 Enhanced Input asset의 Vector2D 축 매핑을 바꾸면 이 규약과 함께 확인해야 한다.
+- 화면공간 타겟 위치 보정은 여전히 C++ hook만 있고, 실제 UMG/uasset/umap/카메라 솔버 작업은 별도 범위로 남겨둔다.
+
+---
 ## 2026-07-01 — D15.5/D16/D17/D18 보스 텔레그래프, 이동/회피, 카메라/보스 시각화 정리
 
 ### 문제
