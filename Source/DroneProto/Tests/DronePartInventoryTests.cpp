@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "CoreGlobals.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 
@@ -11,6 +12,7 @@
 #include "Raid/DronePartReturnManager.h"
 #include "Raid/DroneReportWidget.h"
 #include "Raid/RaidBoss.h"
+#include "Raid/RaidBossAttackTelegraph.h"
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
@@ -19,7 +21,10 @@
 #include "Lobby/RaidSessionSubsystem.h"
 #include "Lobby/ServerEndpoint.h"
 
+#include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/DefaultPawn.h"
 #include "TimerManager.h"
 
@@ -168,6 +173,54 @@ bool SetPawnControllerForAutomationTest(APawn* Pawn, AController* Controller)
 
 	ControllerProperty->SetObjectPropertyValue_InContainer(Pawn, Controller);
 	return true;
+}
+
+void TickWorldForAutomationTest(UWorld* World, float DurationSeconds)
+{
+	if (!World || DurationSeconds <= 0.0f)
+	{
+		return;
+	}
+
+	++GFrameCounter;
+	World->GetTimerManager().Tick(0.0f);
+	++GFrameCounter;
+	World->GetTimerManager().Tick(DurationSeconds + 0.001f);
+}
+
+int32 CountBossTelegraphsForAutomationTest(UWorld* World)
+{
+	if (!World)
+	{
+		return 0;
+	}
+
+	int32 TelegraphCount = 0;
+	for (TActorIterator<ARaidBossAttackTelegraph> It(World); It; ++It)
+	{
+		if (*It && !It->IsActorBeingDestroyed())
+		{
+			TelegraphCount++;
+		}
+	}
+	return TelegraphCount;
+}
+
+ARaidBossAttackTelegraph* FindBossTelegraphForAutomationTest(UWorld* World)
+{
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<ARaidBossAttackTelegraph> It(World); It; ++It)
+	{
+		if (*It && !It->IsActorBeingDestroyed())
+		{
+			return *It;
+		}
+	}
+	return nullptr;
 }
 
 FRaidServerCandidate MakeRaidServerCandidate(
@@ -1953,15 +2006,21 @@ bool FDroneServerDodgeAuthorityTest::RunTest(const FString& Parameters)
 		!ValidLocationAfter.Equals(ValidLocationBefore, 0.1f));
 	TestTrue(TEXT("dodge does not enqueue normal server move input"),
 		Valid.Drone->GetLastServerMoveInputForTest().IsNearlyZero());
-	TestTrue(TEXT("dodge is excluded from Vector move distance until design confirms otherwise"),
-		FMath::IsNearlyZero(Valid.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
-	TestTrue(TEXT("dodge is excluded from Booster move distance until design confirms otherwise"),
-		FMath::IsNearlyZero(Valid.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("dodge adds actual distance to Vector move distance"),
+		Valid.Drone->GetVectorAccumulatedMoveDistanceForTest() > 0.0f);
+	TestTrue(TEXT("dodge adds actual distance to Booster move distance"),
+		Valid.Drone->GetBoosterAccumulatedMoveDistanceForTest() > 0.0f);
+	const float BossHPDuringDodgeAttack = Boss ? Boss->GetCurrentHP() : 0.0f;
+	Valid.Drone->RequestAttackBoss();
 	if (Boss)
 	{
+		TestEqual(TEXT("attack is blocked while dodge state is active"),
+			Boss->GetCurrentHP(),
+			BossHPDuringDodgeAttack);
+		TickWorldForAutomationTest(Valid.World, 0.30f);
 		const float BossHPBeforeAttack = Boss->GetCurrentHP();
 		Valid.Drone->RequestAttackBoss();
-		TestTrue(TEXT("attack remains available after a successful dodge"),
+		TestTrue(TEXT("attack becomes available again after dodge ends"),
 			Boss->GetCurrentHP() < BossHPBeforeAttack);
 	}
 	DestroyDroneSelectionTestContext(Valid);
@@ -2117,8 +2176,8 @@ bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
 		!Context.Drone->GetActorLocation().Equals(LocationBeforeDodge, 0.1f));
 	TestTrue(TEXT("dodge input bridge clears cached axis after request"),
 		Context.Drone->GetCachedMoveInputForDodgeForTest().IsNearlyZero());
-	TestTrue(TEXT("dodge input bridge keeps dodge excluded from Vector movement distance"),
-		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
+	TestTrue(TEXT("dodge input bridge adds dodge distance to Vector movement distance"),
+		Context.Drone->GetVectorAccumulatedMoveDistanceForTest() > 0.0f);
 
 	const FVector LocationBeforeZeroDodge = Context.Drone->GetActorLocation();
 	Context.Drone->ClearMoveInputForDodgeForTest();
@@ -2324,6 +2383,280 @@ bool FRaidBossDebugAreaAttackTest::RunTest(const FString& Parameters)
 		DeadBossContext.Drone->GetHealth(),
 		DeadBossHealthBefore);
 	DestroyDroneSelectionTestContext(DeadBossContext);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossTelegraphedAreaAttackTest,
+	"DroneProto.D15.RaidBoss.TelegraphedAreaAttack",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossTelegraphedAreaAttackTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext DelayedHitContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphDelayedHitWorld"));
+	ARaidBoss* DelayedHitBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DelayedHitContext, DelayedHitBoss, TEXT("boss telegraph delayed hit")))
+	{
+		DestroyDroneSelectionTestContext(DelayedHitContext);
+		return false;
+	}
+
+	DelayedHitContext.Drone->SetActorLocation(FVector::ZeroVector);
+	const int32 DelayedHitHealthBefore = DelayedHitContext.Drone->GetHealth();
+	TestTrue(TEXT("telegraphed boss attack starts from server"),
+		DelayedHitBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, 25, 0.10f));
+	TestEqual(TEXT("telegraphed boss attack spawns one replicated marker immediately"),
+		CountBossTelegraphsForAutomationTest(DelayedHitContext.World),
+		1);
+	ARaidBossAttackTelegraph* DelayedTelegraph = FindBossTelegraphForAutomationTest(DelayedHitContext.World);
+	TestNotNull(TEXT("telegraphed boss attack marker has an actor instance"), DelayedTelegraph);
+	TestNotNull(TEXT("telegraphed boss attack marker has a stable root component"),
+		DelayedTelegraph ? DelayedTelegraph->GetRootComponent() : nullptr);
+	TestNotNull(TEXT("telegraphed boss attack marker has an optional mesh component for BP children"),
+		DelayedTelegraph ? DelayedTelegraph->FindComponentByClass<UStaticMeshComponent>() : nullptr);
+	TestNotNull(TEXT("telegraphed boss attack marker has a visible C++ text marker"),
+		DelayedTelegraph ? DelayedTelegraph->FindComponentByClass<UTextRenderComponent>() : nullptr);
+	TestTrue(TEXT("telegraphed boss attack marker is replicated"),
+		DelayedTelegraph && DelayedTelegraph->GetIsReplicated());
+	TestTrue(TEXT("telegraphed boss attack marker scales from radius"),
+		DelayedTelegraph && DelayedTelegraph->GetActorScale3D().Equals(FVector(1.5f, 1.5f, 1.0f), 0.01f));
+	TestTrue(TEXT("telegraphed boss attack marker lifespan covers the delay"),
+		DelayedTelegraph && DelayedTelegraph->GetLifeSpan() >= 0.10f);
+	TestEqual(TEXT("telegraphed boss attack does not damage before delay"),
+		DelayedHitContext.Drone->GetHealth(),
+		DelayedHitHealthBefore);
+	TickWorldForAutomationTest(DelayedHitContext.World, 0.15f);
+	TestEqual(TEXT("telegraphed boss attack damages after delay"),
+		DelayedHitContext.Drone->GetHealth(),
+		DelayedHitHealthBefore - 25);
+	TestEqual(TEXT("telegraphed boss attack increments DamageTakenCount after delay"),
+		DelayedHitContext.Drone->GetCombatRecordForTest().DamageTakenCount,
+		1);
+	TestEqual(TEXT("telegraph marker is destroyed after execution"),
+		CountBossTelegraphsForAutomationTest(DelayedHitContext.World),
+		0);
+	DestroyDroneSelectionTestContext(DelayedHitContext);
+
+	FDroneSelectionTestContext DebugTriggerContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphDebugTriggerWorld"));
+	ARaidBoss* DebugTriggerBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DebugTriggerContext, DebugTriggerBoss, TEXT("boss telegraph debug trigger")))
+	{
+		DestroyDroneSelectionTestContext(DebugTriggerContext);
+		return false;
+	}
+
+	DebugTriggerContext.Drone->SetActorLocation(FVector(120.0f, 30.0f, 0.0f));
+	const int32 DebugTriggerHealthBefore = DebugTriggerContext.Drone->GetHealth();
+	DebugTriggerContext.PC->DebugTriggerBossTelegraphAttack(150.0f, 25, 0.10f, 0.0f);
+	TestEqual(TEXT("debug trigger spawns one telegraph through the server path"),
+		CountBossTelegraphsForAutomationTest(DebugTriggerContext.World),
+		1);
+	ARaidBossAttackTelegraph* DebugTriggerTelegraph = FindBossTelegraphForAutomationTest(DebugTriggerContext.World);
+	TestTrue(TEXT("debug trigger uses the pawn location by default"),
+		DebugTriggerTelegraph && DebugTriggerTelegraph->GetCenter().Equals(DebugTriggerContext.Drone->GetActorLocation(), 0.1f));
+	TestEqual(TEXT("debug trigger does not damage before delay"),
+		DebugTriggerContext.Drone->GetHealth(),
+		DebugTriggerHealthBefore);
+	TickWorldForAutomationTest(DebugTriggerContext.World, 0.15f);
+	TestEqual(TEXT("debug trigger executes existing boss attack after delay"),
+		DebugTriggerContext.Drone->GetHealth(),
+		DebugTriggerHealthBefore - 25);
+	DestroyDroneSelectionTestContext(DebugTriggerContext);
+
+	FDroneSelectionTestContext DebugNoBossContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphDebugNoBossWorld"));
+	TestNotNull(TEXT("debug no boss world is created"), DebugNoBossContext.World);
+	TestNotNull(TEXT("debug no boss player controller is spawned"), DebugNoBossContext.PC);
+	TestNotNull(TEXT("debug no boss drone is spawned"), DebugNoBossContext.Drone);
+	if (!DebugNoBossContext.World || !DebugNoBossContext.PC || !DebugNoBossContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(DebugNoBossContext);
+		return false;
+	}
+	DebugNoBossContext.PC->Server_RequestReadyForRaid_Implementation();
+	const int32 DebugNoBossHealthBefore = DebugNoBossContext.Drone->GetHealth();
+	DebugNoBossContext.PC->DebugTriggerBossTelegraphAttack(150.0f, 25, 0.10f, 0.0f);
+	TestEqual(TEXT("debug trigger ignores missing boss without spawning telegraph"),
+		CountBossTelegraphsForAutomationTest(DebugNoBossContext.World),
+		0);
+	TickWorldForAutomationTest(DebugNoBossContext.World, 0.15f);
+	TestEqual(TEXT("debug trigger missing boss leaves HP unchanged"),
+		DebugNoBossContext.Drone->GetHealth(),
+		DebugNoBossHealthBefore);
+	DestroyDroneSelectionTestContext(DebugNoBossContext);
+
+	FDroneSelectionTestContext DebugNotInBattleContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphDebugNotInBattleWorld"));
+	TestNotNull(TEXT("debug not in battle world is created"), DebugNotInBattleContext.World);
+	TestNotNull(TEXT("debug not in battle player controller is spawned"), DebugNotInBattleContext.PC);
+	TestNotNull(TEXT("debug not in battle drone is spawned"), DebugNotInBattleContext.Drone);
+	if (!DebugNotInBattleContext.World || !DebugNotInBattleContext.PC || !DebugNotInBattleContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(DebugNotInBattleContext);
+		return false;
+	}
+	ARaidBoss* DebugNotInBattleBoss = DebugNotInBattleContext.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("debug not in battle boss is spawned"), DebugNotInBattleBoss);
+	if (DebugNotInBattleBoss && DebugNotInBattleContext.GameState)
+	{
+		DebugNotInBattleContext.GameState->SetRaidBossForServer(DebugNotInBattleBoss);
+	}
+	const int32 DebugNotInBattleHealthBefore = DebugNotInBattleContext.Drone->GetHealth();
+	DebugNotInBattleContext.PC->DebugTriggerBossTelegraphAttack(150.0f, 25, 0.10f, 0.0f);
+	TestEqual(TEXT("debug trigger ignores NotInBattle without spawning telegraph"),
+		CountBossTelegraphsForAutomationTest(DebugNotInBattleContext.World),
+		0);
+	TickWorldForAutomationTest(DebugNotInBattleContext.World, 0.15f);
+	TestEqual(TEXT("debug trigger NotInBattle leaves HP unchanged"),
+		DebugNotInBattleContext.Drone->GetHealth(),
+		DebugNotInBattleHealthBefore);
+	DestroyDroneSelectionTestContext(DebugNotInBattleContext);
+
+	FDroneSelectionTestContext DodgeMissContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphDodgeMissWorld"));
+	ARaidBoss* DodgeMissBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DodgeMissContext, DodgeMissBoss, TEXT("boss telegraph dodge miss")))
+	{
+		DestroyDroneSelectionTestContext(DodgeMissContext);
+		return false;
+	}
+
+	DodgeMissContext.PC->SetControlRotation(FRotator::ZeroRotator);
+	DodgeMissContext.Drone->SetActorLocation(FVector::ZeroVector);
+	const int32 DodgeMissHealthBefore = DodgeMissContext.Drone->GetHealth();
+	TestTrue(TEXT("telegraphed dodge miss attack starts"),
+		DodgeMissBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 100.0f, 25, 0.10f));
+	TestEqual(TEXT("telegraphed dodge miss does not damage immediately"),
+		DodgeMissContext.Drone->GetHealth(),
+		DodgeMissHealthBefore);
+	TestTrue(TEXT("server dodge before telegraph expiry succeeds"),
+		DodgeMissContext.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("dodge moves drone outside delayed attack radius"),
+		FVector::Dist2D(DodgeMissContext.Drone->GetActorLocation(), FVector::ZeroVector) > 100.0f);
+	TickWorldForAutomationTest(DodgeMissContext.World, 0.15f);
+	TestEqual(TEXT("dodge before telegraph expiry keeps delayed area attack as miss"),
+		DodgeMissContext.Drone->GetHealth(),
+		DodgeMissHealthBefore);
+	TestEqual(TEXT("delayed dodge miss leaves DamageTakenCount unchanged"),
+		DodgeMissContext.Drone->GetCombatRecordForTest().DamageTakenCount,
+		0);
+	TestEqual(TEXT("dodge miss telegraph is destroyed after execution"),
+		CountBossTelegraphsForAutomationTest(DodgeMissContext.World),
+		0);
+	DestroyDroneSelectionTestContext(DodgeMissContext);
+
+	UDronePartReturnManager* DeathReturnManager = nullptr;
+	FDroneSelectionTestContext DeathContext = CreateDroneReturnTestContext(TEXT("BossTelegraphDeathWorld"), DeathReturnManager);
+	TestNotNull(TEXT("death telegraph world is created"), DeathContext.World);
+	TestNotNull(TEXT("death telegraph inventory is spawned"), DeathContext.Inventory);
+	TestNotNull(TEXT("death telegraph player controller is spawned"), DeathContext.PC);
+	TestNotNull(TEXT("death telegraph drone is spawned"), DeathContext.Drone);
+	TestNotNull(TEXT("death telegraph return manager is created"), DeathReturnManager);
+	if (!DeathContext.World || !DeathContext.Inventory || !DeathContext.PC || !DeathContext.Drone || !DeathReturnManager)
+	{
+		DestroyDroneSelectionTestContext(DeathContext);
+		return false;
+	}
+
+	ARaidBoss* DeathBoss = DeathContext.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("death telegraph boss is spawned"), DeathBoss);
+	if (!DeathBoss)
+	{
+		DestroyDroneSelectionTestContext(DeathContext);
+		return false;
+	}
+	if (DeathContext.GameState)
+	{
+		DeathContext.GameState->SetRaidBossForServer(DeathBoss);
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("death telegraph consumes selected core"), DeathContext.Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("death telegraph consumes selected left weapon"), DeathContext.Inventory->TryConsumePart(PulseLaser));
+	DeathContext.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	DeathContext.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	DeathContext.PC->Server_RequestReadyForRaid_Implementation();
+	DeathContext.Drone->SetActorLocation(FVector::ZeroVector);
+
+	TestTrue(TEXT("lethal telegraphed boss attack starts"),
+		DeathBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, DeathContext.Drone->GetMaxHealth() + 10, 0.05f));
+	TestFalse(TEXT("lethal telegraphed attack does not kill before delay"),
+		DeathContext.Drone->IsDead());
+	TickWorldForAutomationTest(DeathContext.World, 0.10f);
+	TestTrue(TEXT("lethal telegraphed boss attack marks drone dead after delay"), DeathContext.Drone->IsDead());
+	TestTrue(TEXT("lethal telegraphed boss attack creates death report"), DeathContext.PC->HasDroneReportGeneratedForTest());
+	TestEqual(TEXT("lethal telegraph death report records damage taken"),
+		DeathContext.PC->GetLastDroneReportDataForTest().DamageTakenCount,
+		1);
+	TestEqual(TEXT("lethal telegraph death return clears equipped core"),
+		DeathContext.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("lethal telegraph death return restores core stock"),
+		DeathContext.Inventory->GetCurrentCount(CoreZenith),
+		DeathContext.Inventory->GetMaxCount(CoreZenith));
+	DestroyDroneSelectionTestContext(DeathContext);
+
+	FDroneSelectionTestContext RaidEndContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphRaidEndWorld"));
+	ARaidBoss* RaidEndBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, RaidEndContext, RaidEndBoss, TEXT("boss telegraph raid end")))
+	{
+		DestroyDroneSelectionTestContext(RaidEndContext);
+		return false;
+	}
+	RaidEndContext.GameState->SetRaidStateForServer(ERaidState::End);
+	const int32 RaidEndHealthBefore = RaidEndContext.Drone->GetHealth();
+	TestFalse(TEXT("RaidEnd ignores telegraphed boss area attack"),
+		RaidEndBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, 25, 0.10f));
+	TestEqual(TEXT("RaidEnd ignored telegraph does not spawn marker"),
+		CountBossTelegraphsForAutomationTest(RaidEndContext.World),
+		0);
+	TickWorldForAutomationTest(RaidEndContext.World, 0.15f);
+	TestEqual(TEXT("RaidEnd ignored telegraph leaves HP unchanged"),
+		RaidEndContext.Drone->GetHealth(),
+		RaidEndHealthBefore);
+	DestroyDroneSelectionTestContext(RaidEndContext);
+
+	FDroneSelectionTestContext DeadBossContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphDeadBossWorld"));
+	ARaidBoss* DeadBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DeadBossContext, DeadBoss, TEXT("dead boss telegraph attack")))
+	{
+		DestroyDroneSelectionTestContext(DeadBossContext);
+		return false;
+	}
+	DeadBoss->ApplyDamageForServer(DeadBoss->GetMaxHP() + 100.0f, DeadBossContext.PC, DeadBossContext.Drone);
+	const int32 DeadBossHealthBefore = DeadBossContext.Drone->GetHealth();
+	TestFalse(TEXT("BossDead ignores telegraphed boss area attack"),
+		DeadBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, 25, 0.10f));
+	TestEqual(TEXT("BossDead ignored telegraph does not spawn marker"),
+		CountBossTelegraphsForAutomationTest(DeadBossContext.World),
+		0);
+	TickWorldForAutomationTest(DeadBossContext.World, 0.15f);
+	TestEqual(TEXT("BossDead ignored telegraph leaves HP unchanged"),
+		DeadBossContext.Drone->GetHealth(),
+		DeadBossHealthBefore);
+	DestroyDroneSelectionTestContext(DeadBossContext);
+
+	FDroneSelectionTestContext InvalidContext = CreateDroneSelectionTestContext(TEXT("BossTelegraphInvalidWorld"));
+	ARaidBoss* InvalidBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, InvalidContext, InvalidBoss, TEXT("invalid boss telegraph attack")))
+	{
+		DestroyDroneSelectionTestContext(InvalidContext);
+		return false;
+	}
+	const int32 InvalidHealthBefore = InvalidContext.Drone->GetHealth();
+	TestFalse(TEXT("invalid radius ignores telegraphed boss area attack"),
+		InvalidBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 0.0f, 25, 0.10f));
+	TestFalse(TEXT("invalid damage ignores telegraphed boss area attack"),
+		InvalidBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, 0, 0.10f));
+	TestFalse(TEXT("invalid delay ignores telegraphed boss area attack"),
+		InvalidBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, 25, 0.0f));
+	TestEqual(TEXT("invalid telegraph requests do not spawn markers"),
+		CountBossTelegraphsForAutomationTest(InvalidContext.World),
+		0);
+	TickWorldForAutomationTest(InvalidContext.World, 0.15f);
+	TestEqual(TEXT("invalid telegraph requests leave HP unchanged"),
+		InvalidContext.Drone->GetHealth(),
+		InvalidHealthBefore);
+	DestroyDroneSelectionTestContext(InvalidContext);
 
 	return true;
 }
@@ -3288,11 +3621,13 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 
 	FString RaidGameModeSource;
 	FString RaidPlayerControllerSource;
+	FString RaidPlayerControllerHeaderSource;
 	FString DronePartReturnManagerSource;
 	FString DronePartSelectWidgetSource;
 	FString DroneReportWidgetSource;
 	FString DroneSource;
 	FString RaidBossSource;
+	FString RaidBossAttackTelegraphSource;
 	FString RaidSessionSubsystemSource;
 	FString LocalAssignmentSource;
 	FString ServerEndpointSource;
@@ -3302,11 +3637,13 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 
 	if (!LoadSourceFile(TEXT("Raid/RaidGameMode.cpp"), RaidGameModeSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidPlayerController.cpp"), RaidPlayerControllerSource)
+		|| !LoadSourceFile(TEXT("Raid/RaidPlayerController.h"), RaidPlayerControllerHeaderSource)
 		|| !LoadSourceFile(TEXT("Raid/DronePartReturnManager.cpp"), DronePartReturnManagerSource)
 		|| !LoadSourceFile(TEXT("Raid/DronePartSelectWidget.cpp"), DronePartSelectWidgetSource)
 		|| !LoadSourceFile(TEXT("Raid/DroneReportWidget.cpp"), DroneReportWidgetSource)
 		|| !LoadSourceFile(TEXT("Drone.cpp"), DroneSource)
 		|| !LoadSourceFile(TEXT("Raid/RaidBoss.cpp"), RaidBossSource)
+		|| !LoadSourceFile(TEXT("Raid/RaidBossAttackTelegraph.cpp"), RaidBossAttackTelegraphSource)
 		|| !LoadSourceFile(TEXT("Lobby/RaidSessionSubsystem.cpp"), RaidSessionSubsystemSource)
 		|| !LoadSourceFile(TEXT("Lobby/LocalAssignment.cpp"), LocalAssignmentSource)
 		|| !LoadSourceFile(TEXT("Lobby/ServerEndpoint.h"), ServerEndpointSource)
@@ -3361,6 +3698,28 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackMiss")));
 	TestTrue(TEXT("boss area attack ignored summary log marker exists"),
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackIgnored")));
+	TestTrue(TEXT("boss telegraph start summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossTelegraphStart Center=")));
+	TestTrue(TEXT("boss telegraph spawned summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossTelegraphSpawned Actor=")));
+	TestTrue(TEXT("boss telegraph execute summary log marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttackExecute Reason=TelegraphExpired")));
+	TestTrue(TEXT("boss telegraph expired summary log marker exists"),
+		RaidBossAttackTelegraphSource.Contains(TEXT("[DR_SUMMARY] BossTelegraphExpired Actor=")));
+	TestTrue(TEXT("boss telegraph actor replicates radius"),
+		RaidBossAttackTelegraphSource.Contains(TEXT("DOREPLIFETIME(ARaidBossAttackTelegraph, RadiusCm)")));
+	TestTrue(TEXT("boss telegraph actor has optional static mesh component"),
+		RaidBossAttackTelegraphSource.Contains(TEXT("CreateDefaultSubobject<UStaticMeshComponent>")));
+	TestTrue(TEXT("boss telegraph actor has visible text render component"),
+		RaidBossAttackTelegraphSource.Contains(TEXT("CreateDefaultSubobject<UTextRenderComponent>")));
+	TestTrue(TEXT("boss telegraph actor applies radius actor scale"),
+		RaidBossAttackTelegraphSource.Contains(TEXT("SetActorScale3D")));
+	TestTrue(TEXT("boss telegraph debug trigger summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] BossTelegraphDebugTrigger")));
+	TestTrue(TEXT("boss telegraph debug trigger callable exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("DebugTriggerBossTelegraphAttack")));
+	TestTrue(TEXT("boss telegraph debug-only server RPC exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("Server_DebugTriggerBossTelegraphAttack")));
 	TestTrue(TEXT("raid entry request summary log marker exists"),
 		RaidSessionSubsystemSource.Contains(TEXT("[DR_SUMMARY] RaidEntryRequest")));
 	TestTrue(TEXT("raid assignment result summary log marker exists"),

@@ -2,9 +2,16 @@
 
 #include "Drone.h"
 #include "RaidGameState.h"
+#include "RaidBossAttackTelegraph.h"
 #include "RaidPlayerController.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "EngineUtils.h"
+#include "Engine/StaticMesh.h"
+#include "TimerManager.h"
 #include "Net/UnrealNetwork.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -42,6 +49,37 @@ ARaidBoss::ARaidBoss()
 	bAlwaysRelevant = true;
 	NetDormancy = DORM_Never;
 	SetReplicatingMovement(false);
+
+	PrototypeVisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeVisualMesh"));
+	SetRootComponent(PrototypeVisualMesh);
+	PrototypeVisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PrototypeVisualMesh->SetGenerateOverlapEvents(false);
+	PrototypeVisualMesh->SetCanEverAffectNavigation(false);
+	PrototypeVisualMesh->SetVisibility(true, true);
+	PrototypeVisualMesh->SetHiddenInGame(false, true);
+	PrototypeVisualMesh->SetCastShadow(false);
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMeshFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	if (SphereMeshFinder.Succeeded())
+	{
+		PrototypeVisualMesh->SetStaticMesh(SphereMeshFinder.Object);
+	}
+
+	PrototypeVisualLabel = CreateDefaultSubobject<UTextRenderComponent>(TEXT("PrototypeVisualLabel"));
+	PrototypeVisualLabel->SetupAttachment(PrototypeVisualMesh);
+	PrototypeVisualLabel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PrototypeVisualLabel->SetGenerateOverlapEvents(false);
+	PrototypeVisualLabel->SetCanEverAffectNavigation(false);
+	PrototypeVisualLabel->SetVisibility(true, true);
+	PrototypeVisualLabel->SetHiddenInGame(false, true);
+	PrototypeVisualLabel->SetCastShadow(false);
+	PrototypeVisualLabel->SetText(FText::FromString(TEXT("RAID BOSS")));
+	PrototypeVisualLabel->SetHorizontalAlignment(EHTA_Center);
+	PrototypeVisualLabel->SetVerticalAlignment(EVRTA_TextCenter);
+	PrototypeVisualLabel->SetTextRenderColor(FColor::Red);
+	PrototypeVisualLabel->SetWorldSize(120.0f);
+
+	ApplyPrototypeVisualSettings();
 }
 
 void ARaidBoss::BeginPlay()
@@ -53,6 +91,27 @@ void ARaidBoss::BeginPlay()
 		CurrentHP = MaxHP;
 		ForceNetUpdate();
 	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Boss VisualReady: Boss=%s VisualReady=%s Mesh=%s MeshVisible=%s LabelVisible=%s Collision=%s Location=%s"),
+		*GetName(),
+		IsVisualReadyForCamera() ? TEXT("True") : TEXT("False"),
+		(PrototypeVisualMesh && PrototypeVisualMesh->GetStaticMesh()) ? *PrototypeVisualMesh->GetStaticMesh()->GetName() : TEXT("None"),
+		(PrototypeVisualMesh && PrototypeVisualMesh->IsVisible()) ? TEXT("True") : TEXT("False"),
+		(PrototypeVisualLabel && PrototypeVisualLabel->IsVisible()) ? TEXT("True") : TEXT("False"),
+		(PrototypeVisualMesh && PrototypeVisualMesh->GetCollisionEnabled() != ECollisionEnabled::NoCollision) ? TEXT("CollisionEnabled") : TEXT("NoCollision"),
+		*GetActorLocation().ToString());
+
+	if (!IsVisualReadyForCamera())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Boss VisualWarning: Boss=%s Reason=NoVisibleMesh"),
+			*GetName());
+	}
+}
+
+void ARaidBoss::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	ApplyPrototypeVisualSettings();
 }
 
 void ARaidBoss::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -255,6 +314,149 @@ int32 ARaidBoss::PerformDebugAreaAttackForServer(FVector AttackCenter, float Rad
 	return HitCount;
 }
 
+bool ARaidBoss::StartDebugTelegraphedAreaAttackForServer(FVector AttackCenter, float RadiusCm, int32 DamageAmount, float TelegraphSeconds)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=NotAuthority Boss=%s Center=%s RadiusCm=%.2f Damage=%d Delay=%.2f"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			RadiusCm,
+			DamageAmount,
+			TelegraphSeconds);
+		return false;
+	}
+
+	const float SafeRadiusCm = FMath::Max(0.0f, RadiusCm);
+	const int32 AppliedDamage = FMath::Max(0, DamageAmount);
+	const float SafeTelegraphSeconds = FMath::Max(0.0f, TelegraphSeconds);
+	if (SafeRadiusCm <= KINDA_SMALL_NUMBER || AppliedDamage <= 0 || SafeTelegraphSeconds <= KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=InvalidParams Boss=%s Center=%s RadiusCm=%.2f Damage=%d Delay=%.2f"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			RadiusCm,
+			DamageAmount,
+			TelegraphSeconds);
+		return false;
+	}
+
+	if (IsDefeated())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=BossDead Boss=%s Center=%s RadiusCm=%.2f Damage=%d Delay=%.2f HP=%.2f"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			SafeRadiusCm,
+			AppliedDamage,
+			SafeTelegraphSeconds,
+			CurrentHP);
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (RaidGameState && RaidGameState->RaidState == ERaidState::End)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=RaidEnd Boss=%s Center=%s RadiusCm=%.2f Damage=%d Delay=%.2f RaidState=End"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			SafeRadiusCm,
+			AppliedDamage,
+			SafeTelegraphSeconds);
+		return false;
+	}
+
+	if (!World)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=NoWorld Boss=%s Center=%s RadiusCm=%.2f Damage=%d Delay=%.2f"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			SafeRadiusCm,
+			AppliedDamage,
+			SafeTelegraphSeconds);
+		return false;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossTelegraphStart Center=%s Radius=%.2f Damage=%d Delay=%.2f Boss=%s RaidState=%s"),
+		*AttackCenter.ToString(),
+		SafeRadiusCm,
+		AppliedDamage,
+		SafeTelegraphSeconds,
+		*GetName(),
+		ToBossAttackRaidStateLogString(RaidGameState));
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ARaidBossAttackTelegraph* TelegraphActor = World->SpawnActor<ARaidBossAttackTelegraph>(
+		ARaidBossAttackTelegraph::StaticClass(),
+		AttackCenter,
+		FRotator::ZeroRotator,
+		SpawnParameters);
+
+	if (!TelegraphActor)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=TelegraphSpawnFailed Boss=%s Center=%s RadiusCm=%.2f Damage=%d Delay=%.2f"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			SafeRadiusCm,
+			AppliedDamage,
+			SafeTelegraphSeconds);
+		return false;
+	}
+
+	TelegraphActor->InitializeForServer(AttackCenter, SafeRadiusCm, SafeTelegraphSeconds);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossTelegraphSpawned Actor=%s Radius=%.2f"),
+		*TelegraphActor->GetName(),
+		SafeRadiusCm);
+
+	const TWeakObjectPtr<ARaidBoss> WeakBoss(this);
+	const TWeakObjectPtr<ARaidBossAttackTelegraph> WeakTelegraph(TelegraphActor);
+	FTimerDelegate AttackDelegate = FTimerDelegate::CreateLambda(
+		[WeakBoss, WeakTelegraph, AttackCenter, SafeRadiusCm, AppliedDamage]()
+		{
+			if (ARaidBoss* Boss = WeakBoss.Get())
+			{
+				Boss->ExecuteDebugTelegraphedAreaAttackForServer(
+					AttackCenter,
+					SafeRadiusCm,
+					AppliedDamage,
+					WeakTelegraph.Get());
+			}
+		});
+
+	FTimerHandle AttackTimerHandle;
+	World->GetTimerManager().SetTimer(AttackTimerHandle, AttackDelegate, SafeTelegraphSeconds, false);
+	return true;
+}
+
+void ARaidBoss::ExecuteDebugTelegraphedAreaAttackForServer(FVector AttackCenter, float RadiusCm, int32 DamageAmount, ARaidBossAttackTelegraph* TelegraphActor)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackIgnored Reason=NotAuthority Boss=%s Center=%s RadiusCm=%.2f Damage=%d"),
+			*GetName(),
+			*AttackCenter.ToString(),
+			RadiusCm,
+			DamageAmount);
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossAttackExecute Reason=TelegraphExpired Boss=%s Center=%s Radius=%.2f Damage=%d Telegraph=%s"),
+		*GetName(),
+		*AttackCenter.ToString(),
+		RadiusCm,
+		DamageAmount,
+		TelegraphActor ? *TelegraphActor->GetName() : TEXT("None"));
+
+	PerformDebugAreaAttackForServer(AttackCenter, RadiusCm, DamageAmount);
+
+	if (TelegraphActor && !TelegraphActor->IsActorBeingDestroyed())
+	{
+		TelegraphActor->MarkExpiredForServer();
+	}
+}
+
 float ARaidBoss::GetCurrentHP() const
 {
 	return CurrentHP;
@@ -268,6 +470,49 @@ float ARaidBoss::GetMaxHP() const
 bool ARaidBoss::IsDefeated() const
 {
 	return CurrentHP <= 0.0f;
+}
+
+bool ARaidBoss::IsVisualReadyForCamera() const
+{
+	if (IsHidden())
+	{
+		return false;
+	}
+
+	TArray<UPrimitiveComponent*> PrimitiveComponents;
+	GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+	for (const UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+	{
+		if (PrimitiveComponent && PrimitiveComponent->IsVisible())
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void ARaidBoss::ApplyPrototypeVisualSettings()
+{
+	const float SafeRadiusCm = FMath::Max(50.0f, PrototypeVisualRadiusCm);
+	if (PrototypeVisualMesh)
+	{
+		constexpr float EngineBasicSphereRadiusCm = 50.0f;
+		const float MeshScale = SafeRadiusCm / EngineBasicSphereRadiusCm;
+		PrototypeVisualMesh->SetRelativeScale3D(FVector(MeshScale));
+		PrototypeVisualMesh->SetRelativeLocation(FVector::ZeroVector);
+		PrototypeVisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PrototypeVisualMesh->SetGenerateOverlapEvents(false);
+	}
+
+	if (PrototypeVisualLabel)
+	{
+		PrototypeVisualLabel->SetRelativeLocation(FVector(0.0f, 0.0f, SafeRadiusCm + 120.0f));
+		PrototypeVisualLabel->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
+		PrototypeVisualLabel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PrototypeVisualLabel->SetGenerateOverlapEvents(false);
+		PrototypeVisualLabel->SetWorldSize(FMath::Clamp(SafeRadiusCm * 0.55f, 80.0f, 180.0f));
+	}
 }
 
 void ARaidBoss::OnRep_CurrentHP()

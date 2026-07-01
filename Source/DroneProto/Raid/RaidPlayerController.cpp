@@ -2,6 +2,7 @@
 #include "Drone.h"
 #include "DronePartInventory.h"
 #include "DroneReportWidget.h"
+#include "RaidBoss.h"
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
 #include "Engine/World.h"
@@ -253,6 +254,37 @@ void ARaidPlayerController::RequestApplyTestDamageToDrone(int32 DamageAmount)
 void ARaidPlayerController::RequestRaidEndReturnTest(FName Reason)
 {
 	Server_RequestRaidEndReturnTest(Reason);
+}
+
+void ARaidPlayerController::DebugTriggerBossTelegraphAttack(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm)
+{
+	const float RequestedRadiusCm = RadiusCm < 0.0f ? DebugBossTelegraphRadiusCm : RadiusCm;
+	const int32 RequestedDamageAmount = DamageAmount < 0 ? DebugBossTelegraphDamageAmount : DamageAmount;
+	const float RequestedTelegraphSeconds = TelegraphSeconds < 0.0f ? DebugBossTelegraphDelaySeconds : TelegraphSeconds;
+	const float RequestedForwardOffsetCm = ForwardOffsetCm < 0.0f ? DebugBossTelegraphForwardOffsetCm : ForwardOffsetCm;
+
+	if (HasAuthority())
+	{
+		HandleDebugTriggerBossTelegraphAttackForServer(
+			RequestedRadiusCm,
+			RequestedDamageAmount,
+			RequestedTelegraphSeconds,
+			RequestedForwardOffsetCm);
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossTelegraphDebugTrigger PC=%s Result=RequestServer Scope=DebugOnly Radius=%.2f Damage=%d Delay=%.2f ForwardOffset=%.2f"),
+		*BuildControllerLogString(this),
+		RequestedRadiusCm,
+		RequestedDamageAmount,
+		RequestedTelegraphSeconds,
+		RequestedForwardOffsetCm);
+
+	Server_DebugTriggerBossTelegraphAttack(
+		RequestedRadiusCm,
+		RequestedDamageAmount,
+		RequestedTelegraphSeconds,
+		RequestedForwardOffsetCm);
 }
 
 FName ARaidPlayerController::GetSelectedCorePartID() const
@@ -824,6 +856,12 @@ void ARaidPlayerController::Server_RequestRaidEndReturnTest_Implementation(FName
 		*BuildControllerLogString(this));
 }
 
+void ARaidPlayerController::Server_DebugTriggerBossTelegraphAttack_Implementation(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm)
+{
+	// Debug-only C2S bridge for PIE/manual testing. The server still validates and ARaidBoss owns execution/damage.
+	HandleDebugTriggerBossTelegraphAttackForServer(RadiusCm, DamageAmount, TelegraphSeconds, ForwardOffsetCm);
+}
+
 void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 	EPartSlot Slot,
 	FName PartID,
@@ -1031,6 +1069,11 @@ UDronePartReturnManager* ARaidPlayerController::GetDronePartReturnManager() cons
 	}
 
 	return nullptr;
+}
+
+bool ARaidPlayerController::HasDroneReportGenerated() const
+{
+	return bDroneReportGenerated;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1738,6 +1781,99 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 	return true;
 }
 
+void ARaidPlayerController::HandleDebugTriggerBossTelegraphAttackForServer(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm)
+{
+	const FString PlayerLog = BuildControllerLogString(this);
+	const auto LogIgnored = [this, &PlayerLog, RadiusCm, DamageAmount, TelegraphSeconds, ForwardOffsetCm](const TCHAR* Reason)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossTelegraphDebugTrigger PC=%s Result=Ignored Reason=%s Scope=DebugOnly Radius=%.2f Damage=%d Delay=%.2f ForwardOffset=%.2f SelectionState=%s RaidState=%s"),
+			*PlayerLog,
+			Reason,
+			RadiusCm,
+			DamageAmount,
+			TelegraphSeconds,
+			ForwardOffsetCm,
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*GetRaidStateLogString(this));
+	};
+
+	if (!HasAuthority())
+	{
+		LogIgnored(TEXT("NotAuthority"));
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		LogIgnored(TEXT("NoWorld"));
+		return;
+	}
+
+	APawn* ControlledPawn = GetPawn();
+	ADrone* ControlledDrone = Cast<ADrone>(ControlledPawn);
+	if (!ControlledPawn || !ControlledDrone)
+	{
+		LogIgnored(TEXT("InvalidPawn"));
+		return;
+	}
+
+	ARaidGameState* RaidGameState = World->GetGameState<ARaidGameState>();
+	if (!RaidGameState)
+	{
+		LogIgnored(TEXT("NoGameState"));
+		return;
+	}
+
+	ARaidBoss* Boss = RaidGameState->GetRaidBoss();
+	if (!Boss)
+	{
+		LogIgnored(TEXT("NoBoss"));
+		return;
+	}
+
+	const FVector AttackCenter = ControlledPawn->GetActorLocation() + (ControlledPawn->GetActorForwardVector() * ForwardOffsetCm);
+	if (RaidGameState->RaidState == ERaidState::End)
+	{
+		LogIgnored(TEXT("RaidEnd"));
+		Boss->StartDebugTelegraphedAreaAttackForServer(AttackCenter, RadiusCm, DamageAmount, TelegraphSeconds);
+		return;
+	}
+
+	if (Boss->IsDefeated())
+	{
+		LogIgnored(TEXT("BossDead"));
+		Boss->StartDebugTelegraphedAreaAttackForServer(AttackCenter, RadiusCm, DamageAmount, TelegraphSeconds);
+		return;
+	}
+
+	if (PlayerSelectionState != EPlayerSelectionState::InBattle)
+	{
+		LogIgnored(TEXT("NotInBattle"));
+		return;
+	}
+
+	if (ControlledDrone->IsDead())
+	{
+		LogIgnored(TEXT("DeadPawn"));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossTelegraphDebugTrigger PC=%s Result=Requested Scope=DebugOnly Boss=%s Pawn=%s Center=%s Radius=%.2f Damage=%d Delay=%.2f ForwardOffset=%.2f SelectionState=%s RaidState=%s"),
+		*PlayerLog,
+		*Boss->GetName(),
+		*ControlledPawn->GetName(),
+		*AttackCenter.ToString(),
+		RadiusCm,
+		DamageAmount,
+		TelegraphSeconds,
+		ForwardOffsetCm,
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		ToRaidStateLogString(RaidGameState->RaidState));
+
+	Boss->StartDebugTelegraphedAreaAttackForServer(AttackCenter, RadiusCm, DamageAmount, TelegraphSeconds);
+}
+
 bool ARaidPlayerController::ReturnSelectedPartsForServer(EDronePartReturnReason Reason)
 {
 	if (!HasAuthority())
@@ -1857,6 +1993,8 @@ bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Tr
 			ReportTriggerToLogString(Trigger));
 		return false;
 	}
+
+	ControlledDrone->CancelDodgeForServer(FName(TEXT("Report")));
 
 	const FDroneCombatRecord CombatRecord = ControlledDrone->GetCombatRecordForServer();
 	LastDroneReportData = FDroneReportRules::BuildReportData(CombatRecord, bBossDefeated);

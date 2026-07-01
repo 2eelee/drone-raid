@@ -11,6 +11,7 @@
 
 class ADronePartInventory;
 class ADrone;
+class ARaidBoss;
 class UDroneReportWidget;
 class UTexture2D;
 class UDronePartReturnManager;
@@ -68,6 +69,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Raid|Test")
 	void RequestRaidEndReturnTest(FName Reason);
+
+	// PIE/debug-only bridge. Damage authority stays in ARaidBoss; clients only request a server-side debug trigger.
+	UFUNCTION(BlueprintCallable, Exec, Category = "Raid|Boss|Debug")
+	void DebugTriggerBossTelegraphAttack(float RadiusCm = -1.0f, int32 DamageAmount = -1, float TelegraphSeconds = -1.0f, float ForwardOffsetCm = -1.0f);
 
 	UFUNCTION(BlueprintPure, Category = "Drone Parts")
 	FName GetSelectedCorePartID() const;
@@ -166,6 +171,9 @@ public:
 	void HandleSelectionTimerExpiredForServer();
 	bool TryCreateDroneReportForServer(EDroneReportTrigger Trigger, bool bBossDefeated);
 
+	UFUNCTION(BlueprintPure, Category = "Drone|Report")
+	bool HasDroneReportGenerated() const;
+
 #if WITH_DEV_AUTOMATION_TESTS
 	void SetDronePartReturnManagerForTest(UDronePartReturnManager* InReturnManager);
 	FDroneReportData GetLastDroneReportDataForTest() const;
@@ -190,6 +198,9 @@ public:
 
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Raid|Test")
 	void Server_RequestRaidEndReturnTest(FName Reason);
+
+	UFUNCTION(Server, Reliable, Category = "Raid|Boss|Debug")
+	void Server_DebugTriggerBossTelegraphAttack(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm);
 
 	UFUNCTION(Client, Reliable, Category = "Drone Parts")
 	void Client_NotifyPartSelectionResult(EPartSlot Slot, FName PartID, bool bSuccess, const FString& Reason);
@@ -262,6 +273,18 @@ private:
 	UPROPERTY(Transient)
 	FDroneReportData LastDroneReportData;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Debug", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "cm"))
+	float DebugBossTelegraphRadiusCm = 300.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Debug", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
+	int32 DebugBossTelegraphDamageAmount = 25;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Debug", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "s"))
+	float DebugBossTelegraphDelaySeconds = 1.2f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Debug", meta = (AllowPrivateAccess = "true", Units = "cm"))
+	float DebugBossTelegraphForwardOffsetCm = 0.0f;
+
 #if WITH_DEV_AUTOMATION_TESTS
 	UDronePartReturnManager* TestDronePartReturnManager = nullptr;
 #endif
@@ -283,6 +306,7 @@ private:
 	void StartSelectionTimerForServer();
 	void StopSelectionTimerForServer(const FString& Reason, bool bLogSummary);
 	bool ProcessReadyForRaidForServer(bool bAutoReady);
+	void HandleDebugTriggerBossTelegraphAttackForServer(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm);
 	static const TCHAR* ReportGradeToLogString(EDroneReportGrade Grade);
 	static const TCHAR* ReportTriggerToLogString(EDroneReportTrigger Trigger);
 	static bool ReportHasBonus(const FDroneReportData& ReportData, EDroneReportBonusType BonusType);

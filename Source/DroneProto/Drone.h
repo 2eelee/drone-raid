@@ -4,13 +4,50 @@
 #include "GameFramework/Pawn.h"
 #include "InputActionValue.h"
 #include "Raid/DroneCombatTypes.h"
+#include "TimerManager.h"
 #include "Drone.generated.h"
 
 class UFloatingPawnMovement;
+class USpringArmComponent;
+class UCameraComponent;
 class UInputMappingContext;
 class UInputAction;
 class UDronePart;
 class ARaidBoss;
+class UWorld;
+
+USTRUCT(BlueprintType)
+struct FDroneCombatCameraView
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	FVector CameraLocation = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	FRotator CameraRotation = FRotator::ZeroRotator;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	bool bBossValid = false;
+};
+
+USTRUCT(BlueprintType)
+struct FDroneCombatCameraTarget
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	TObjectPtr<ARaidBoss> Boss = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	FName Source = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	FName InvalidReason = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Camera")
+	bool bValid = false;
+};
 
 USTRUCT()
 struct FDroneOwnerMoveSync
@@ -57,6 +94,9 @@ public:
 	bool RequestDodgeForServer(FVector2D RawDirection = FVector2D::ZeroVector);
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
+	void CancelDodgeForServer(FName Reason);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Combat")
 	void ResetCombatRuntimeStateForServer();
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Report")
@@ -74,6 +114,56 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	bool IsDead() const;
 
+	UFUNCTION(BlueprintPure, Category = "Drone|Movement")
+	float GetAccumulatedMoveDistance() const;
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Movement")
+	void ResetAccumulatedMoveDistanceForServer();
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Movement")
+	float GetCurrentMoveSpeed() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Dodge")
+	bool IsDodging() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Dodge")
+	float GetDodgeCooldownRemaining() const;
+
+	static bool CalculateFixedBossFacingQuarterView(
+		const FVector& PlayerPosition,
+		const FVector* BossPosition,
+		FVector FallbackForwardDirection,
+		float CameraDistanceCm,
+		float CameraHeightCm,
+		float FallbackPitchDegrees,
+		FDroneCombatCameraView& OutCameraView);
+
+	static bool ShouldApplyFixedBossFacingCamera(
+		bool bPawnLocallyControlled,
+		bool bControllerIsPlayerController,
+		bool bPlayerControllerIsLocal);
+
+	static bool ResolveFixedBossFacingCameraTargetForWorld(UWorld* World, FDroneCombatCameraTarget& OutTarget);
+	static bool IsValidFixedBossFacingCameraTarget(const ARaidBoss* Boss, FName& OutInvalidReason);
+	static FVector BuildFixedBossFacingFallbackForward(float FallbackYawDegrees);
+	static float ResolveFixedBossFacingFallbackYaw(
+		bool& bHasCachedYaw,
+		float& InOutCachedYaw,
+		float CandidateYawDegrees,
+		float DefaultYawDegrees);
+	static bool ShouldEmitThrottledSummaryLog(
+		float Now,
+		float LastLogTime,
+		float MinIntervalSeconds,
+		bool bForce);
+
+	bool IsMovementAllowedForServer(FName& OutIgnoreReason) const;
+	FVector ClampPositionToMovementBoundaryForServer(FVector RequestedPosition);
+	FVector ClampPositionOutsideBossCenterForServer(FVector RequestedPosition);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Drone|Dodge")
+	void BP_OnDodgeVisualStateChanged(bool bDodging);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetPulseAttackCountForTest(bool bIsLeftWeapon) const;
 	float GetHealthValueForTest() const;
@@ -90,6 +180,10 @@ public:
 	FVector2D GetCachedMoveInputForDodgeForTest() const;
 	void ClearMoveInputForDodgeForTest();
 	bool RequestDodgeFromCurrentMoveInputForTest();
+	bool IsDodgingForTest() const;
+	bool IsInvincibleForTest() const;
+	void SetIsAttackingForTest(bool bInIsAttacking);
+	void SetLastDodgeEndTimeForTest(float InLastDodgeEndTime);
 	FName GetEquippedCorePartIDForTest() const;
 	FName GetEquippedLeftWeaponPartIDForTest() const;
 	FName GetEquippedRightWeaponPartIDForTest() const;
@@ -99,6 +193,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
@@ -114,6 +209,12 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	USceneComponent* MuzzlePoint;
 
+	UPROPERTY(VisibleAnywhere, Category = "Drone|Camera")
+	USpringArmComponent* CombatCameraSpringArm;
+
+	UPROPERTY(VisibleAnywhere, Category = "Drone|Camera")
+	UCameraComponent* CombatCameraComponent;
+
 	// ---- Replicated Stats (부품 합산 결과만 복제) ----
 	UPROPERTY(ReplicatedUsing = OnRep_Health)
 	float Health = 100.0f;
@@ -127,6 +228,9 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_IsDead)
 	bool bIsDead = false;
 
+	UPROPERTY(ReplicatedUsing = OnRep_IsDodging)
+	bool bIsDodging = false;
+
 	UPROPERTY(ReplicatedUsing = OnRep_OwnerMoveSync)
 	FDroneOwnerMoveSync OwnerMoveSync;
 
@@ -135,6 +239,9 @@ private:
 
 	UFUNCTION()
 	void OnRep_IsDead();
+
+	UFUNCTION()
+	void OnRep_IsDodging();
 
 	UFUNCTION()
 	void OnRep_OwnerMoveSync();
@@ -150,10 +257,40 @@ private:
 	UInputAction* DodgeAction;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "cm"))
-	float DodgeDistanceCm = 300.0f;
+	float DodgeDistanceCm = 600.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "s"))
-	float DodgeCooldownSeconds = 0.20f;
+	float DodgeDurationSeconds = 0.25f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "s"))
+	float DodgeInvincibleDurationSeconds = 0.15f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "s"))
+	float DodgeCooldownSeconds = 1.20f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
+	float CombatCameraDistanceCm = 1400.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
+	float CombatCameraHeightCm = 380.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (Units = "deg", AllowPrivateAccess = "true"))
+	float CombatCameraFallbackPitchDegrees = -10.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "1.0", ClampMax = "170.0", Units = "deg", AllowPrivateAccess = "true"))
+	float CombatCameraFOV = 75.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (Units = "deg", AllowPrivateAccess = "true"))
+	float CombatCameraDefaultFallbackYawDegrees = 0.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (AllowPrivateAccess = "true"))
+	FVector CombatCameraSocketOffsetCm = FVector::ZeroVector;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "0.0", ClampMax = "1.0", AllowPrivateAccess = "true"))
+	FVector2D CombatCameraTargetScreenPosition = FVector2D(0.50f, 0.55f);
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "0.0", ClampMax = "1.0", AllowPrivateAccess = "true"))
+	FVector2D CombatCameraBossScreenYRange = FVector2D(0.30f, 0.40f);
 
 	UFUNCTION(Server, Reliable)
 	void Server_RequestAttackBoss();
@@ -194,6 +331,9 @@ private:
 	float BoosterAccumulatedMoveDistanceMeters = 0.0f;
 
 	UPROPERTY(Transient)
+	float AccumulatedMoveDistanceMeters = 0.0f;
+
+	UPROPERTY(Transient)
 	FVector LastMoveDistanceLocation = FVector::ZeroVector;
 
 	UPROPERTY(Transient)
@@ -212,6 +352,21 @@ private:
 	float NextDodgeAllowedServerTime = 0.0f;
 
 	UPROPERTY(Transient)
+	bool bIsInvincible = false;
+
+	UPROPERTY(Transient)
+	bool bIsAttacking = false;
+
+	UPROPERTY(Replicated)
+	float LastDodgeEndTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	FTimerHandle DodgeInvincibleTimerHandle;
+
+	UPROPERTY(Transient)
+	FTimerHandle DodgeEndTimerHandle;
+
+	UPROPERTY(Transient)
 	FName LastMoveInputSummaryResult = NAME_None;
 
 	UPROPERTY(Transient)
@@ -219,6 +374,12 @@ private:
 
 	UPROPERTY(Transient)
 	float LastServerMoveAppliedSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	float LastMoveAcceptedSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	FVector2D LastMoveAcceptedSummaryAxis = FVector2D::ZeroVector;
 
 	UPROPERTY(Transient)
 	float LastReplicatedLocationSummaryLogTime = -1000.0f;
@@ -239,20 +400,96 @@ private:
 	FName LastMoveDistanceIgnoredReason = NAME_None;
 
 	UPROPERTY(Transient)
+	float LastCombatCameraAppliedSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	float LastCombatCameraBossFacingSummaryLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	bool bCombatCameraRotationInputDisabled = false;
+
+	UPROPERTY(Transient)
+	bool bHasLastCombatCameraBossValid = false;
+
+	UPROPERTY(Transient)
+	bool bLastCombatCameraBossValid = false;
+
+	UPROPERTY(Transient)
+	bool bHasCombatCameraFallbackYaw = false;
+
+	UPROPERTY(Transient)
+	float CombatCameraFallbackYawDegrees = 0.0f;
+
+	UPROPERTY(Transient)
+	bool bHasLastCombatCameraAppliedConfig = false;
+
+	UPROPERTY(Transient)
+	float LastCombatCameraAppliedDistanceCm = 0.0f;
+
+	UPROPERTY(Transient)
+	float LastCombatCameraAppliedHeightCm = 0.0f;
+
+	UPROPERTY(Transient)
+	float LastCombatCameraAppliedFOV = 0.0f;
+
+	UPROPERTY(Transient)
+	FVector LastCombatCameraAppliedSocketOffsetCm = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector2D LastCombatCameraAppliedTargetScreenPosition = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector2D LastCombatCameraAppliedBossScreenYRange = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	bool bHasLastCombatCameraTargetSummary = false;
+
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ARaidBoss> LastCombatCameraTargetSummaryBoss;
+
+	UPROPERTY(Transient)
+	FName LastCombatCameraTargetSummarySource = NAME_None;
+
+	UPROPERTY(Transient)
+	FName LastCombatCameraTargetSummaryReason = NAME_None;
+
+	UPROPERTY(Transient)
 	FDroneCombatRecord CombatRecord;
 
 	UPROPERTY(Transient)
 	bool bCombatRecordActive = false;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Movement", meta = (ClampMin = "0.0", Units = "cm/s", AllowPrivateAccess = "true"))
+	float BaseMoveSpeedCmPerSecond = 450.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Movement", meta = (Units = "cm", AllowPrivateAccess = "true"))
+	float FixedZPosition = 0.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Movement", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
+	float MovementBoundaryRadiusCm = 5000.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Movement", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
+	float BossMinApproachDistanceCm = 500.0f;
+
 	UPROPERTY(Transient)
-	float BaseMoveSpeedCmPerSecond = 0.0f;
+	FVector MovementBoundaryCenter = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	bool bHasMovementBoundaryCenter = false;
 
 	void ServerEquipPart(TSubclassOf<UDronePart> PartClass);
 	void RecalculateStats();
 	void HandleDeath();
 	void HandleAttackBossForServer();
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
+	void UpdateLocalCombatCamera(float DeltaSeconds);
+	void DisableLocalCombatCameraRotationInput(APlayerController* PC);
+	ARaidBoss* FindRaidBossForLocalCamera() const;
 	FVector2D ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const;
+	bool IsDodgeAllowedForServer(const FVector2D& Direction, FName& OutIgnoreReason) const;
+	void AddDodgeMoveDistanceForServer(float DeltaMeters);
+	void EndDodgeInvincibilityForServer();
+	void EndDodgeForServer();
 	bool CacheMoveInputForDodge(FVector2D RawAxis);
 	void ClearCachedMoveInputForDodge();
 	bool RequestDodgeFromCurrentMoveInput();
@@ -263,6 +500,9 @@ private:
 	void UpdateMoveDistanceForServer(float DeltaSeconds);
 	void ResetMoveDistanceForServer(FName Reason);
 	void ResetVectorMoveDistanceForServer(FName Reason);
+	void RefreshMovementBoundaryCenterForServer();
+	FVector ResolveMovementBoundaryCenterForServer() const;
+	void LockZPositionForServer(FVector& Position) const;
 	bool CanAccumulateMoveDistanceForServer(FName& OutIgnoreReason) const;
 	void LogMoveDistanceIgnored(FName Reason);
 	FDroneWeaponCalculationResult CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon);
