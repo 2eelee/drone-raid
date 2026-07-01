@@ -145,6 +145,17 @@ bool FDroneBasicMovementSpeedAndAxisTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("diagonal input is normalized to the same 4.5m/s speed"),
 		FMath::IsNearlyEqual(DiagonalDistanceCm, StraightDistanceCm, 0.1f));
 
+	Context.PC->SetControlRotation(FRotator(0.0f, 90.0f, 0.0f));
+	Context.Drone->SetActorLocation(FVector(1000.0f, 1000.0f, 123.0f));
+	Context.Drone->ResetAccumulatedMoveDistanceForServer();
+	const FVector WorldVectorStart = Context.Drone->GetActorLocation();
+	MoveDroneForMovementTest(Context.Drone, FVector2D(1.0f, 0.0f), 1.0f);
+	const FVector WorldVectorDelta = Context.Drone->GetActorLocation() - WorldVectorStart;
+	TestTrue(TEXT("server treats move input as a requested world X/Y vector, independent of control yaw"),
+		FMath::IsNearlyEqual(WorldVectorDelta.X, 450.0f, 0.1f)
+		&& FMath::IsNearlyZero(WorldVectorDelta.Y, 0.1f));
+	Context.PC->SetControlRotation(FRotator::ZeroRotator);
+
 	Context.Drone->ApplyMoveInputForServerForTest(FVector2D(2.0f, 0.0f));
 	TestTrue(TEXT("raw input longer than one is normalized on the server"),
 		Context.Drone->GetLastServerMoveInputForTest().Equals(FVector2D(1.0f, 0.0f), 0.001f));

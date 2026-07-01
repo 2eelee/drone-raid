@@ -169,6 +169,42 @@ bool FDroneFixedBossFacingCameraLocalGateTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneFixedBossFacingCameraRelativeInputTest,
+	"DroneProto.D18.Drone.CameraRelativeInputConversion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneFixedBossFacingCameraRelativeInputTest::RunTest(const FString& Parameters)
+{
+	const auto ExpectDirection = [this](const TCHAR* Label, FVector2D RawAxis, float CameraYaw, FVector2D ExpectedDirection)
+	{
+		const FVector2D Converted = ADrone::ConvertScreenInputToWorldMoveDirection(
+			RawAxis,
+			FRotator(0.0f, CameraYaw, 0.0f));
+		TestTrue(Label, Converted.Equals(ExpectedDirection, 0.001f));
+	};
+
+	ExpectDirection(TEXT("yaw 0 up maps to world +X"), FVector2D(0.0f, 1.0f), 0.0f, FVector2D(1.0f, 0.0f));
+	ExpectDirection(TEXT("yaw 0 down maps to world -X"), FVector2D(0.0f, -1.0f), 0.0f, FVector2D(-1.0f, 0.0f));
+	ExpectDirection(TEXT("yaw 0 right maps to world +Y"), FVector2D(1.0f, 0.0f), 0.0f, FVector2D(0.0f, 1.0f));
+	ExpectDirection(TEXT("yaw 0 left maps to world -Y"), FVector2D(-1.0f, 0.0f), 0.0f, FVector2D(0.0f, -1.0f));
+
+	ExpectDirection(TEXT("yaw 90 up maps to world +Y"), FVector2D(0.0f, 1.0f), 90.0f, FVector2D(0.0f, 1.0f));
+	ExpectDirection(TEXT("yaw 90 right maps to world -X"), FVector2D(1.0f, 0.0f), 90.0f, FVector2D(-1.0f, 0.0f));
+	ExpectDirection(TEXT("yaw 180 up maps to world -X"), FVector2D(0.0f, 1.0f), 180.0f, FVector2D(-1.0f, 0.0f));
+	ExpectDirection(TEXT("yaw -90 up maps to world -Y"), FVector2D(0.0f, 1.0f), -90.0f, FVector2D(0.0f, -1.0f));
+
+	const FVector2D Diagonal = ADrone::ConvertScreenInputToWorldMoveDirection(
+		FVector2D(1.0f, 1.0f),
+		FRotator(0.0f, 0.0f, 0.0f));
+	TestTrue(TEXT("diagonal camera-relative input is normalized"),
+		FMath::IsNearlyEqual(Diagonal.Size(), 1.0f, 0.001f));
+	TestTrue(TEXT("zero camera-relative input stays zero"),
+		ADrone::ConvertScreenInputToWorldMoveDirection(FVector2D::ZeroVector, FRotator::ZeroRotator).IsNearlyZero());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneFixedBossFacingCameraTargetValidationTest,
 	"DroneProto.D18.Drone.FixedBossFacingQuarterViewCameraTargetValidation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

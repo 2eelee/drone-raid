@@ -272,6 +272,24 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(Normal.Drone->GetActorLocation().Z, 0.0f, 0.1f));
 	DestroyDroneDodgeTestContext(Normal);
 
+	FDroneDodgeTestContext WorldVector = CreateDroneDodgeTestContext(TEXT("DroneDodgeWorldVectorWorld"));
+	if (!PrepareInBattleDodgeTest(*this, WorldVector, TEXT("dodge world vector")))
+	{
+		DestroyDroneDodgeTestContext(WorldVector);
+		return false;
+	}
+
+	WorldVector.PC->SetControlRotation(FRotator(0.0f, 90.0f, 0.0f));
+	WorldVector.Drone->SetActorLocation(FVector(1000.0f, 1000.0f, 0.0f));
+	const FVector WorldVectorStart = WorldVector.Drone->GetActorLocation();
+	TestTrue(TEXT("world-vector dodge succeeds"),
+		WorldVector.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	const FVector WorldVectorDelta = WorldVector.Drone->GetActorLocation() - WorldVectorStart;
+	TestTrue(TEXT("server treats dodge input as a requested world X/Y vector, independent of control yaw"),
+		FMath::IsNearlyEqual(WorldVectorDelta.X, 600.0f, 0.1f)
+		&& FMath::IsNearlyZero(WorldVectorDelta.Y, 0.1f));
+	DestroyDroneDodgeTestContext(WorldVector);
+
 	FDroneDodgeTestContext Boundary = CreateDroneDodgeTestContext(TEXT("DroneDodgeBoundaryWorld"));
 	if (!PrepareInBattleDodgeTest(*this, Boundary, TEXT("dodge boundary")))
 	{
@@ -282,7 +300,7 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 	Boundary.Drone->SetActorLocation(FVector(4990.0f, 0.0f, 0.0f));
 	Boundary.Drone->ResetAccumulatedMoveDistanceForServer();
 	TestTrue(TEXT("boundary dodge succeeds"),
-		Boundary.Drone->RequestDodgeForServer(FVector2D(0.0f, 1.0f)));
+		Boundary.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
 	TestTrue(TEXT("boundary dodge cannot leave the 50m circle"),
 		FVector::Dist2D(Boundary.Drone->GetActorLocation(), FVector::ZeroVector) <= 5000.0f + 0.1f);
 	TestTrue(TEXT("boundary-clamped dodge records actual distance only"),

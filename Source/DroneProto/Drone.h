@@ -143,6 +143,10 @@ public:
 		bool bControllerIsPlayerController,
 		bool bPlayerControllerIsLocal);
 
+	static FVector2D ConvertScreenInputToWorldMoveDirection(
+		FVector2D RawAxis,
+		FRotator CameraRotation);
+
 	static bool ResolveFixedBossFacingCameraTargetForWorld(UWorld* World, FDroneCombatCameraTarget& OutTarget);
 	static bool IsValidFixedBossFacingCameraTarget(const ARaidBoss* Boss, FName& OutInvalidReason);
 	static FVector BuildFixedBossFacingFallbackForward(float FallbackYawDegrees);
@@ -346,6 +350,12 @@ private:
 	FVector2D CachedMoveInputForDodge = FVector2D::ZeroVector;
 
 	UPROPERTY(Transient)
+	FVector2D CachedRawMoveInputForDodge = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	float CachedMoveInputCameraYawForDodge = 0.0f;
+
+	UPROPERTY(Transient)
 	float LastMoveInputSummaryLogTime = -1000.0f;
 
 	UPROPERTY(Transient)
@@ -398,6 +408,33 @@ private:
 
 	UPROPERTY(Transient)
 	FName LastMoveDistanceIgnoredReason = NAME_None;
+
+	UPROPERTY(Transient)
+	float LastMoveInputConvertedLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	FVector2D LastMoveInputConvertedRawAxis = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector2D LastMoveInputConvertedWorldAxis = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	float LastMoveInputConvertedCameraYaw = 0.0f;
+
+	UPROPERTY(Transient)
+	float LastDodgeInputConvertedLogTime = -1000.0f;
+
+	UPROPERTY(Transient)
+	FVector2D LastDodgeInputConvertedRawAxis = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector2D LastDodgeInputConvertedWorldAxis = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	float LastDodgeInputConvertedCameraYaw = 0.0f;
+
+	UPROPERTY(Transient)
+	float LastMoveBossMinClampSummaryLogTime = -1000.0f;
 
 	UPROPERTY(Transient)
 	float LastCombatCameraAppliedSummaryLogTime = -1000.0f;
@@ -485,6 +522,17 @@ private:
 	void UpdateLocalCombatCamera(float DeltaSeconds);
 	void DisableLocalCombatCameraRotationInput(APlayerController* PC);
 	ARaidBoss* FindRaidBossForLocalCamera() const;
+	FRotator ResolveLocalCameraRelativeInputRotation() const;
+	FVector2D ConvertLocalScreenInputToWorldMoveDirection(FVector2D RawAxis, float& OutCameraYaw) const;
+	void LogInputConversionSummary(
+		const TCHAR* LogName,
+		const FVector2D& RawAxis,
+		const FVector2D& WorldAxis,
+		float CameraYaw,
+		float& InOutLastLogTime,
+		FVector2D& InOutLastRawAxis,
+		FVector2D& InOutLastWorldAxis,
+		float& InOutLastCameraYaw);
 	FVector2D ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const;
 	bool IsDodgeAllowedForServer(const FVector2D& Direction, FName& OutIgnoreReason) const;
 	void AddDodgeMoveDistanceForServer(float DeltaMeters);

@@ -124,6 +124,8 @@ constexpr float OwnerMoveCorrectionThresholdCm = 5.0f;
 constexpr float DefaultBaseMoveSpeedCmPerSecond = 450.0f;
 constexpr float CombatCameraSummaryLogIntervalSeconds = 5.00f;
 constexpr float MoveAcceptedSummaryLogIntervalSeconds = 1.00f;
+constexpr float InputConversionSummaryLogIntervalSeconds = 1.00f;
+constexpr float MoveBossMinClampSummaryLogIntervalSeconds = 1.00f;
 
 const TCHAR* ToCombatCoreTypeLogString(EDroneCombatCoreType CoreType)
 {
@@ -310,27 +312,58 @@ void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 
 void ADrone::Move(const FInputActionValue& Value)
 {
-	const FVector2D Axis = Value.Get<FVector2D>();
-	if (Axis.IsNearlyZero())
+	const FVector2D RawAxis = Value.Get<FVector2D>();
+	if (RawAxis.IsNearlyZero())
 	{
 		ClearCachedMoveInputForDodge();
 		return;
 	}
 
-	CacheMoveInputForDodge(Axis);
-
-	if (HasAuthority())
+	float CameraYaw = 0.0f;
+	const FVector2D WorldAxis = ConvertLocalScreenInputToWorldMoveDirection(RawAxis, CameraYaw);
+	if (WorldAxis.IsNearlyZero())
 	{
-		ApplyMoveInputForServer(Axis);
+		ClearCachedMoveInputForDodge();
 		return;
 	}
 
-	Server_SetMoveInput(Axis);
+	CachedRawMoveInputForDodge = RawAxis;
+	CachedMoveInputCameraYawForDodge = CameraYaw;
+	CacheMoveInputForDodge(WorldAxis);
+	LogInputConversionSummary(
+		TEXT("MoveInputConverted"),
+		RawAxis,
+		WorldAxis,
+		CameraYaw,
+		LastMoveInputConvertedLogTime,
+		LastMoveInputConvertedRawAxis,
+		LastMoveInputConvertedWorldAxis,
+		LastMoveInputConvertedCameraYaw);
+
+	if (HasAuthority())
+	{
+		ApplyMoveInputForServer(WorldAxis);
+		return;
+	}
+
+	Server_SetMoveInput(WorldAxis);
 }
 
 void ADrone::Dodge(const FInputActionValue& Value)
 {
 	(void)Value;
+	if (!CachedMoveInputForDodge.IsNearlyZero())
+	{
+		LogInputConversionSummary(
+			TEXT("DodgeInputConverted"),
+			CachedRawMoveInputForDodge,
+			CachedMoveInputForDodge,
+			CachedMoveInputCameraYawForDodge,
+			LastDodgeInputConvertedLogTime,
+			LastDodgeInputConvertedRawAxis,
+			LastDodgeInputConvertedWorldAxis,
+			LastDodgeInputConvertedCameraYaw);
+	}
 	RequestDodgeFromCurrentMoveInput();
 }
 
@@ -492,10 +525,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	}
 
 	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
-	const FRotator YawRot(0.f, RaidPC->GetControlRotation().Yaw, 0.f);
-	const FVector ForwardMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X) * Direction.Y;
-	const FVector RightMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y) * Direction.X;
-	const FVector DodgeDirection = (ForwardMove + RightMove).GetClampedToMaxSize(1.0f);
+	const FVector DodgeDirection = FVector(Direction.X, Direction.Y, 0.0f).GetSafeNormal();
 	if (DodgeDirection.IsNearlyZero())
 	{
 		LogIgnored(TEXT("NoDirection"));
@@ -812,6 +842,8 @@ bool ADrone::CacheMoveInputForDodge(FVector2D RawAxis)
 void ADrone::ClearCachedMoveInputForDodge()
 {
 	CachedMoveInputForDodge = FVector2D::ZeroVector;
+	CachedRawMoveInputForDodge = FVector2D::ZeroVector;
+	CachedMoveInputCameraYawForDodge = 0.0f;
 }
 
 int32 ADrone::GetHealth() const
@@ -907,6 +939,47 @@ bool ADrone::ShouldApplyFixedBossFacingCamera(
 	bool bPlayerControllerIsLocal)
 {
 	return bPawnLocallyControlled && bControllerIsPlayerController && bPlayerControllerIsLocal;
+}
+
+FVector2D ADrone::ConvertScreenInputToWorldMoveDirection(FVector2D RawAxis, FRotator CameraRotation)
+{
+	if (!FMath::IsFinite(RawAxis.X) || !FMath::IsFinite(RawAxis.Y))
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	if (RawAxis.IsNearlyZero())
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	if (RawAxis.SizeSquared() > 1.0f)
+	{
+		RawAxis.Normalize();
+	}
+
+	FVector CameraForward = CameraRotation.Vector();
+	CameraForward.Z = 0.0f;
+	if (!CameraForward.Normalize())
+	{
+		CameraForward = FVector::ForwardVector;
+	}
+
+	FVector CameraRight = FRotationMatrix(CameraRotation).GetUnitAxis(EAxis::Y);
+	CameraRight.Z = 0.0f;
+	if (!CameraRight.Normalize())
+	{
+		CameraRight = FVector::RightVector;
+	}
+
+	FVector WorldDirection = CameraForward * RawAxis.Y + CameraRight * RawAxis.X;
+	WorldDirection.Z = 0.0f;
+	if (!WorldDirection.Normalize())
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	return FVector2D(WorldDirection.X, WorldDirection.Y);
 }
 
 bool ADrone::ResolveFixedBossFacingCameraTargetForWorld(UWorld* World, FDroneCombatCameraTarget& OutTarget)
@@ -1774,6 +1847,73 @@ ARaidBoss* ADrone::FindRaidBossForLocalCamera() const
 	return nullptr;
 }
 
+FRotator ADrone::ResolveLocalCameraRelativeInputRotation() const
+{
+	if (CombatCameraComponent && CombatCameraComponent->IsActive())
+	{
+		return CombatCameraComponent->GetComponentRotation();
+	}
+
+	if (CombatCameraSpringArm)
+	{
+		return CombatCameraSpringArm->GetComponentRotation();
+	}
+
+	if (bHasCombatCameraFallbackYaw)
+	{
+		return FRotator(CombatCameraFallbackPitchDegrees, CombatCameraFallbackYawDegrees, 0.0f);
+	}
+
+	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		return PC->GetControlRotation();
+	}
+
+	return GetActorRotation();
+}
+
+FVector2D ADrone::ConvertLocalScreenInputToWorldMoveDirection(FVector2D RawAxis, float& OutCameraYaw) const
+{
+	const FRotator CameraRotation = ResolveLocalCameraRelativeInputRotation();
+	OutCameraYaw = CameraRotation.Yaw;
+	return ConvertScreenInputToWorldMoveDirection(RawAxis, CameraRotation);
+}
+
+void ADrone::LogInputConversionSummary(
+	const TCHAR* LogName,
+	const FVector2D& RawAxis,
+	const FVector2D& WorldAxis,
+	float CameraYaw,
+	float& InOutLastLogTime,
+	FVector2D& InOutLastRawAxis,
+	FVector2D& InOutLastWorldAxis,
+	float& InOutLastCameraYaw)
+{
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	const bool bRawAxisChanged = !InOutLastRawAxis.Equals(RawAxis, 0.001f);
+
+	if (!ShouldEmitThrottledSummaryLog(
+		Now,
+		InOutLastLogTime,
+		InputConversionSummaryLogIntervalSeconds,
+		bRawAxisChanged))
+	{
+		return;
+	}
+
+	InOutLastLogTime = Now;
+	InOutLastRawAxis = RawAxis;
+	InOutLastWorldAxis = WorldAxis;
+	InOutLastCameraYaw = CameraYaw;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] %s PC=%s RawAxis=%s CameraYaw=%.2f WorldAxis=%s"),
+		LogName ? LogName : TEXT("InputConverted"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		*RawAxis.ToString(),
+		CameraYaw,
+		*WorldAxis.ToString());
+}
+
 bool ADrone::IsMovementAllowedForServer(FName& OutIgnoreReason) const
 {
 	OutIgnoreReason = NAME_None;
@@ -1980,10 +2120,20 @@ FVector ADrone::ClampPositionOutsideBossCenterForServer(FVector RequestedPositio
 
 	FVector ClampedPosition = BossLocation + PushDirection.GetSafeNormal() * SafeMinDistanceCm;
 	LockZPositionForServer(ClampedPosition);
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move BossMinClamp: Before=%s After=%s MinDistance=5 Player=%s"),
-		*RequestedPosition.ToString(),
-		*ClampedPosition.ToString(),
-		*BuildDroneControllerLogString(Cast<AController>(GetController())));
+	UWorld* World = GetWorld();
+	const float Now = World ? World->GetTimeSeconds() : 0.0f;
+	if (ShouldEmitThrottledSummaryLog(
+		Now,
+		LastMoveBossMinClampSummaryLogTime,
+		MoveBossMinClampSummaryLogIntervalSeconds,
+		false))
+	{
+		LastMoveBossMinClampSummaryLogTime = Now;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move BossMinClamp: Before=%s After=%s MinDistance=5 Player=%s"),
+			*RequestedPosition.ToString(),
+			*ClampedPosition.ToString(),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())));
+	}
 	return ClampedPosition;
 }
 
@@ -2214,10 +2364,7 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 		return false;
 	}
 
-	const FRotator YawRot(0.f, RaidPC->GetControlRotation().Yaw, 0.f);
-	const FVector ForwardMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::X) * Axis.Y;
-	const FVector RightMove = FRotationMatrix(YawRot).GetUnitAxis(EAxis::Y) * Axis.X;
-	const FVector MoveDirection = (ForwardMove + RightMove).GetClampedToMaxSize(1.0f);
+	const FVector MoveDirection = FVector(Axis.X, Axis.Y, 0.0f).GetSafeNormal();
 	if (MoveDirection.IsNearlyZero())
 	{
 		return false;
