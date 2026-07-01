@@ -3,6 +3,91 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-07-01 — D15.5/D16/D17/D18 보스 텔레그래프, 이동/회피, 카메라/보스 시각화 정리
+
+### 문제
+
+보스 레이드 전투 수동 검증을 위해 서버 권한 이동, 회피, 보스 공격 예고, 고정 쿼터뷰 카메라가 이어져야 했지만, 각 기능의 C++ 경로와 검증 로그가 아직 한 묶음으로 정리되지 않았다.
+
+- 보스 공격은 즉시 범위 판정만 있었고, 예고 표시 후 지연 판정되는 프로토타입 경로가 필요했다.
+- 신규 이동 기획의 기본 이동, 원형 경계, 보스 최소 접근 거리, 이동거리 누적이 서버 권한으로 고정되어야 했다.
+- `C + 방향키` 회피는 방향 입력 순간의 축, 6m 이동, 0.25초 상태 유지, 0.15초 무적, 종료 후 1.2초 쿨타임을 서버에서 확정해야 했다.
+- Fixed Boss-Facing Quarter View Camera는 로컬 클라 표시 전용이어야 하며, 보이지 않는 C++ `RaidBoss`를 바라보며 카메라가 도는 문제가 있었다.
+- PIE 수동 검증은 전체 로그를 읽지 않고 `[DR_SUMMARY]` 검색어로 판정할 수 있어야 했다.
+
+### 수정
+
+- `ARaidBossAttackTelegraph`를 추가해 서버가 보스 공격 예고 actor를 생성하고, delay 만료 뒤 기존 `PerformDebugAreaAttackForServer()` 경로로 판정을 실행하게 했다.
+- `ARaidPlayerController::DebugTriggerBossTelegraphAttack()`과 debug-only server RPC를 추가해 PIE에서 보스 예고 공격을 수동 트리거할 수 있게 했다.
+- `ADrone` 서버 Tick에서 X/Y 평면 이동만 적용하고, 입력 축 normalize, Z 고정, 50m 원형 경계 clamp, 보스 중심 5m push-out, 이동거리 Distance2D 누적을 처리하도록 보강했다.
+- 이동 가능 조건은 서버에서 `InBattle + Alive + Battle RaidState + Report/Loading/Dodge 아님`으로 검증하고, `Move Accepted`, `BoundaryClamp`, `BossMinClamp`, `DistanceReset` 요약 로그를 정리했다.
+- `ServerRequestDodge` / `RequestDodgeForServer` 경로에서 회피 가능 조건, 방향 normalize, 경계/보스 최소거리 보정, 실제 이동거리 누적, 무적 타이머, 회피 종료 타이머, 종료 후 쿨타임을 서버 권한으로 처리했다.
+- 회피 중 일반 이동과 공격은 각각 `Move Ignored: Reason=Dodging`, `Attack Ignored: Reason=Dodging`으로 거부한다.
+- `ADrone`에 로컬 전용 `USpringArmComponent` / `UCameraComponent` 기반 Fixed Boss-Facing Quarter View Camera를 추가했다.
+- 카메라는 `GameState` 공식 `RaidBoss`를 우선 사용하고, 공식 보스가 없을 때만 fallback search를 사용한다.
+- 카메라용 BossValid는 non-null 포인터가 아니라 `공식 RaidBoss + hidden 아님 + 위치 정상 + VisualReady` 기준으로 강화했다.
+- `ARaidBoss` C++ 기본 생성자에 `PrototypeVisualMesh`와 `PrototypeVisualLabel`을 추가해 uasset 수정 없이 원점 보스가 보이도록 했다. Collision은 `NoCollision`으로 유지한다.
+- 카메라 fallback yaw는 최초 적용 시점 yaw로 고정해 보스가 없거나 보이지 않을 때 플레이어 이동만으로 카메라가 계속 회전하지 않게 했다.
+- 카메라/이동 로그는 상태 변경 또는 throttle 기준으로 제한하고, 보스 타겟 진단에는 `Source`, `BossName`, `BossClass`, `Location`, `MeshVisible`, `VisualReady`, `Reason`을 남긴다.
+
+### 검증
+
+- TDD red 확인:
+  - D15 telegraph 테스트에서 `ARaidBossAttackTelegraph`, `StartDebugTelegraphedAreaAttackForServer`, debug trigger RPC 누락 컴파일 실패를 먼저 확인했다.
+  - D16 이동 테스트에서 normalize, Z lock, 50m boundary, boss min clamp, 상태별 이동 차단, Distance2D 누적 기대값을 먼저 추가했다.
+  - D17 회피 테스트에서 NoDirection/Cooldown/AlreadyDodging/Attacking/Dead/Selecting/Report 차단, 타이머, 무적, 공격 차단, 실제 거리 누적 기대값을 먼저 추가했다.
+  - D18 카메라 테스트에서 boss-facing 수학, local-only gate, target source 우선순위, fallback yaw 고정, log throttle, `RaidBoss` visual ready 기대값을 먼저 추가했다.
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D15` 성공, 2 tests found, 2 Success, exit code 0.
+- `Automation RunTests DroneProto.D16.Drone` 성공, 3 tests found, 3 Success, exit code 0.
+- `Automation RunTests DroneProto.D17.Drone` 성공, 3 tests found, 3 Success, exit code 0.
+- `Automation RunTests DroneProto.D18.Drone` 성공, 5 tests found, 5 Success, exit code 0.
+- Automation 실행은 현재 로컬 DDC 권한 제약 때문에 `-DDC-ForceMemoryCache`를 붙여 진행했다.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] BossTelegraphStart`
+- `[DR_SUMMARY] BossTelegraphSpawned`
+- `[DR_SUMMARY] BossAttackExecute Reason=TelegraphExpired`
+- `[DR_SUMMARY] BossTelegraphExpired`
+- `[DR_SUMMARY] BossTelegraphDebugTrigger`
+- `[DR_SUMMARY] Move Accepted:`
+- `[DR_SUMMARY] Move Ignored: Reason=`
+- `[DR_SUMMARY] Move BoundaryClamp:`
+- `[DR_SUMMARY] Move BossMinClamp:`
+- `[DR_SUMMARY] Move DistanceReset:`
+- `[DR_SUMMARY] Dodge Accepted:`
+- `[DR_SUMMARY] Dodge Ignored: Reason=`
+- `[DR_SUMMARY] Dodge InvincibleStart`
+- `[DR_SUMMARY] Dodge InvincibleEnd`
+- `[DR_SUMMARY] Dodge End:`
+- `[DR_SUMMARY] Attack Ignored: Reason=Dodging`
+- `[DR_SUMMARY] Camera Applied:`
+- `[DR_SUMMARY] Camera BossTarget:`
+- `[DR_SUMMARY] Camera BossFacing:`
+- `[DR_SUMMARY] Camera Fallback:`
+- `[DR_SUMMARY] Camera RotationInputDisabled`
+- `[DR_SUMMARY] Boss VisualReady:`
+- `[DR_SUMMARY] Boss VisualWarning:`
+
+### PIE 판정
+
+- Ready 전 선택 화면에서는 이동/회피가 ignored 로그로 남아야 한다.
+- Ready 후 방향키 입력은 서버 기준 `Move Accepted`로 남고, 대각선 이동이 직선보다 빨라지면 안 된다.
+- 50m 경계와 보스 중심 5m 안쪽 진입은 각각 boundary/boss clamp 로그로 보정되어야 한다.
+- `C`만 누르면 회피하지 않고 `NoDirection`이 남아야 하며, `C + 방향키`는 6m 회피와 실제 이동거리 누적을 남겨야 한다.
+- 회피 직후 0.15초 동안만 피해가 무시되고, 이후 0.10초 구간에는 피격 가능해야 한다.
+- 회피 중 공격은 `Attack Ignored: Reason=Dodging`으로 거부되어야 한다.
+- 보스가 보이는 상태에서만 `Camera BossFacing: BossValid=True`가 남고, 보스가 없거나 보이지 않으면 `Camera Fallback`으로 빠져야 한다.
+- C++ `RaidBoss`만 스폰된 상태에서도 `Boss VisualReady`와 `Camera BossTarget ... VisualReady=True`가 보여야 한다.
+
+### SpecDecisionNeeded
+
+- 실제 보스 모델/애니메이션/VFX/UMG HP UI는 아직 에셋 작업 범위로 남긴다.
+- 보스 패턴 스케줄러, 텔레그래프 디자인, 공격 쿨다운, 난이도별 패턴 테이블은 별도 기획 결정이 필요하다.
+- 카메라 화면공간 보정은 C++ hook만 마련했고, 실제 화면 배치 튜닝은 에디터/플레이 테스트 기준으로 별도 진행한다.
+
+---
 ## 2026-06-30 — POR-6 ServerState / raid instance availability 분리
 
 ### 문제
