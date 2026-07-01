@@ -340,4 +340,25 @@ bool FDroneMovementAllowedStateAndDistanceTest::RunTest(const FString& Parameter
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneMoveAcceptedLogThrottleTest,
+	"DroneProto.D16.Drone.MoveAcceptedLogThrottle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneMoveAcceptedLogThrottleTest::RunTest(const FString& Parameters)
+{
+	TestFalse(TEXT("same accepted move axis does not force a log"),
+		ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(FVector2D(1.0f, 0.0f), FVector2D(1.0f, 0.0f)));
+	TestFalse(TEXT("tiny camera-relative axis drift does not force a log"),
+		ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(FVector2D(1.0f, 0.0f), FVector2D(0.9998f, 0.0175f)));
+	TestTrue(TEXT("meaningful direction change forces a log"),
+		ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(FVector2D(1.0f, 0.0f), FVector2D(0.9848f, 0.1736f)));
+	TestTrue(TEXT("movement start forces a log"),
+		ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(FVector2D::ZeroVector, FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("movement stop is a significant state transition"),
+		ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(FVector2D(1.0f, 0.0f), FVector2D::ZeroVector));
+
+	return true;
+}
+
 #endif

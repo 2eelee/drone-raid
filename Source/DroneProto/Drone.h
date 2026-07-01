@@ -160,6 +160,9 @@ public:
 		float LastLogTime,
 		float MinIntervalSeconds,
 		bool bForce);
+	static bool IsMoveAcceptedSummaryAxisChangeSignificant(
+		FVector2D PreviousAxis,
+		FVector2D CurrentAxis);
 
 	bool IsMovementAllowedForServer(FName& OutIgnoreReason) const;
 	FVector ClampPositionToMovementBoundaryForServer(FVector RequestedPosition);
@@ -390,6 +393,12 @@ private:
 
 	UPROPERTY(Transient)
 	FVector2D LastMoveAcceptedSummaryAxis = FVector2D::ZeroVector;
+
+	UPROPERTY(Transient)
+	bool bHasLastMoveAcceptedSummaryAxis = false;
+
+	UPROPERTY(Transient)
+	bool bMoveAcceptedSummaryInputActive = false;
 
 	UPROPERTY(Transient)
 	float LastReplicatedLocationSummaryLogTime = -1000.0f;

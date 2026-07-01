@@ -118,12 +118,13 @@ constexpr float MoveDistanceHardMaxDeltaMeters = 20.0f;
 constexpr float MoveDistanceExpectedDeltaMultiplier = 2.0f;
 constexpr float MoveDistanceExpectedDeltaSlackMeters = 3.0f;
 constexpr float MoveInputSummaryLogIntervalSeconds = 0.50f;
-constexpr float MoveDistanceSummaryLogIntervalSeconds = 0.50f;
+constexpr float MoveDistanceSummaryLogIntervalSeconds = 1.00f;
 constexpr float MoveDistanceIgnoredLogIntervalSeconds = 3.00f;
 constexpr float OwnerMoveCorrectionThresholdCm = 5.0f;
 constexpr float DefaultBaseMoveSpeedCmPerSecond = 450.0f;
 constexpr float CombatCameraSummaryLogIntervalSeconds = 5.00f;
 constexpr float MoveAcceptedSummaryLogIntervalSeconds = 1.00f;
+constexpr float MoveAcceptedSummaryAxisDeltaThreshold = 0.10f;
 constexpr float InputConversionSummaryLogIntervalSeconds = 1.00f;
 constexpr float MoveBossMinClampSummaryLogIntervalSeconds = 1.00f;
 
@@ -1105,6 +1106,22 @@ bool ADrone::ShouldEmitThrottledSummaryLog(
 		|| LastLogTime <= -999.0f
 		|| Now - LastLogTime >= FMath::Max(0.0f, MinIntervalSeconds);
 }
+bool ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(
+	FVector2D PreviousAxis,
+	FVector2D CurrentAxis)
+{
+	const bool bPreviousZero = PreviousAxis.IsNearlyZero();
+	const bool bCurrentZero = CurrentAxis.IsNearlyZero();
+	if (bPreviousZero || bCurrentZero)
+	{
+		return bPreviousZero != bCurrentZero;
+	}
+
+	const FVector2D PreviousNormal = PreviousAxis.GetSafeNormal();
+	const FVector2D CurrentNormal = CurrentAxis.GetSafeNormal();
+	return (PreviousNormal - CurrentNormal).Size() >= MoveAcceptedSummaryAxisDeltaThreshold;
+}
+
 
 bool ADrone::IsDodging() const
 {
@@ -2300,6 +2317,7 @@ void ADrone::EndDodgeForServer()
 bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 {
 	if (!HasAuthority())
+		bMoveAcceptedSummaryInputActive = false;
 	{
 		LogMoveInputSummary(TEXT("Ignored"), TEXT("NotAuthority"), RawAxis);
 		return false;
@@ -2315,12 +2333,14 @@ bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 		if (IgnoreReason == FName(TEXT("Dead")))
 		{
 			LogDeadInputIgnored(TEXT("Move"));
+		bMoveAcceptedSummaryInputActive = false;
 		}
 		LogMoveInputSummary(TEXT("Ignored"), IgnoreReason.IsNone() ? TEXT("Unknown") : *IgnoreReason.ToString(), Axis);
 		return false;
 	}
 
 	if (Axis.IsNearlyZero())
+		bMoveAcceptedSummaryInputActive = false;
 	{
 		LogMoveInputSummary(TEXT("Ignored"), TEXT("ZeroAxis"), Axis);
 		return false;
@@ -2396,12 +2416,16 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 	UWorld* World = GetWorld();
 	const float Now = World ? World->GetTimeSeconds() : 0.0f;
 	const float DeltaMetersForLog = FVector::Dist2D(CurrentLocation, PreviousLocation) * MoveDistanceCmToMeters;
-	const bool bMoveAcceptedAxisChanged = !LastMoveAcceptedSummaryAxis.Equals(Axis, 0.001f);
+	const bool bMoveAcceptedStart = !bMoveAcceptedSummaryInputActive;
+	const bool bMoveAcceptedAxisChanged = !bHasLastMoveAcceptedSummaryAxis
+		|| IsMoveAcceptedSummaryAxisChangeSignificant(LastMoveAcceptedSummaryAxis, Axis);
 	if (bMoveAcceptedAxisChanged
+		|| bMoveAcceptedStart
 		|| Now - LastMoveAcceptedSummaryLogTime >= MoveAcceptedSummaryLogIntervalSeconds)
 	{
 		LastMoveAcceptedSummaryLogTime = Now;
 		LastMoveAcceptedSummaryAxis = Axis;
+		bHasLastMoveAcceptedSummaryAxis = true;
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move Accepted: Player=%s Axis=%s Speed=%.2f Delta2D=%.2f TotalDistance=%.2f"),
 			*BuildDroneControllerLogString(RaidPC),
 			*Axis.ToString(),
@@ -2409,6 +2433,7 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 			DeltaMetersForLog,
 			AccumulatedMoveDistanceMeters + DeltaMetersForLog);
 	}
+	bMoveAcceptedSummaryInputActive = true;
 
 	if (Now - LastServerMoveAppliedSummaryLogTime >= MoveDistanceSummaryLogIntervalSeconds)
 	{
