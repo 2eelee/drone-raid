@@ -646,7 +646,9 @@ bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
 	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 19.99f, 1.0f, 1.0f, 0.0f, TEXT("Booster 19.99m"));
 	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 20.0f, 1.0f, 1.015f, 0.03f, TEXT("Booster 20m"));
 	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 40.0f, 1.0f, 1.03f, 0.06f, TEXT("Booster 40m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 199.99f, 1.0f, 1.135f, 0.27f, TEXT("Booster just before cap"));
 	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 200.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster cap"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 1000.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster over cap"));
 	ExpectCore(EDroneCombatCoreType::Drain, 100.0f, 100.0f, 200.0f, 1.0f, 1.0f, 0.0f, TEXT("Drain no unspecified penalty"));
 
 	const auto ExpectWeapon = [this](EDroneCombatWeaponType WeaponType, int32 PulseCount, float VectorMeters, float ExpectedDamage, float ExpectedBaseDamage, float ExpectedBonusDamage, int32 ExpectedHitCount, int32 ExpectedAdditionalHitCount, bool bExpectedResetVector, int32 ExpectedPulseCount, const TCHAR* Label)
@@ -674,9 +676,11 @@ bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
 	ExpectWeapon(EDroneCombatWeaponType::PulseLaser, 2, 0.0f, 18.0f, 8.0f, 10.0f, 1, 0, false, 0, TEXT("Pulse third"));
 	ExpectWeapon(EDroneCombatWeaponType::FractureBurst, 0, 0.0f, 11.0f, 5.0f, 6.0f, 4, 3, false, 0, TEXT("Fracture"));
 	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 0.0f, 7.0f, 7.0f, 0.0f, 1, 0, true, 0, TEXT("Vector 0m"));
-	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 4.99f, 7.0f, 7.0f, 0.0f, 1, 0, true, 0, TEXT("Vector 4.99m"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 4.9f, 7.0f, 7.0f, 0.0f, 1, 0, true, 0, TEXT("Vector 4.9m"));
 	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 5.0f, 8.0f, 7.0f, 1.0f, 1, 0, true, 0, TEXT("Vector 5m"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 10.0f, 9.0f, 7.0f, 2.0f, 1, 0, true, 0, TEXT("Vector 10m"));
 	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 40.0f, 15.0f, 7.0f, 8.0f, 1, 0, true, 0, TEXT("Vector cap"));
+	ExpectWeapon(EDroneCombatWeaponType::VectorCannon, 0, 100.0f, 15.0f, 7.0f, 8.0f, 1, 0, true, 0, TEXT("Vector over cap"));
 	TestTrue(TEXT("Drain heal is 12 percent before cap"),
 		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(10.0f), 1.2f, 0.001f));
 	TestTrue(TEXT("Drain heal is clamped to zero for negative damage"),
@@ -1870,9 +1874,9 @@ bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
 	Context.Drone->SetActorLocation(FVector::ZeroVector);
 	Context.Drone->ResetMoveDistanceForServerForTest(FName(TEXT("Automation")));
 	Context.Drone->UpdateMoveDistanceForServerForTest(0.016f);
-	for (int32 Step = 1; Step <= 8; ++Step)
+	for (int32 Step = 1; Step <= 20; ++Step)
 	{
-		Context.Drone->SetActorLocation(FVector(static_cast<float>(Step) * 500.0f, 0.0f, 0.0f));
+		Context.Drone->SetActorLocation(FVector(static_cast<float>(Step) * 200.0f, 0.0f, 0.0f));
 		Context.Drone->UpdateMoveDistanceForServerForTest(0.25f);
 	}
 
@@ -1900,6 +1904,16 @@ bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
 	Context.Drone->ApplyDamageForServer(10, FName(TEXT("Automation")));
 	const FDroneCombatRecord DamagedRecord = Context.Drone->GetCombatRecordForTest();
 	TestEqual(TEXT("CombatRecord increments damage taken count"), DamagedRecord.DamageTakenCount, 1);
+	TestTrue(TEXT("server report generation succeeds for Vector/Booster record"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	const FDroneReportData Report = Context.PC->GetLastDroneReportDataForTest();
+	TestTrue(TEXT("DroneReport copies server CombatRecord move distance"),
+		FMath::IsNearlyEqual(Report.MoveDistance, DamagedRecord.MoveDistance, 0.01f));
+	TestTrue(TEXT("DroneReport copies server CombatRecord boss damage"),
+		FMath::IsNearlyEqual(Report.BossDamage, DamagedRecord.BossDamage, 0.01f));
+	TestEqual(TEXT("DroneReport copies server CombatRecord damage taken count"),
+		Report.DamageTakenCount,
+		DamagedRecord.DamageTakenCount);
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
