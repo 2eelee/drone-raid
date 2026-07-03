@@ -3,6 +3,54 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-07-03 - D19 이동거리 효과 감사 / Dodge 체감 후속 보강
+
+### 문제
+
+- Vector Cannon/Booster Core 이동거리 기반 효과와 DroneReport 반영이 기획 수치와 맞는지 재확인이 필요했다.
+- PIE에서 `Move Accepted`가 반복 출력되어 수동 검증 로그가 과도하게 많았다.
+- Dodge가 0.25초 상태 유지에도 시작 즉시 End 위치로 이동해 순간이동처럼 보였다.
+- Dodge 무적 구간을 플레이어가 인지할 수 있도록 사라짐/재등장 visual hook이 필요했다.
+
+### 수정
+
+- Vector Cannon 5m당 +1, 최대 +8 및 Booster Core 누적 이동거리 상한을 자동화 테스트로 고정했다.
+- CombatRecord/DroneReport가 서버 기준 이동거리, 보스 피해, 피격 횟수를 복사하는지 검증을 추가했다.
+- `Move Accepted` 로그를 이동 시작, 의미 있는 축 변경, 1초 요약 기준으로 제한했다.
+- Dodge 시작 시 즉시 End로 이동하던 `SetActorLocation(FinalLocation)` 흐름을 제거하고, 서버 Tick에서 Start/Target을 0.25초 동안 보간한다.
+- Dodge 보간 중 실제 `Distance2D`만 Vector/Booster/CombatRecord 이동거리로 누적한다.
+- `InvincibleDuration=0.15s` 구간에 visual-only multicast와 `BP_OnDodgeInvincibleVisualChanged` 훅을 추가했다.
+- C++ 기본 visual은 visible `UPrimitiveComponent`만 숨기고, 우리가 숨긴 컴포넌트만 `InvincibleEnd`에 복구한다.
+- dedicated server에서는 visual 적용을 건너뛰고, 서버 gameplay 판정과 `bIsInvincible` 복제 정책은 바꾸지 않았다.
+
+### 검증
+
+- `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
+- `Automation RunTests DroneProto.D13.DroneCombat.SpecAlignment` 성공.
+- `Automation RunTests DroneProto.D9.Drone.VectorBoosterCombatRecord` 성공, 1 test.
+- `Automation RunTests DroneProto.D16.Drone` 성공, 4 tests.
+- `Automation RunTests DroneProto.D17.Drone` 성공, 3 tests.
+- `Automation RunTests DroneProto.D18.Drone` 성공, 6 tests.
+- `git diff --check` 공백 오류 없음. Windows LF/CRLF 경고만 확인.
+
+### PIE 검색어
+
+- `[DR_SUMMARY] Move Accepted:`
+- `[DR_SUMMARY] WeaponCalc`
+- `[DR_SUMMARY] CoreCalc`
+- `[DR_SUMMARY] AttackCalc`
+- `[DR_SUMMARY] CombatRecord`
+- `[DR_SUMMARY] Dodge Started:`
+- `[DR_SUMMARY] Dodge VisualHidden:`
+- `[DR_SUMMARY] Dodge InvincibleEnd`
+- `[DR_SUMMARY] Dodge VisualShown:`
+- `[DR_SUMMARY] Dodge End:`
+
+### SpecDecisionNeeded
+
+- 현재 Dodge visual은 C++ 기본 visibility toggle이다. 투명 머티리얼, fade, VFX는 추후 Blueprint/에셋 범위에서 붙인다.
+
+---
 ## 2026-07-01 - D18.5 Fixed Boss-Facing Camera 화면 기준 입력 변환
 
 ### 문제
