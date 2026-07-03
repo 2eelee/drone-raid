@@ -15,6 +15,7 @@ class UInputAction;
 class UDronePart;
 class ARaidBoss;
 class UWorld;
+class UPrimitiveComponent;
 
 USTRUCT(BlueprintType)
 struct FDroneCombatCameraView
@@ -171,6 +172,9 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Drone|Dodge")
 	void BP_OnDodgeVisualStateChanged(bool bDodging);
 
+	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Dodge")
+	void BP_OnDodgeInvincibleVisualChanged(bool bIsInvincibleVisual);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetPulseAttackCountForTest(bool bIsLeftWeapon) const;
 	float GetHealthValueForTest() const;
@@ -189,6 +193,7 @@ public:
 	bool RequestDodgeFromCurrentMoveInputForTest();
 	bool IsDodgingForTest() const;
 	bool IsInvincibleForTest() const;
+	void TickForTest(float DeltaSeconds);
 	void SetIsAttackingForTest(bool bInIsAttacking);
 	void SetLastDodgeEndTimeForTest(float InLastDodgeEndTime);
 	FName GetEquippedCorePartIDForTest() const;
@@ -380,6 +385,33 @@ private:
 	FTimerHandle DodgeEndTimerHandle;
 
 	UPROPERTY(Transient)
+	FVector DodgeStartLocationForServer = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector DodgeTargetLocationForServer = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector DodgeLastAppliedLocationForServer = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	FVector DodgeDirectionForServer = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	float DodgeElapsedSecondsForServer = 0.0f;
+
+	UPROPERTY(Transient)
+	float DodgeActiveDurationSecondsForServer = 0.0f;
+
+	UPROPERTY(Transient)
+	float DodgeAccumulatedActualDistanceMetersForServer = 0.0f;
+
+	UPROPERTY(Transient)
+	bool bDodgeInterpolationActiveForServer = false;
+
+	TArray<TWeakObjectPtr<UPrimitiveComponent>> DodgeVisualHiddenComponents;
+	bool bDodgeInvincibleVisualHidden = false;
+
+	UPROPERTY(Transient)
 	FName LastMoveInputSummaryResult = NAME_None;
 
 	UPROPERTY(Transient)
@@ -545,6 +577,13 @@ private:
 	FVector2D ClampMoveInputAxisForServer(FVector2D RawAxis, bool& bOutWasClamped) const;
 	bool IsDodgeAllowedForServer(const FVector2D& Direction, FName& OutIgnoreReason) const;
 	void AddDodgeMoveDistanceForServer(float DeltaMeters);
+	void ApplyDodgeInterpolatedLocationForServer(float Alpha);
+	void UpdateDodgeForServer(float DeltaSeconds);
+	void ClearDodgeInterpolationForServer();
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_SetDodgeInvincibleVisual(bool bIsInvincibleVisual);
+	void ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual);
+	void SetDodgeInvincibleVisualHidden(bool bShouldHideVisual);
 	void EndDodgeInvincibilityForServer();
 	void EndDodgeForServer();
 	bool CacheMoveInputForDodge(FVector2D RawAxis);

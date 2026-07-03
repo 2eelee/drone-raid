@@ -9,6 +9,7 @@
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
 
+#include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "TimerManager.h"
 
@@ -83,17 +84,20 @@ bool PrepareInBattleDodgeTest(FAutomationTestBase& Test, FDroneDodgeTestContext&
 	return Context.PC->GetCurrentSelectionState() == EPlayerSelectionState::InBattle;
 }
 
-void TickWorldForDodgeTest(UWorld* World, float DurationSeconds)
+void TickDodgeForDodgeTest(FDroneDodgeTestContext& Context, float DurationSeconds)
 {
-	if (!World || DurationSeconds <= 0.0f)
+	if (!Context.World || DurationSeconds <= 0.0f)
 	{
 		return;
 	}
 
 	++GFrameCounter;
-	World->GetTimerManager().Tick(0.0f);
+	if (Context.Drone)
+	{
+		Context.Drone->TickForTest(DurationSeconds);
+	}
 	++GFrameCounter;
-	World->GetTimerManager().Tick(DurationSeconds + 0.001f);
+	Context.World->GetTimerManager().Tick(DurationSeconds + 0.001f);
 }
 }
 
@@ -191,6 +195,14 @@ bool FDroneDodgeTimingCooldownAndAttackBlockTest::RunTest(const FString& Paramet
 		Context.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetFractureBurstPartID(), NAME_None));
 	Context.Drone->SetActorLocation(FVector(1000.0f, 1000.0f, 0.0f));
 	Context.Drone->ResetAccumulatedMoveDistanceForServer();
+	UStaticMeshComponent* TestVisual = NewObject<UStaticMeshComponent>(Context.Drone, TEXT("DodgeInvincibleVisualTestMesh"));
+	TestNotNull(TEXT("dodge visual test mesh is created"), TestVisual);
+	if (TestVisual)
+	{
+		TestVisual->SetupAttachment(Context.Drone->GetRootComponent());
+		TestVisual->RegisterComponentWithWorld(Context.World);
+		TestVisual->SetVisibility(true, true);
+	}
 	const int32 HealthBeforeDodgeDamage = Context.Drone->GetHealth();
 
 	TestTrue(TEXT("valid dodge request succeeds"),
@@ -199,6 +211,13 @@ bool FDroneDodgeTimingCooldownAndAttackBlockTest::RunTest(const FString& Paramet
 		Context.Drone->IsDodgingForTest());
 	TestTrue(TEXT("invincibility starts immediately"),
 		Context.Drone->IsInvincibleForTest());
+	TestTrue(TEXT("dodge start does not instantly teleport to the end location"),
+		FMath::IsNearlyEqual(Context.Drone->GetActorLocation().X, 1000.0f, 0.1f));
+	if (TestVisual)
+	{
+		TestFalse(TEXT("dodge invincible window hides the visual mesh"),
+			TestVisual->IsVisible());
+	}
 
 	TestFalse(TEXT("already dodging rejects another dodge"),
 		Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
@@ -217,20 +236,30 @@ bool FDroneDodgeTimingCooldownAndAttackBlockTest::RunTest(const FString& Paramet
 			BossHPBeforeAttack);
 	}
 
-	TickWorldForDodgeTest(Context.World, 0.16f);
+	TickDodgeForDodgeTest(Context, 0.16f);
 	TestFalse(TEXT("invincibility ends after 0.15 seconds"),
 		Context.Drone->IsInvincibleForTest());
 	TestTrue(TEXT("dodge state remains during the last 0.10 seconds"),
 		Context.Drone->IsDodgingForTest());
+	if (TestVisual)
+	{
+		TestTrue(TEXT("dodge visual mesh is shown when invincibility ends"),
+			TestVisual->IsVisible());
+	}
+	TestTrue(TEXT("dodge is interpolating between start and target halfway through"),
+		Context.Drone->GetActorLocation().X > 1000.0f
+		&& Context.Drone->GetActorLocation().X < 1600.0f);
 
 	Context.Drone->ApplyDamageForServer(10, FName(TEXT("Automation")));
 	TestEqual(TEXT("damage applies after invincibility ends"),
 		Context.Drone->GetHealth(),
 		HealthBeforeDodgeDamage - 10);
 
-	TickWorldForDodgeTest(Context.World, 0.10f);
+	TickDodgeForDodgeTest(Context, 0.10f);
 	TestFalse(TEXT("dodge state ends after 0.25 seconds"),
 		Context.Drone->IsDodgingForTest());
+	TestTrue(TEXT("dodge reaches the target location after duration"),
+		FMath::IsNearlyEqual(Context.Drone->GetActorLocation().X, 1600.0f, 0.1f));
 	TestTrue(TEXT("cooldown starts when dodge ends"),
 		Context.Drone->GetDodgeCooldownRemaining() > 1.0f);
 	TestFalse(TEXT("cooldown rejects immediate dodge after end"),
@@ -262,6 +291,13 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 	Normal.Drone->ResetAccumulatedMoveDistanceForServer();
 	TestTrue(TEXT("normal dodge succeeds"),
 		Normal.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("normal dodge does not instantly move to the target"),
+		FMath::IsNearlyEqual(Normal.Drone->GetActorLocation().X, 1000.0f, 0.1f));
+	TickDodgeForDodgeTest(Normal, 0.125f);
+	TestTrue(TEXT("normal dodge halfway position is between start and target"),
+		Normal.Drone->GetActorLocation().X > 1000.0f
+		&& Normal.Drone->GetActorLocation().X < 1600.0f);
+	TickDodgeForDodgeTest(Normal, 0.125f);
 	TestTrue(TEXT("normal dodge distance is 6m in XY"),
 		FMath::IsNearlyEqual(Normal.Drone->GetAccumulatedMoveDistance(), 6.0f, 0.001f));
 	TestTrue(TEXT("normal dodge adds Vector movement distance"),
@@ -284,6 +320,7 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 	const FVector WorldVectorStart = WorldVector.Drone->GetActorLocation();
 	TestTrue(TEXT("world-vector dodge succeeds"),
 		WorldVector.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TickDodgeForDodgeTest(WorldVector, 0.25f);
 	const FVector WorldVectorDelta = WorldVector.Drone->GetActorLocation() - WorldVectorStart;
 	TestTrue(TEXT("server treats dodge input as a requested world X/Y vector, independent of control yaw"),
 		FMath::IsNearlyEqual(WorldVectorDelta.X, 600.0f, 0.1f)
@@ -301,6 +338,7 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 	Boundary.Drone->ResetAccumulatedMoveDistanceForServer();
 	TestTrue(TEXT("boundary dodge succeeds"),
 		Boundary.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TickDodgeForDodgeTest(Boundary, 0.25f);
 	TestTrue(TEXT("boundary dodge cannot leave the 50m circle"),
 		FVector::Dist2D(Boundary.Drone->GetActorLocation(), FVector::ZeroVector) <= 5000.0f + 0.1f);
 	TestTrue(TEXT("boundary-clamped dodge records actual distance only"),
@@ -309,6 +347,29 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(Boundary.Drone->GetAccumulatedMoveDistance(), 0.10f, 0.01f));
 
 	DestroyDroneDodgeTestContext(Boundary);
+
+	FDroneDodgeTestContext BossMin = CreateDroneDodgeTestContext(TEXT("DroneDodgeBossMinDistanceWorld"));
+	if (!PrepareInBattleDodgeTest(*this, BossMin, TEXT("dodge boss min distance")))
+	{
+		DestroyDroneDodgeTestContext(BossMin);
+		return false;
+	}
+
+	BossMin.Drone->SetActorLocation(FVector(600.0f, 0.0f, 0.0f));
+	BossMin.Drone->ResetAccumulatedMoveDistanceForServer();
+	TestTrue(TEXT("boss-min dodge succeeds"),
+		BossMin.Drone->RequestDodgeForServer(FVector2D(-1.0f, 0.0f)));
+	TickDodgeForDodgeTest(BossMin, 0.25f);
+	TestTrue(TEXT("boss-min dodge cannot enter the 5m boss center exclusion"),
+		FVector::Dist2D(BossMin.Drone->GetActorLocation(), FVector::ZeroVector) >= 500.0f - 0.1f);
+	TestTrue(TEXT("boss-min-clamped dodge records actual distance only"),
+		FMath::IsNearlyEqual(BossMin.Drone->GetAccumulatedMoveDistance(), 1.0f, 0.01f));
+	TestTrue(TEXT("boss-min-clamped dodge adds actual Vector movement distance"),
+		FMath::IsNearlyEqual(BossMin.Drone->GetVectorAccumulatedMoveDistanceForTest(), 1.0f, 0.01f));
+	TestTrue(TEXT("boss-min-clamped dodge adds actual Booster movement distance"),
+		FMath::IsNearlyEqual(BossMin.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.0f, 0.01f));
+
+	DestroyDroneDodgeTestContext(BossMin);
 	return true;
 }
 

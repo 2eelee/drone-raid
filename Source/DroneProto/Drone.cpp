@@ -258,6 +258,7 @@ void ADrone::Tick(float DeltaSeconds)
 
 	if (HasAuthority())
 	{
+		UpdateDodgeForServer(DeltaSeconds);
 		ApplyPendingServerMoveInputForServer(DeltaSeconds);
 		UpdateMoveDistanceForServer(DeltaSeconds);
 	}
@@ -533,7 +534,20 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		return false;
 	}
 
-	const FVector StartLocation = GetActorLocation();
+	FVector StartLocation = GetActorLocation();
+	if (!FMath::IsNearlyEqual(StartLocation.Z, FixedZPosition, 0.1f))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move ZLocked: FixedZ=%.2f Player=%s Before=%s"),
+			FixedZPosition,
+			*BuildDroneControllerLogString(RaidPC),
+			*StartLocation.ToString());
+	}
+	LockZPositionForServer(StartLocation);
+	if (!GetActorLocation().Equals(StartLocation, 0.1f))
+	{
+		SetActorLocation(StartLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
 	FVector RequestedLocation = StartLocation + DodgeDirection.GetSafeNormal() * SafeDodgeDistanceCm;
 	if (!FMath::IsNearlyEqual(RequestedLocation.Z, FixedZPosition, 0.1f))
 	{
@@ -567,14 +581,19 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	LastServerMoveInput = FVector2D::ZeroVector;
 	BP_OnDodgeVisualStateChanged(true);
 
-	SetActorLocation(FinalLocation, false, nullptr, ETeleportType::TeleportPhysics);
-	const FVector CurrentLocation = GetActorLocation();
-	const float ActualDistanceMeters = FVector::Dist2D(StartLocation, CurrentLocation) * MoveDistanceCmToMeters;
-	AddDodgeMoveDistanceForServer(ActualDistanceMeters);
-	UpdateOwnerMoveSyncForServer(CurrentLocation, GetActorRotation());
+	DodgeStartLocationForServer = StartLocation;
+	DodgeTargetLocationForServer = FinalLocation;
+	DodgeLastAppliedLocationForServer = StartLocation;
+	DodgeDirectionForServer = DodgeDirection.GetSafeNormal();
+	DodgeElapsedSecondsForServer = 0.0f;
+	DodgeActiveDurationSecondsForServer = FMath::Max(KINDA_SMALL_NUMBER, DodgeDurationSeconds);
+	DodgeAccumulatedActualDistanceMetersForServer = 0.0f;
+	bDodgeInterpolationActiveForServer = true;
+
+	UpdateOwnerMoveSyncForServer(StartLocation, GetActorRotation());
 	ForceNetUpdate();
 
-	LastMoveDistanceLocation = CurrentLocation;
+	LastMoveDistanceLocation = StartLocation;
 	bHasMoveDistanceSample = true;
 
 	UWorld* World = GetWorld();
@@ -592,19 +611,32 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 			DodgeEndTimerHandle,
 			this,
 			&ADrone::EndDodgeForServer,
-			FMath::Max(0.0f, DodgeDurationSeconds),
+			FMath::Max(KINDA_SMALL_NUMBER, DodgeDurationSeconds),
 			false);
 	}
 
+	const float PlannedDistanceMeters = FVector::Dist2D(StartLocation, FinalLocation) * MoveDistanceCmToMeters;
+	Multicast_SetDodgeInvincibleVisual(true);
+	ApplyDodgeInvincibleVisualLocally(true);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleStart Player=%s Duration=%.2f"),
 		*BuildDroneControllerLogString(RaidPC),
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Accepted: Player=%s Dir=%s Start=%s End=%s ActualDistance=%.2f Invincible=%.2f Duration=%.2f"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualHidden: Player=%s Reason=InvincibleStart Duration=%.2f"),
+		*BuildDroneControllerLogString(RaidPC),
+		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Started: Player=%s Dir=%s Start=%s Target=%s Duration=%.2f Invincible=%.2f"),
 		*BuildDroneControllerLogString(RaidPC),
 		*DodgeDirection.GetSafeNormal().ToString(),
 		*StartLocation.ToString(),
-		*CurrentLocation.ToString(),
-		ActualDistanceMeters,
+		*FinalLocation.ToString(),
+		FMath::Max(0.0f, DodgeDurationSeconds),
+		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Accepted: Player=%s Dir=%s Start=%s Target=%s PlannedDistance=%.2f Invincible=%.2f Duration=%.2f MoveDistancePolicy=Deferred"),
+		*BuildDroneControllerLogString(RaidPC),
+		*DodgeDirection.GetSafeNormal().ToString(),
+		*StartLocation.ToString(),
+		*FinalLocation.ToString(),
+		PlannedDistanceMeters,
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds),
 		FMath::Max(0.0f, DodgeDurationSeconds));
 
@@ -612,19 +644,20 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		*BuildDroneControllerLogString(RaidPC),
 		*Direction.ToString(),
 		bWasClamped ? TEXT("Clamped") : TEXT("OK"),
-		ActualDistanceMeters / MoveDistanceCmToMeters,
+		PlannedDistanceMeters / MoveDistanceCmToMeters,
 		FMath::Max(0.0f, DodgeCooldownSeconds));
 
 	const AActor* ViewTarget = RaidPC->GetViewTarget();
 	const APawn* ControlledPawn = RaidPC->GetPawn();
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerDodgeApplied PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Direction=%s Delta=%s ServerLocation=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s MoveDistancePolicy=Included"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerDodgeApplied PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Direction=%s Delta=%s ServerLocation=%s Target=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s MoveDistancePolicy=Deferred"),
 		*BuildDroneControllerLogString(RaidPC),
 		*GetName(),
 		ControlledPawn ? *ControlledPawn->GetName() : TEXT("None"),
 		ControlledPawn == this ? TEXT("true") : TEXT("false"),
 		*Direction.ToString(),
-		*(CurrentLocation - StartLocation).ToString(),
-		*CurrentLocation.ToString(),
+		*FVector::ZeroVector.ToString(),
+		*StartLocation.ToString(),
+		*FinalLocation.ToString(),
 		ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()),
 		IsReplicatingMovement() ? TEXT("true") : TEXT("false"),
 		ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
@@ -1106,6 +1139,7 @@ bool ADrone::ShouldEmitThrottledSummaryLog(
 		|| LastLogTime <= -999.0f
 		|| Now - LastLogTime >= FMath::Max(0.0f, MinIntervalSeconds);
 }
+
 bool ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(
 	FVector2D PreviousAxis,
 	FVector2D CurrentAxis)
@@ -1121,7 +1155,6 @@ bool ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(
 	const FVector2D CurrentNormal = CurrentAxis.GetSafeNormal();
 	return (PreviousNormal - CurrentNormal).Size() >= MoveAcceptedSummaryAxisDeltaThreshold;
 }
-
 
 bool ADrone::IsDodging() const
 {
@@ -1224,6 +1257,28 @@ bool ADrone::IsDodgingForTest() const
 bool ADrone::IsInvincibleForTest() const
 {
 	return bIsInvincible;
+}
+
+void ADrone::TickForTest(float DeltaSeconds)
+{
+	Tick(DeltaSeconds);
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (bIsInvincible
+		&& DodgeElapsedSecondsForServer >= FMath::Max(0.0f, DodgeInvincibleDurationSeconds) - KINDA_SMALL_NUMBER)
+	{
+		EndDodgeInvincibilityForServer();
+	}
+
+	if (bIsDodging
+		&& DodgeActiveDurationSecondsForServer > 0.0f
+		&& DodgeElapsedSecondsForServer >= DodgeActiveDurationSecondsForServer - KINDA_SMALL_NUMBER)
+	{
+		EndDodgeForServer();
+	}
 }
 
 void ADrone::SetIsAttackingForTest(bool bInIsAttacking)
@@ -2008,10 +2063,22 @@ void ADrone::CancelDodgeForServer(FName Reason)
 		World->GetTimerManager().ClearTimer(DodgeEndTimerHandle);
 	}
 
+	const bool bHadInvincibleVisual = bIsInvincible;
 	const bool bHadDodgeState = bIsDodging || bIsInvincible;
 	bIsDodging = false;
 	bIsInvincible = false;
+	ClearDodgeInterpolationForServer();
 	LastServerMoveInput = FVector2D::ZeroVector;
+	LastMoveDistanceLocation = GetActorLocation();
+	bHasMoveDistanceSample = true;
+	if (bHadInvincibleVisual)
+	{
+		Multicast_SetDodgeInvincibleVisual(false);
+		ApplyDodgeInvincibleVisualLocally(false);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualShown: Player=%s Reason=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			Reason.IsNone() ? TEXT("Cancel") : *Reason.ToString());
+	}
 	if (bHadDodgeState)
 	{
 		BP_OnDodgeVisualStateChanged(false);
@@ -2262,6 +2329,133 @@ void ADrone::AddDodgeMoveDistanceForServer(float DeltaMeters)
 	RefreshMoveSpeedForServer();
 }
 
+void ADrone::ApplyDodgeInterpolatedLocationForServer(float Alpha)
+{
+	if (!HasAuthority() || !bDodgeInterpolationActiveForServer)
+	{
+		return;
+	}
+
+	const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
+	FVector DesiredLocation = FMath::Lerp(DodgeStartLocationForServer, DodgeTargetLocationForServer, ClampedAlpha);
+	LockZPositionForServer(DesiredLocation);
+
+	if (!GetActorLocation().Equals(DesiredLocation, 0.1f))
+	{
+		SetActorLocation(DesiredLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+
+	const FVector CurrentLocation = GetActorLocation();
+	const float DeltaMeters = FVector::Dist2D(DodgeLastAppliedLocationForServer, CurrentLocation) * MoveDistanceCmToMeters;
+	AddDodgeMoveDistanceForServer(DeltaMeters);
+	DodgeAccumulatedActualDistanceMetersForServer += FMath::Max(0.0f, DeltaMeters);
+	DodgeLastAppliedLocationForServer = CurrentLocation;
+	LastMoveDistanceLocation = CurrentLocation;
+	bHasMoveDistanceSample = true;
+
+	UpdateOwnerMoveSyncForServer(CurrentLocation, GetActorRotation());
+	ForceNetUpdate();
+}
+
+void ADrone::UpdateDodgeForServer(float DeltaSeconds)
+{
+	if (!HasAuthority() || !bDodgeInterpolationActiveForServer || !bIsDodging)
+	{
+		return;
+	}
+
+	const float SafeDuration = FMath::Max(KINDA_SMALL_NUMBER, DodgeActiveDurationSecondsForServer);
+	DodgeElapsedSecondsForServer = FMath::Clamp(
+		DodgeElapsedSecondsForServer + FMath::Max(0.0f, DeltaSeconds),
+		0.0f,
+		SafeDuration);
+	const float Alpha = DodgeElapsedSecondsForServer / SafeDuration;
+	ApplyDodgeInterpolatedLocationForServer(Alpha);
+
+	if (DodgeElapsedSecondsForServer >= SafeDuration - KINDA_SMALL_NUMBER)
+	{
+		bDodgeInterpolationActiveForServer = false;
+	}
+}
+
+void ADrone::ClearDodgeInterpolationForServer()
+{
+	bDodgeInterpolationActiveForServer = false;
+	DodgeStartLocationForServer = FVector::ZeroVector;
+	DodgeTargetLocationForServer = FVector::ZeroVector;
+	DodgeLastAppliedLocationForServer = FVector::ZeroVector;
+	DodgeDirectionForServer = FVector::ZeroVector;
+	DodgeElapsedSecondsForServer = 0.0f;
+	DodgeActiveDurationSecondsForServer = 0.0f;
+	DodgeAccumulatedActualDistanceMetersForServer = 0.0f;
+}
+
+void ADrone::Multicast_SetDodgeInvincibleVisual_Implementation(bool bIsInvincibleVisual)
+{
+	ApplyDodgeInvincibleVisualLocally(bIsInvincibleVisual);
+}
+
+void ADrone::ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	BP_OnDodgeInvincibleVisualChanged(bIsInvincibleVisual);
+}
+
+void ADrone::BP_OnDodgeInvincibleVisualChanged_Implementation(bool bIsInvincibleVisual)
+{
+	SetDodgeInvincibleVisualHidden(bIsInvincibleVisual);
+}
+
+void ADrone::SetDodgeInvincibleVisualHidden(bool bShouldHideVisual)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (bShouldHideVisual)
+	{
+		if (bDodgeInvincibleVisualHidden)
+		{
+			return;
+		}
+
+		DodgeVisualHiddenComponents.Reset();
+		TArray<UPrimitiveComponent*> PrimitiveComponents;
+		GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+		for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+		{
+			if (!PrimitiveComponent || !PrimitiveComponent->IsVisible())
+			{
+				continue;
+			}
+
+			PrimitiveComponent->SetVisibility(false, false);
+			DodgeVisualHiddenComponents.Add(PrimitiveComponent);
+		}
+		bDodgeInvincibleVisualHidden = true;
+		return;
+	}
+
+	if (!bDodgeInvincibleVisualHidden && DodgeVisualHiddenComponents.Num() == 0)
+	{
+		return;
+	}
+
+	for (const TWeakObjectPtr<UPrimitiveComponent>& HiddenComponent : DodgeVisualHiddenComponents)
+	{
+		if (UPrimitiveComponent* PrimitiveComponent = HiddenComponent.Get())
+		{
+			PrimitiveComponent->SetVisibility(true, false);
+		}
+	}
+	DodgeVisualHiddenComponents.Reset();
+	bDodgeInvincibleVisualHidden = false;
+}
+
 void ADrone::EndDodgeInvincibilityForServer()
 {
 	if (!HasAuthority())
@@ -2275,7 +2469,11 @@ void ADrone::EndDodgeInvincibilityForServer()
 	}
 
 	bIsInvincible = false;
+	Multicast_SetDodgeInvincibleVisual(false);
+	ApplyDodgeInvincibleVisualLocally(false);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleEnd Player=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualShown: Player=%s Reason=InvincibleEnd"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())));
 }
 
@@ -2286,6 +2484,17 @@ void ADrone::EndDodgeForServer()
 		return;
 	}
 
+	const bool bHadDodgeState = bIsDodging || bIsInvincible || bDodgeInterpolationActiveForServer;
+	if (bDodgeInterpolationActiveForServer)
+	{
+		DodgeElapsedSecondsForServer = FMath::Max(KINDA_SMALL_NUMBER, DodgeActiveDurationSecondsForServer);
+		ApplyDodgeInterpolatedLocationForServer(1.0f);
+		bDodgeInterpolationActiveForServer = false;
+	}
+
+	const float ActualDistanceMeters = DodgeAccumulatedActualDistanceMetersForServer;
+	const float ActualDurationSeconds = FMath::Max(DodgeElapsedSecondsForServer, DodgeActiveDurationSecondsForServer);
+	const FVector FinalLocation = GetActorLocation();
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(DodgeEndTimerHandle);
@@ -2308,17 +2517,24 @@ void ADrone::EndDodgeForServer()
 	}
 
 	LastServerMoveInput = FVector2D::ZeroVector;
+	ClearDodgeInterpolationForServer();
 	ForceNetUpdate();
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge End: LastDodgeEndTime=%.2f Player=%s"),
-		LastDodgeEndTime,
-		*BuildDroneControllerLogString(Cast<AController>(GetController())));
+	if (bHadDodgeState)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge End: LastDodgeEndTime=%.2f Player=%s ActualDistance=%.2f Duration=%.2f Location=%s"),
+			LastDodgeEndTime,
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			ActualDistanceMeters,
+			ActualDurationSeconds,
+			*FinalLocation.ToString());
+	}
 }
 
 bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 {
 	if (!HasAuthority())
-		bMoveAcceptedSummaryInputActive = false;
 	{
+		bMoveAcceptedSummaryInputActive = false;
 		LogMoveInputSummary(TEXT("Ignored"), TEXT("NotAuthority"), RawAxis);
 		return false;
 	}
@@ -2333,15 +2549,15 @@ bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 		if (IgnoreReason == FName(TEXT("Dead")))
 		{
 			LogDeadInputIgnored(TEXT("Move"));
-		bMoveAcceptedSummaryInputActive = false;
 		}
+		bMoveAcceptedSummaryInputActive = false;
 		LogMoveInputSummary(TEXT("Ignored"), IgnoreReason.IsNone() ? TEXT("Unknown") : *IgnoreReason.ToString(), Axis);
 		return false;
 	}
 
 	if (Axis.IsNearlyZero())
-		bMoveAcceptedSummaryInputActive = false;
 	{
+		bMoveAcceptedSummaryInputActive = false;
 		LogMoveInputSummary(TEXT("Ignored"), TEXT("ZeroAxis"), Axis);
 		return false;
 	}
