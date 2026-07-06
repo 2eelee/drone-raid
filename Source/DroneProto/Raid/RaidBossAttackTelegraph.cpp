@@ -77,6 +77,7 @@ void ARaidBossAttackTelegraph::InitializeForServer(FVector InCenter, float InRad
 		DebugText->SetText(FText::FromString(FString::Printf(TEXT("BOSS ATTACK\n%.0fcm"), RadiusCm)));
 	}
 	SetLifeSpan(TelegraphSeconds + 1.0f);
+	BP_OnTelegraphStartedVisual(Center, RadiusCm, TelegraphSeconds);
 	ForceNetUpdate();
 }
 
@@ -89,6 +90,12 @@ void ARaidBossAttackTelegraph::MarkExpiredForServer()
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossTelegraphExpired Actor=%s"),
 		*GetName());
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual TelegraphEnd: Shape=Circle Location=%s Radius=%.2f Duration=%.2f Actor=%s"),
+		*Center.ToString(),
+		RadiusCm,
+		TelegraphSeconds,
+		*GetName());
+	BP_OnTelegraphEndedVisual();
 	Destroy();
 }
 
@@ -117,3 +124,24 @@ float ARaidBossAttackTelegraph::GetRemainingSeconds() const
 
 	return FMath::Max(0.0f, TelegraphSeconds - (World->GetTimeSeconds() - StartServerTime));
 }
+
+void ARaidBossAttackTelegraph::BP_OnTelegraphStartedVisual_Implementation(FVector VisualCenter, float VisualRadiusCm, float VisualDurationSeconds)
+{
+	(void)VisualCenter;
+	(void)VisualRadiusCm;
+	(void)VisualDurationSeconds;
+#if WITH_DEV_AUTOMATION_TESTS
+	CombatVisualTelegraphStartCountForTest++;
+#endif
+}
+
+void ARaidBossAttackTelegraph::BP_OnTelegraphEndedVisual_Implementation()
+{
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+int32 ARaidBossAttackTelegraph::GetCombatVisualTelegraphStartCountForTest() const
+{
+	return CombatVisualTelegraphStartCountForTest;
+}
+#endif

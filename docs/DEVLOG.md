@@ -3,6 +3,48 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-07-06 — POR-14/POR-15 전투 가시화 및 로그 의미 정리
+
+### 작업
+
+- 전투 상황을 PIE에서 보기 쉽게 CombatVisual C++ 훅을 추가했다.
+- 공격/보스 피격/드론 피격/텔레그래프 표시용 visual-only 이벤트와 DR_SUMMARY 로그를 정리했다.
+- 0 damage 공격은 Attack NoDamage로 분리하고, 실제 HP 변화가 있는 경우만 BossDamage로 남기도록 로그 의미를 정리했다.
+- 이동 계열 반복 로그를 줄이고, PIE 확인용 체크리스트 로그를 추가했다.
+- AGENTS.md에 Codex/Linear 보고 규칙과 DroneRaid 작업 제한/명명 규칙을 추가했다.
+
+### 검증
+
+- Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex 성공.
+- Automation RunTests DroneProto.D20.LogSemantics.NoDamageAttack 성공.
+- Automation RunTests DroneProto.D19.CombatVisual.Hooks 성공.
+- Automation RunTests DroneProto.D13.DroneCombat.SpecAlignment 성공.
+- Automation RunTests DroneProto.D16.Drone 성공.
+- Automation RunTests DroneProto.D17.Drone 성공.
+- Automation RunTests DroneProto.D18.Drone 성공.
+- Automation RunTests DroneProto.D15.RaidBoss.TelegraphedAreaAttack 성공.
+- git diff --check 성공.
+- Linear POR-15에 검증 결과 코멘트 작성.
+
+### PIE 검색어
+
+- [DR_SUMMARY] D20PIEChecklist CombatVisual
+- [DR_SUMMARY] Attack NoDamage:
+- [DR_SUMMARY] BossDamageIgnored: Reason=NoDamage
+- [DR_SUMMARY] CombatVisual Attack:
+- [DR_SUMMARY] CombatVisual BossDamaged:
+- [DR_SUMMARY] Dodge VisualHidden:
+- [DR_SUMMARY] Dodge VisualShown:
+- [DR_SUMMARY] CombatVisual TelegraphStart:
+- [DR_SUMMARY] CombatVisual TelegraphEnd:
+- [DR_SUMMARY] CombatVisual DroneDamaged
+- [DR_SUMMARY] CombatVisual DroneDamageIgnored:
+
+### 남은 확인
+
+- Dodge visual, Telegraph visual, DroneDamaged/DamageIgnored visual은 최신 PIE에서 수동 확인 필요.
+
+---
 ## 2026-07-03 - D19 이동거리 효과 감사 / Dodge 체감 후속 보강
 
 ### 문제

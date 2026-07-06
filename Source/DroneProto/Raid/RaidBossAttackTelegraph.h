@@ -36,6 +36,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss|Telegraph")
 	float GetRemainingSeconds() const;
 
+	UFUNCTION(BlueprintNativeEvent, Category = "Raid|Boss|Telegraph|Visual")
+	void BP_OnTelegraphStartedVisual(FVector VisualCenter, float VisualRadiusCm, float VisualDurationSeconds);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Raid|Boss|Telegraph|Visual")
+	void BP_OnTelegraphEndedVisual();
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 GetCombatVisualTelegraphStartCountForTest() const;
+#endif
+
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|Boss|Telegraph", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USceneComponent> SceneRoot = nullptr;
@@ -57,4 +67,8 @@ private:
 
 	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Boss|Telegraph", meta = (AllowPrivateAccess = "true", Units = "s"))
 	float StartServerTime = 0.0f;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 CombatVisualTelegraphStartCountForTest = 0;
+#endif
 };

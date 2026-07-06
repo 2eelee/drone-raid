@@ -2543,15 +2543,22 @@ bool FRaidBossTelegraphedAreaAttackTest::RunTest(const FString& Parameters)
 		DodgeMissHealthBefore);
 	TestTrue(TEXT("server dodge before telegraph expiry succeeds"),
 		DodgeMissContext.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
-	TestTrue(TEXT("dodge moves drone outside delayed attack radius"),
-		FVector::Dist2D(DodgeMissContext.Drone->GetActorLocation(), FVector::ZeroVector) > 100.0f);
+	TestTrue(TEXT("dodge invincibility is active before delayed boss attack"),
+		DodgeMissContext.Drone->IsInvincibleForTest());
+	const int32 DodgeMissIgnoredVisualBefore = DodgeMissContext.Drone->GetCombatVisualDroneDamageIgnoredCountForTest();
 	TickWorldForAutomationTest(DodgeMissContext.World, 0.15f);
-	TestEqual(TEXT("dodge before telegraph expiry keeps delayed area attack as miss"),
+	TestEqual(TEXT("dodge invincibility keeps delayed area attack from damaging"),
 		DodgeMissContext.Drone->GetHealth(),
 		DodgeMissHealthBefore);
-	TestEqual(TEXT("delayed dodge miss leaves DamageTakenCount unchanged"),
+	TestEqual(TEXT("delayed invincible dodge hit leaves DamageTakenCount unchanged"),
 		DodgeMissContext.Drone->GetCombatRecordForTest().DamageTakenCount,
 		0);
+	TestEqual(TEXT("delayed invincible dodge hit fires ignored visual event"),
+		DodgeMissContext.Drone->GetCombatVisualDroneDamageIgnoredCountForTest(),
+		DodgeMissIgnoredVisualBefore + 1);
+	TestEqual(TEXT("delayed invincible dodge hit records ignored reason"),
+		DodgeMissContext.Drone->GetLastCombatVisualDroneDamageIgnoredReasonForTest(),
+		FName(TEXT("Invincible")));
 	TestEqual(TEXT("dodge miss telegraph is destroyed after execution"),
 		CountBossTelegraphsForAutomationTest(DodgeMissContext.World),
 		0);
@@ -2672,6 +2679,181 @@ bool FRaidBossTelegraphedAreaAttackTest::RunTest(const FString& Parameters)
 		InvalidHealthBefore);
 	DestroyDroneSelectionTestContext(InvalidContext);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCombatVisualHooksTest,
+	"DroneProto.D19.CombatVisual.Hooks",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCombatVisualHooksTest::RunTest(const FString& Parameters)
+{
+	TestNotNull(TEXT("drone attack visual multicast exists"),
+		ADrone::StaticClass()->FindFunctionByName(TEXT("Multicast_PlayDroneAttackVisual")));
+	TestNotNull(TEXT("drone attack visual Blueprint hook exists"),
+		ADrone::StaticClass()->FindFunctionByName(TEXT("BP_OnDroneAttackVisual")));
+	TestNotNull(TEXT("drone damaged visual Blueprint hook exists"),
+		ADrone::StaticClass()->FindFunctionByName(TEXT("BP_OnDroneDamagedVisual")));
+	TestNotNull(TEXT("drone damage ignored visual Blueprint hook exists"),
+		ADrone::StaticClass()->FindFunctionByName(TEXT("BP_OnDroneDamageIgnoredVisual")));
+	TestNotNull(TEXT("boss damaged visual Blueprint hook exists"),
+		ARaidBoss::StaticClass()->FindFunctionByName(TEXT("BP_OnBossDamagedVisual")));
+	TestNotNull(TEXT("telegraph start visual Blueprint hook exists"),
+		ARaidBossAttackTelegraph::StaticClass()->FindFunctionByName(TEXT("BP_OnTelegraphStartedVisual")));
+	TestNotNull(TEXT("telegraph end visual Blueprint hook exists"),
+		ARaidBossAttackTelegraph::StaticClass()->FindFunctionByName(TEXT("BP_OnTelegraphEndedVisual")));
+
+	FDroneSelectionTestContext AttackContext = CreateDroneSelectionTestContext(TEXT("CombatVisualAttackWorld"));
+	ARaidBoss* AttackBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, AttackContext, AttackBoss, TEXT("combat visual attack")))
+	{
+		DestroyDroneSelectionTestContext(AttackContext);
+		return false;
+	}
+
+	TestTrue(TEXT("combat visual attack loadout applies"),
+		AttackContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	const int32 AttackVisualCountBefore = AttackContext.Drone->GetCombatVisualAttackCountForTest();
+	const int32 BossDamagedVisualCountBefore = AttackBoss->GetCombatVisualBossDamagedCountForTest();
+	const float BossHPBeforeAttack = AttackBoss->GetCurrentHP();
+	const float DamageDealt = AttackBossAndMeasureDamage(AttackContext.Drone, AttackBoss);
+	TestTrue(TEXT("combat visual attack test deals damage"),
+		DamageDealt > 0.0f);
+	TestEqual(TEXT("attack visual event fires once after server damage"),
+		AttackContext.Drone->GetCombatVisualAttackCountForTest(),
+		AttackVisualCountBefore + 1);
+	TestTrue(TEXT("attack visual carries actual dealt damage"),
+		FMath::IsNearlyEqual(AttackContext.Drone->GetLastCombatVisualAttackDamageForTest(), DamageDealt, 0.001f));
+	TestFalse(TEXT("attack visual has a non-empty trajectory"),
+		AttackContext.Drone->GetLastCombatVisualAttackFromForTest().Equals(
+			AttackContext.Drone->GetLastCombatVisualAttackToForTest(),
+			0.1f));
+	TestEqual(TEXT("boss damaged visual event fires once after boss damage"),
+		AttackBoss->GetCombatVisualBossDamagedCountForTest(),
+		BossDamagedVisualCountBefore + 1);
+	TestTrue(TEXT("boss damaged visual carries damage"),
+		FMath::IsNearlyEqual(AttackBoss->GetLastCombatVisualBossDamageForTest(), DamageDealt, 0.001f));
+	TestTrue(TEXT("boss damaged visual carries old HP"),
+		FMath::IsNearlyEqual(AttackBoss->GetLastCombatVisualBossOldHPForTest(), BossHPBeforeAttack, 0.001f));
+	TestTrue(TEXT("boss damaged visual carries new HP"),
+		FMath::IsNearlyEqual(AttackBoss->GetLastCombatVisualBossNewHPForTest(), AttackBoss->GetCurrentHP(), 0.001f));
+	TestTrue(TEXT("boss HP text render updates after damage"),
+		AttackBoss->GetPrototypeVisualLabelTextForTest().Contains(
+			FString::Printf(TEXT("Boss HP %.0f / %.0f"), AttackBoss->GetCurrentHP(), AttackBoss->GetMaxHP())));
+	DestroyDroneSelectionTestContext(AttackContext);
+
+	FDroneSelectionTestContext DamageContext = CreateDroneSelectionTestContext(TEXT("CombatVisualDroneDamageWorld"));
+	ARaidBoss* DamageBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, DamageContext, DamageBoss, TEXT("combat visual drone damage")))
+	{
+		DestroyDroneSelectionTestContext(DamageContext);
+		return false;
+	}
+
+	DamageContext.Drone->SetActorLocation(FVector::ZeroVector);
+	const int32 DroneDamagedVisualCountBefore = DamageContext.Drone->GetCombatVisualDroneDamagedCountForTest();
+	const int32 DamageTakenCountBefore = DamageContext.Drone->GetCombatRecordForTest().DamageTakenCount;
+	const float DroneHPBeforeDamage = DamageContext.Drone->GetHealthValueForTest();
+	TestEqual(TEXT("boss debug attack hits drone for visual damage test"),
+		DamageBoss->PerformDebugAreaAttackForServer(FVector::ZeroVector, 150.0f, 25),
+		1);
+	TestEqual(TEXT("drone damaged visual event fires once after server hit"),
+		DamageContext.Drone->GetCombatVisualDroneDamagedCountForTest(),
+		DroneDamagedVisualCountBefore + 1);
+	TestTrue(TEXT("drone damaged visual carries damage"),
+		FMath::IsNearlyEqual(DamageContext.Drone->GetLastCombatVisualDroneDamageForTest(), 25.0f, 0.001f));
+	TestTrue(TEXT("drone damaged visual carries old HP"),
+		FMath::IsNearlyEqual(DamageContext.Drone->GetLastCombatVisualDroneDamageOldHPForTest(), DroneHPBeforeDamage, 0.001f));
+	TestTrue(TEXT("drone damaged visual carries new HP"),
+		FMath::IsNearlyEqual(DamageContext.Drone->GetLastCombatVisualDroneDamageNewHPForTest(), DamageContext.Drone->GetHealthValueForTest(), 0.001f));
+	TestEqual(TEXT("combat visual damage event does not change DamageTakenCount policy"),
+		DamageContext.Drone->GetCombatRecordForTest().DamageTakenCount,
+		DamageTakenCountBefore + 1);
+
+	TestTrue(TEXT("combat visual invincible dodge starts"),
+		DamageContext.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	const int32 IgnoredVisualCountBefore = DamageContext.Drone->GetCombatVisualDroneDamageIgnoredCountForTest();
+	const int32 HPBeforeIgnoredDamage = DamageContext.Drone->GetHealth();
+	DamageContext.Drone->ApplyDamageForServer(25, FName(TEXT("AutomationInvincible")));
+	TestEqual(TEXT("invincible ignored damage leaves HP unchanged"),
+		DamageContext.Drone->GetHealth(),
+		HPBeforeIgnoredDamage);
+	TestEqual(TEXT("invincible ignored damage fires ignored visual event"),
+		DamageContext.Drone->GetCombatVisualDroneDamageIgnoredCountForTest(),
+		IgnoredVisualCountBefore + 1);
+	TestEqual(TEXT("invincible ignored visual reason is explicit"),
+		DamageContext.Drone->GetLastCombatVisualDroneDamageIgnoredReasonForTest(),
+		FName(TEXT("Invincible")));
+	DestroyDroneSelectionTestContext(DamageContext);
+
+	FDroneSelectionTestContext TelegraphContext = CreateDroneSelectionTestContext(TEXT("CombatVisualTelegraphWorld"));
+	ARaidBoss* TelegraphBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, TelegraphContext, TelegraphBoss, TEXT("combat visual telegraph")))
+	{
+		DestroyDroneSelectionTestContext(TelegraphContext);
+		return false;
+	}
+
+	TestTrue(TEXT("combat visual telegraph starts"),
+		TelegraphBoss->StartDebugTelegraphedAreaAttackForServer(FVector::ZeroVector, 150.0f, 25, 0.10f));
+	ARaidBossAttackTelegraph* Telegraph = FindBossTelegraphForAutomationTest(TelegraphContext.World);
+	TestNotNull(TEXT("combat visual telegraph actor exists"), Telegraph);
+	TestEqual(TEXT("telegraph visual start event fires once"),
+		Telegraph ? Telegraph->GetCombatVisualTelegraphStartCountForTest() : 0,
+		1);
+	DestroyDroneSelectionTestContext(TelegraphContext);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneD20LogSemanticsTest,
+	"DroneProto.D20.LogSemantics.NoDamageAttack",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneD20LogSemanticsTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext NoWeaponContext = CreateDroneSelectionTestContext(TEXT("D20NoWeaponAttackWorld"));
+	ARaidBoss* NoWeaponBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, NoWeaponContext, NoWeaponBoss, TEXT("D20 no weapon attack")))
+	{
+		DestroyDroneSelectionTestContext(NoWeaponContext);
+		return false;
+	}
+
+	TestEqual(TEXT("no weapon attack starts with no left weapon"),
+		NoWeaponContext.Drone->GetEquippedLeftWeaponPartIDForTest(),
+		NAME_None);
+	TestEqual(TEXT("no weapon attack starts with no right weapon"),
+		NoWeaponContext.Drone->GetEquippedRightWeaponPartIDForTest(),
+		NAME_None);
+
+	const float BossHPBeforeNoWeaponAttack = NoWeaponBoss->GetCurrentHP();
+	const FDroneCombatRecord RecordBeforeNoWeaponAttack = NoWeaponContext.Drone->GetCombatRecordForTest();
+	const int32 AttackVisualCountBefore = NoWeaponContext.Drone->GetCombatVisualAttackCountForTest();
+	const int32 BossDamagedVisualCountBefore = NoWeaponBoss->GetCombatVisualBossDamagedCountForTest();
+	const float DamageDealt = AttackBossAndMeasureDamage(NoWeaponContext.Drone, NoWeaponBoss);
+	TestTrue(TEXT("no weapon attack is allowed but deals no damage"),
+		FMath::IsNearlyZero(DamageDealt, 0.001f));
+	TestTrue(TEXT("no weapon attack leaves boss HP unchanged"),
+		FMath::IsNearlyEqual(NoWeaponBoss->GetCurrentHP(), BossHPBeforeNoWeaponAttack, 0.001f));
+	TestTrue(TEXT("no weapon attack leaves combat record boss damage unchanged"),
+		FMath::IsNearlyEqual(
+			NoWeaponContext.Drone->GetCombatRecordForTest().BossDamage,
+			RecordBeforeNoWeaponAttack.BossDamage,
+			0.001f));
+	TestEqual(TEXT("no weapon attack does not fire attack visual"),
+		NoWeaponContext.Drone->GetCombatVisualAttackCountForTest(),
+		AttackVisualCountBefore);
+	TestEqual(TEXT("no weapon attack does not fire boss damaged visual"),
+		NoWeaponBoss->GetCombatVisualBossDamagedCountForTest(),
+		BossDamagedVisualCountBefore);
+	TestEqual(TEXT("no weapon attack records explicit no damage reason"),
+		NoWeaponContext.Drone->GetLastAttackNoDamageReasonForTest(),
+		FName(TEXT("NoWeapon")));
+
+	DestroyDroneSelectionTestContext(NoWeaponContext);
 	return true;
 }
 
@@ -3684,6 +3866,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("[DR_SUMMARY] AttackCalc Player=")));
 	TestTrue(TEXT("attack accepted summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Accepted: Player=")));
+	TestTrue(TEXT("attack no damage summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack NoDamage:")));
 	TestTrue(TEXT("attack ignored summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] AttackIgnored PC=")));
 	TestTrue(TEXT("not in battle attack ignored summary log marker exists"),
@@ -3704,6 +3888,10 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDeath:")));
 	TestTrue(TEXT("dead boss damage ignored summary log marker exists"),
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=BossDead")));
+	TestTrue(TEXT("zero boss damage is separated from BossDamage marker"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=NoDamage")));
+	TestTrue(TEXT("D20 combat visual PIE checklist marker exists"),
+		RaidBossSource.Contains(TEXT("[DR_SUMMARY] D20PIEChecklist CombatVisual")));
 	TestTrue(TEXT("boss area attack summary log marker exists"),
 		RaidBossSource.Contains(TEXT("[DR_SUMMARY] BossAttack")));
 	TestTrue(TEXT("boss area attack hit summary log marker exists"),
@@ -3921,6 +4109,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		&& DroneSource.Contains(TEXT("[DR_SUMMARY] ReturnAfterReport Player=")));
 	TestTrue(TEXT("move input summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveInput PC=")));
+	TestTrue(TEXT("move accepted summary uses shared throttle helper"),
+		DroneSource.Contains(TEXT("ShouldEmitMoveAcceptedSummaryLog(")));
 	TestTrue(TEXT("server move applied summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] ServerMoveApplied PC=")));
 	TestTrue(TEXT("server move ignored summary log marker exists"),

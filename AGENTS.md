@@ -108,3 +108,62 @@
 ## 하지 말 것
 - 게임 변형(Combat/Platforming 등) 없음 — 단일 게임
 - 클라에서 직접 권한 데이터 변경 금지
+
+## DroneRaid Codex Reporting Rules
+
+### 1. 작업 시작 전 확인
+- 모든 구현/감사 작업 시작 전 `git branch --show-current`와 `git status --short`를 확인한다.
+- 관련 Linear issue key/title/status/link를 확인하고, 없으면 범위가 있는 작업인지 판단해 생성 또는 연결한다.
+- 작업 범위와 금지 범위를 먼저 요약한다.
+
+### 2. 구현 완료 보고 필수 항목
+- 수정 파일 목록
+- 연결 Linear issue
+- 서버 실행 위치
+- 클라이언트 실행 위치
+- 추가/변경 RPC
+- Replicate/OnRep 변경 여부
+- 권한 검증 위치
+- 자동화 테스트 결과
+- `git diff --check` 결과
+- staged 여부
+- PIE에서 볼 `DR_SUMMARY` 검색어
+- 수동 미검증 항목
+- 건드리지 않은 항목
+
+### 3. DronePartInventory / 선택 / 취소 / 교체 / 반환 작업 규칙
+- 재고 차감/반환/교체는 서버 단일 경로인지 먼저 확인한다.
+- 교체 순서는 반드시 “새 부품 재고 확인 → 가능할 때만 기존 부품 반환 → 새 부품 차감 → 슬롯 갱신”이어야 한다.
+- 반환 중복 방지는 로그가 아니라 슬롯 상태 `None`/`Invalid` 처리 여부로 판단한다.
+- 선택 취소, 교체, 선택 중 접속 종료, 전투 중 접속 종료, 사망, 레이드 종료가 중복 반환을 만들지 않는지 확인한다.
+
+### 4. UI 작업 규칙
+- UMG 배치, `.uasset`, `.umap`은 Codex가 임의 수정하지 않는다.
+- C++ 부모 위젯, `BindWidgetOptional`, `BlueprintCallable`/`BlueprintPure` getter, `Refresh`/`OnRep`/`ClientRPC` 연결만 담당한다.
+- UI는 로컬 컨트롤러에서만 `AddToViewport` 한다.
+
+### 5. 로그 / 검증 규칙
+- 전체 PIE 로그를 요구하지 않는다.
+- 가능한 `DR_SUMMARY` 검색어와 성공/실패 기준으로 보고한다.
+- Move 계열 반복 로그는 사건성 로그가 아니면 throttle/summary 기준을 유지한다.
+- 사건성 로그는 유지한다:
+  - Select / Cancel / Return / Ready
+  - Attack Accepted / Ignored
+  - BossDamage / BossDeath / RaidEnd
+  - DroneReport / ReportWidgetShown
+  - CombatVisual Attack / BossDamaged / Telegraph / DroneDamaged
+  - Dodge Started / VisualHidden / VisualShown / End
+
+### 6. 구현 금지 기본값
+- `git add`/commit 금지. 사용자가 명시할 때만 한다.
+- UMG, `.uasset`, `.umap` 수정 금지.
+- 큰 구조 리팩터링 금지.
+- 서버 권한 판정을 클라로 옮기지 않는다.
+- 새 RPC/Replicated 변수는 필요성과 책임 분리를 보고한 뒤 최소로만 추가한다.
+
+## DroneRaid Naming Rules
+- D 번호는 `현현_개발마일스톤`의 원래 Day 번호 기준이다.
+- 새 작업마다 D 번호를 자동 증가시키지 않는다.
+- 마일스톤 이후 추가 보강/감사/로그 정리 작업은 Linear POR 번호 중심으로 기록한다.
+- 자동화 테스트 이름에 남은 D 번호는 호환상 유지할 수 있지만, devlog 제목/커밋 메시지/작업명은 POR 번호와 실제 작업명 중심으로 작성한다.
+- 예: `2026-07-06 — POR-14/POR-15 전투 가시화 및 로그 의미 정리`

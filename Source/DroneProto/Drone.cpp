@@ -2,6 +2,7 @@
 #include "DronePart.h"
 #include "DummyParts.h"
 #include "Camera/CameraComponent.h"
+#include "DrawDebugHelpers.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SceneComponent.h"
@@ -118,12 +119,12 @@ constexpr float MoveDistanceHardMaxDeltaMeters = 20.0f;
 constexpr float MoveDistanceExpectedDeltaMultiplier = 2.0f;
 constexpr float MoveDistanceExpectedDeltaSlackMeters = 3.0f;
 constexpr float MoveInputSummaryLogIntervalSeconds = 0.50f;
-constexpr float MoveDistanceSummaryLogIntervalSeconds = 1.00f;
+constexpr float MoveDistanceSummaryLogIntervalSeconds = 3.00f;
 constexpr float MoveDistanceIgnoredLogIntervalSeconds = 3.00f;
 constexpr float OwnerMoveCorrectionThresholdCm = 5.0f;
 constexpr float DefaultBaseMoveSpeedCmPerSecond = 450.0f;
 constexpr float CombatCameraSummaryLogIntervalSeconds = 5.00f;
-constexpr float MoveAcceptedSummaryLogIntervalSeconds = 1.00f;
+constexpr float MoveAcceptedSummaryLogIntervalSeconds = 3.00f;
 constexpr float MoveAcceptedSummaryAxisDeltaThreshold = 0.10f;
 constexpr float InputConversionSummaryLogIntervalSeconds = 1.00f;
 constexpr float MoveBossMinClampSummaryLogIntervalSeconds = 1.00f;
@@ -411,6 +412,15 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
 			*GetName(),
 			FMath::Max(0, DamageAmount));
+		Multicast_PlayDroneDamageIgnoredVisual(FName(TEXT("Invincible")));
+		if (GetNetMode() == NM_Standalone)
+		{
+			PlayDroneDamageIgnoredVisualLocally(FName(TEXT("Invincible")));
+		}
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual DroneDamageIgnored: Reason=Invincible Player=%s Drone=%s Damage=%d"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			FMath::Max(0, DamageAmount));
 		return;
 	}
 
@@ -420,12 +430,18 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 		return;
 	}
 
+	const float PreviousHealth = Health;
 	Health = FMath::Clamp(Health - static_cast<float>(AppliedDamage), 0.0f, static_cast<float>(MaxHealth));
 	if (bCombatRecordActive)
 	{
 		CombatRecord.DamageTakenCount++;
 	}
 	ForceNetUpdate();
+	Multicast_PlayDroneDamagedVisual(static_cast<float>(AppliedDamage), PreviousHealth, Health);
+	if (GetNetMode() == NM_Standalone)
+	{
+		PlayDroneDamagedVisualLocally(static_cast<float>(AppliedDamage), PreviousHealth, Health);
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDamage PC=%s Drone=%s Damage=%d HP=%.2f/%d"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
@@ -439,6 +455,12 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 		Reason.IsNone() ? TEXT("None") : *Reason.ToString(),
 		Health,
 		MaxHealth);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual DroneDamaged Player=%s Drone=%s Damage=%.2f OldHP=%.2f NewHP=%.2f"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		*GetName(),
+		static_cast<float>(AppliedDamage),
+		PreviousHealth,
+		Health);
 
 	if (Health <= 0.0f)
 	{
@@ -1140,6 +1162,20 @@ bool ADrone::ShouldEmitThrottledSummaryLog(
 		|| Now - LastLogTime >= FMath::Max(0.0f, MinIntervalSeconds);
 }
 
+bool ADrone::ShouldEmitMoveAcceptedSummaryLog(
+	float Now,
+	float LastLogTime,
+	bool bInputActive,
+	bool bHasLastAxis,
+	FVector2D LastAxis,
+	FVector2D Axis)
+{
+	return !bInputActive
+		|| !bHasLastAxis
+		|| IsMoveAcceptedSummaryAxisChangeSignificant(LastAxis, Axis)
+		|| ShouldEmitThrottledSummaryLog(Now, LastLogTime, MoveAcceptedSummaryLogIntervalSeconds, false);
+}
+
 bool ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(
 	FVector2D PreviousAxis,
 	FVector2D CurrentAxis)
@@ -1182,6 +1218,82 @@ int32 ADrone::GetPulseAttackCountForTest(bool bIsLeftWeapon) const
 float ADrone::GetHealthValueForTest() const
 {
 	return Health;
+}
+
+int32 ADrone::GetCombatVisualAttackCountForTest() const
+{
+	return CombatVisualAttackCountForTest;
+}
+
+float ADrone::GetLastCombatVisualAttackDamageForTest() const
+{
+	return LastCombatVisualAttackDamageForTest;
+}
+
+FVector ADrone::GetLastCombatVisualAttackFromForTest() const
+{
+	return LastCombatVisualAttackFromForTest;
+}
+
+FVector ADrone::GetLastCombatVisualAttackToForTest() const
+{
+	return LastCombatVisualAttackToForTest;
+}
+
+int32 ADrone::GetCombatVisualDroneDamagedCountForTest() const
+{
+	return CombatVisualDroneDamagedCountForTest;
+}
+
+float ADrone::GetLastCombatVisualDroneDamageForTest() const
+{
+	return LastCombatVisualDroneDamageForTest;
+}
+
+float ADrone::GetLastCombatVisualDroneDamageOldHPForTest() const
+{
+	return LastCombatVisualDroneDamageOldHPForTest;
+}
+
+float ADrone::GetLastCombatVisualDroneDamageNewHPForTest() const
+{
+	return LastCombatVisualDroneDamageNewHPForTest;
+}
+
+int32 ADrone::GetCombatVisualDroneDamageIgnoredCountForTest() const
+{
+	return CombatVisualDroneDamageIgnoredCountForTest;
+}
+
+FName ADrone::GetLastCombatVisualDroneDamageIgnoredReasonForTest() const
+{
+	return LastCombatVisualDroneDamageIgnoredReasonForTest;
+}
+
+FName ADrone::GetLastAttackNoDamageReasonForTest() const
+{
+	return LastAttackNoDamageReasonForTest;
+}
+
+float ADrone::GetMoveAcceptedSummaryLogIntervalSecondsForTest()
+{
+	return MoveAcceptedSummaryLogIntervalSeconds;
+}
+
+float ADrone::GetMoveDistanceSummaryLogIntervalSecondsForTest()
+{
+	return MoveDistanceSummaryLogIntervalSeconds;
+}
+
+bool ADrone::ShouldEmitMoveAcceptedSummaryLogForTest(
+	float Now,
+	float LastLogTime,
+	bool bInputActive,
+	bool bHasLastAxis,
+	FVector2D LastAxis,
+	FVector2D Axis)
+{
+	return ShouldEmitMoveAcceptedSummaryLog(Now, LastLogTime, bInputActive, bHasLastAxis, LastAxis, Axis);
 }
 
 bool ADrone::ApplyMoveInputForServerForTest(FVector2D RawAxis)
@@ -1613,6 +1725,10 @@ void ADrone::HandleAttackBossForServer()
 	};
 	FScopedDroneAttackFlag ScopedAttackFlag(this);
 
+#if WITH_DEV_AUTOMATION_TESTS
+	LastAttackNoDamageReasonForTest = NAME_None;
+#endif
+
 	const FDroneWeaponCalculationResult LeftWeaponResult = CalculateWeaponDamageForServer(EquippedLeftWeaponPartID, true);
 	const FDroneWeaponCalculationResult RightWeaponResult = CalculateWeaponDamageForServer(EquippedRightWeaponPartID, false);
 	const float LeftWeaponDamage = LeftWeaponResult.WeaponDamage;
@@ -1622,8 +1738,89 @@ void ADrone::HandleAttackBossForServer()
 	const float FinalDamage = TotalWeaponDamage * CoreResult.CoreAttackModifier * CoreResult.CoreBonusAttackModifier;
 
 	const float BossHPBeforeAttack = Boss->GetCurrentHP();
+	if (FinalDamage <= KINDA_SMALL_NUMBER)
+	{
+		const FName NoDamageReason = EquippedLeftWeaponPartID.IsNone() && EquippedRightWeaponPartID.IsNone()
+			? FName(TEXT("NoWeapon"))
+			: FName(TEXT("NoDamage"));
+#if WITH_DEV_AUTOMATION_TESTS
+		LastAttackNoDamageReasonForTest = NoDamageReason;
+#endif
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackCalc Player=%s Core=%s LeftWeapon=%s RightWeapon=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f DamageDealt=0.00 HealAmount=0.00 BossHP=%.2f/%.2f"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*EquippedCorePartID.ToString(),
+			*EquippedLeftWeaponPartID.ToString(),
+			*EquippedRightWeaponPartID.ToString(),
+			LeftWeaponDamage,
+			RightWeaponDamage,
+			TotalWeaponDamage,
+			CoreResult.CoreAttackModifier,
+			CoreResult.CoreBonusAttackModifier,
+			FinalDamage,
+			Boss->GetCurrentHP(),
+			Boss->GetMaxHP());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack NoDamage: Reason=%s Player=%s Core=%s LeftWeapon=%s RightWeapon=%s FinalDamage=%.2f LeftDamage=%.2f RightDamage=%.2f BossHP=%.2f/%.2f"),
+			*NoDamageReason.ToString(),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*EquippedCorePartID.ToString(),
+			*EquippedLeftWeaponPartID.ToString(),
+			*EquippedRightWeaponPartID.ToString(),
+			FinalDamage,
+			LeftWeaponDamage,
+			RightWeaponDamage,
+			Boss->GetCurrentHP(),
+			Boss->GetMaxHP());
+		return;
+	}
+
 	Boss->ApplyDamageForServer(FinalDamage, Cast<AController>(GetController()), this);
 	const float DamageDealt = FMath::Max(0.0f, BossHPBeforeAttack - Boss->GetCurrentHP());
+	if (DamageDealt <= KINDA_SMALL_NUMBER)
+	{
+		const FName NoDamageReason(TEXT("NoBossHPChange"));
+#if WITH_DEV_AUTOMATION_TESTS
+		LastAttackNoDamageReasonForTest = NoDamageReason;
+#endif
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack NoDamage: Reason=%s Player=%s Core=%s LeftWeapon=%s RightWeapon=%s FinalDamage=%.2f LeftDamage=%.2f RightDamage=%.2f BossHP=%.2f/%.2f"),
+			*NoDamageReason.ToString(),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*EquippedCorePartID.ToString(),
+			*EquippedLeftWeaponPartID.ToString(),
+			*EquippedRightWeaponPartID.ToString(),
+			FinalDamage,
+			LeftWeaponDamage,
+			RightWeaponDamage,
+			Boss->GetCurrentHP(),
+			Boss->GetMaxHP());
+		return;
+	}
+	if (DamageDealt > KINDA_SMALL_NUMBER)
+	{
+		const FVector AttackFrom = GetActorLocation() + FVector(0.0f, 0.0f, 80.0f);
+		const FVector AttackTo = Boss->GetActorLocation() + FVector(0.0f, 0.0f, 120.0f);
+		Multicast_PlayDroneAttackVisual(
+			EquippedLeftWeaponPartID,
+			EquippedRightWeaponPartID,
+			DamageDealt,
+			AttackFrom,
+			AttackTo);
+		if (GetNetMode() == NM_Standalone)
+		{
+			PlayDroneAttackVisualLocally(
+				EquippedLeftWeaponPartID,
+				EquippedRightWeaponPartID,
+				DamageDealt,
+				AttackFrom,
+				AttackTo);
+		}
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual Attack: Player=%s Damage=%.2f From=%s To=%s LeftWeapon=%s RightWeapon=%s"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			DamageDealt,
+			*AttackFrom.ToString(),
+			*AttackTo.ToString(),
+			*EquippedLeftWeaponPartID.ToString(),
+			*EquippedRightWeaponPartID.ToString());
+	}
 	const bool bBossDefeatedByThisAttack = BossHPBeforeAttack > 0.0f && Boss->GetCurrentHP() <= 0.0f;
 	AddBossDamageToCombatRecordForServer(DamageDealt, Boss);
 	float HealAmount = 0.0f;
@@ -2409,6 +2606,94 @@ void ADrone::BP_OnDodgeInvincibleVisualChanged_Implementation(bool bIsInvincible
 	SetDodgeInvincibleVisualHidden(bIsInvincibleVisual);
 }
 
+void ADrone::Multicast_PlayDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)
+{
+	PlayDroneAttackVisualLocally(LeftWeaponPartID, RightWeaponPartID, Damage, From, To);
+}
+
+void ADrone::Multicast_PlayDroneDamagedVisual_Implementation(float Damage, float OldHP, float NewHP)
+{
+	PlayDroneDamagedVisualLocally(Damage, OldHP, NewHP);
+}
+
+void ADrone::Multicast_PlayDroneDamageIgnoredVisual_Implementation(FName Reason)
+{
+	PlayDroneDamageIgnoredVisualLocally(Reason);
+}
+
+void ADrone::PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)
+{
+	BP_OnDroneAttackVisual(LeftWeaponPartID, RightWeaponPartID, Damage, From, To);
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		DrawDebugLine(World, From, To, FColor::Cyan, false, 0.45f, 0, 6.0f);
+		DrawDebugSphere(World, To, 36.0f, 12, FColor::Cyan, false, 0.45f, 0, 3.0f);
+	}
+}
+
+void ADrone::PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewHP)
+{
+	BP_OnDroneDamagedVisual(Damage, OldHP, NewHP);
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		DrawDebugSphere(World, GetActorLocation(), 48.0f, 12, FColor::Red, false, 0.35f, 0, 3.0f);
+	}
+}
+
+void ADrone::PlayDroneDamageIgnoredVisualLocally(FName Reason)
+{
+	BP_OnDroneDamageIgnoredVisual(Reason);
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		DrawDebugSphere(World, GetActorLocation(), 54.0f, 12, FColor::Yellow, false, 0.30f, 0, 3.0f);
+	}
+}
+
+void ADrone::BP_OnDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)
+{
+	(void)LeftWeaponPartID;
+	(void)RightWeaponPartID;
+#if WITH_DEV_AUTOMATION_TESTS
+	CombatVisualAttackCountForTest++;
+	LastCombatVisualAttackDamageForTest = Damage;
+	LastCombatVisualAttackFromForTest = From;
+	LastCombatVisualAttackToForTest = To;
+#endif
+}
+
+void ADrone::BP_OnDroneDamagedVisual_Implementation(float Damage, float OldHP, float NewHP)
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	CombatVisualDroneDamagedCountForTest++;
+	LastCombatVisualDroneDamageForTest = Damage;
+	LastCombatVisualDroneDamageOldHPForTest = OldHP;
+	LastCombatVisualDroneDamageNewHPForTest = NewHP;
+#endif
+}
+
+void ADrone::BP_OnDroneDamageIgnoredVisual_Implementation(FName Reason)
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	CombatVisualDroneDamageIgnoredCountForTest++;
+	LastCombatVisualDroneDamageIgnoredReasonForTest = Reason;
+#endif
+}
+
 void ADrone::SetDodgeInvincibleVisualHidden(bool bShouldHideVisual)
 {
 	if (GetNetMode() == NM_DedicatedServer)
@@ -2632,12 +2917,13 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 	UWorld* World = GetWorld();
 	const float Now = World ? World->GetTimeSeconds() : 0.0f;
 	const float DeltaMetersForLog = FVector::Dist2D(CurrentLocation, PreviousLocation) * MoveDistanceCmToMeters;
-	const bool bMoveAcceptedStart = !bMoveAcceptedSummaryInputActive;
-	const bool bMoveAcceptedAxisChanged = !bHasLastMoveAcceptedSummaryAxis
-		|| IsMoveAcceptedSummaryAxisChangeSignificant(LastMoveAcceptedSummaryAxis, Axis);
-	if (bMoveAcceptedAxisChanged
-		|| bMoveAcceptedStart
-		|| Now - LastMoveAcceptedSummaryLogTime >= MoveAcceptedSummaryLogIntervalSeconds)
+	if (ShouldEmitMoveAcceptedSummaryLog(
+		Now,
+		LastMoveAcceptedSummaryLogTime,
+		bMoveAcceptedSummaryInputActive,
+		bHasLastMoveAcceptedSummaryAxis,
+		LastMoveAcceptedSummaryAxis,
+		Axis))
 	{
 		LastMoveAcceptedSummaryLogTime = Now;
 		LastMoveAcceptedSummaryAxis = Axis;

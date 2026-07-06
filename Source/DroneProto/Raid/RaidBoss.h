@@ -39,6 +39,17 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss|Visual")
 	bool IsVisualReadyForCamera() const;
 
+	UFUNCTION(BlueprintNativeEvent, Category = "Raid|Boss|Visual")
+	void BP_OnBossDamagedVisual(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 GetCombatVisualBossDamagedCountForTest() const;
+	float GetLastCombatVisualBossDamageForTest() const;
+	float GetLastCombatVisualBossOldHPForTest() const;
+	float GetLastCombatVisualBossNewHPForTest() const;
+	FString GetPrototypeVisualLabelTextForTest() const;
+#endif
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void OnConstruction(const FTransform& Transform) override;
@@ -62,6 +73,18 @@ private:
 	UFUNCTION()
 	void OnRep_CurrentHP();
 
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlayBossDamagedVisual(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
+
 	void ApplyPrototypeVisualSettings();
+	void RefreshPrototypeVisualHPText();
+	void PlayBossDamagedVisualLocally(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
 	void ExecuteDebugTelegraphedAreaAttackForServer(FVector AttackCenter, float RadiusCm, int32 DamageAmount, ARaidBossAttackTelegraph* TelegraphActor);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 CombatVisualBossDamagedCountForTest = 0;
+	float LastCombatVisualBossDamageForTest = 0.0f;
+	float LastCombatVisualBossOldHPForTest = 0.0f;
+	float LastCombatVisualBossNewHPForTest = 0.0f;
+#endif
 };

@@ -161,6 +161,13 @@ public:
 		float LastLogTime,
 		float MinIntervalSeconds,
 		bool bForce);
+	static bool ShouldEmitMoveAcceptedSummaryLog(
+		float Now,
+		float LastLogTime,
+		bool bInputActive,
+		bool bHasLastAxis,
+		FVector2D LastAxis,
+		FVector2D Axis);
 	static bool IsMoveAcceptedSummaryAxisChangeSignificant(
 		FVector2D PreviousAxis,
 		FVector2D CurrentAxis);
@@ -175,9 +182,38 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Dodge")
 	void BP_OnDodgeInvincibleVisualChanged(bool bIsInvincibleVisual);
 
+	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
+	void BP_OnDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
+	void BP_OnDroneDamagedVisual(float Damage, float OldHP, float NewHP);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
+	void BP_OnDroneDamageIgnoredVisual(FName Reason);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetPulseAttackCountForTest(bool bIsLeftWeapon) const;
 	float GetHealthValueForTest() const;
+	int32 GetCombatVisualAttackCountForTest() const;
+	float GetLastCombatVisualAttackDamageForTest() const;
+	FVector GetLastCombatVisualAttackFromForTest() const;
+	FVector GetLastCombatVisualAttackToForTest() const;
+	int32 GetCombatVisualDroneDamagedCountForTest() const;
+	float GetLastCombatVisualDroneDamageForTest() const;
+	float GetLastCombatVisualDroneDamageOldHPForTest() const;
+	float GetLastCombatVisualDroneDamageNewHPForTest() const;
+	int32 GetCombatVisualDroneDamageIgnoredCountForTest() const;
+	FName GetLastCombatVisualDroneDamageIgnoredReasonForTest() const;
+	FName GetLastAttackNoDamageReasonForTest() const;
+	static float GetMoveAcceptedSummaryLogIntervalSecondsForTest();
+	static float GetMoveDistanceSummaryLogIntervalSecondsForTest();
+	static bool ShouldEmitMoveAcceptedSummaryLogForTest(
+		float Now,
+		float LastLogTime,
+		bool bInputActive,
+		bool bHasLastAxis,
+		FVector2D LastAxis,
+		FVector2D Axis);
 	bool ApplyMoveInputForServerForTest(FVector2D RawAxis);
 	bool ApplyPendingServerMoveInputForTest(float DeltaSeconds);
 	void UpdateMoveDistanceForServerForTest(float DeltaSeconds);
@@ -582,6 +618,15 @@ private:
 	void ClearDodgeInterpolationForServer();
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_SetDodgeInvincibleVisual(bool bIsInvincibleVisual);
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlayDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlayDroneDamagedVisual(float Damage, float OldHP, float NewHP);
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_PlayDroneDamageIgnoredVisual(FName Reason);
+	void PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
+	void PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewHP);
+	void PlayDroneDamageIgnoredVisualLocally(FName Reason);
 	void ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual);
 	void SetDodgeInvincibleVisualHidden(bool bShouldHideVisual);
 	void EndDodgeInvincibilityForServer();
@@ -616,4 +661,18 @@ private:
 	void LogCombatRecordForServer() const;
 	void RefreshMoveSpeedForServer();
 	void ResetCombatRuntimeStateForReason(FName Reason);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 CombatVisualAttackCountForTest = 0;
+	float LastCombatVisualAttackDamageForTest = 0.0f;
+	FVector LastCombatVisualAttackFromForTest = FVector::ZeroVector;
+	FVector LastCombatVisualAttackToForTest = FVector::ZeroVector;
+	int32 CombatVisualDroneDamagedCountForTest = 0;
+	float LastCombatVisualDroneDamageForTest = 0.0f;
+	float LastCombatVisualDroneDamageOldHPForTest = 0.0f;
+	float LastCombatVisualDroneDamageNewHPForTest = 0.0f;
+	int32 CombatVisualDroneDamageIgnoredCountForTest = 0;
+	FName LastCombatVisualDroneDamageIgnoredReasonForTest = NAME_None;
+	FName LastAttackNoDamageReasonForTest = NAME_None;
+#endif
 };

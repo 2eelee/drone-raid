@@ -7,6 +7,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Engine/StaticMesh.h"
 #include "TimerManager.h"
@@ -80,6 +81,7 @@ ARaidBoss::ARaidBoss()
 	PrototypeVisualLabel->SetWorldSize(120.0f);
 
 	ApplyPrototypeVisualSettings();
+	RefreshPrototypeVisualHPText();
 }
 
 void ARaidBoss::BeginPlay()
@@ -91,6 +93,7 @@ void ARaidBoss::BeginPlay()
 		CurrentHP = MaxHP;
 		ForceNetUpdate();
 	}
+	RefreshPrototypeVisualHPText();
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Boss VisualReady: Boss=%s VisualReady=%s Mesh=%s MeshVisible=%s LabelVisible=%s Collision=%s Location=%s"),
 		*GetName(),
@@ -100,6 +103,7 @@ void ARaidBoss::BeginPlay()
 		(PrototypeVisualLabel && PrototypeVisualLabel->IsVisible()) ? TEXT("True") : TEXT("False"),
 		(PrototypeVisualMesh && PrototypeVisualMesh->GetCollisionEnabled() != ECollisionEnabled::NoCollision) ? TEXT("CollisionEnabled") : TEXT("NoCollision"),
 		*GetActorLocation().ToString());
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] D20PIEChecklist CombatVisual: Confirm=CombatVisual Attack,CombatVisual BossDamaged,Dodge VisualHidden,Dodge VisualShown,CombatVisual TelegraphStart,CombatVisual TelegraphEnd,CombatVisual DroneDamaged,CombatVisual DroneDamageIgnored"));
 
 	if (!IsVisualReadyForCamera())
 	{
@@ -112,6 +116,7 @@ void ARaidBoss::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	ApplyPrototypeVisualSettings();
+	RefreshPrototypeVisualHPText();
 }
 
 void ARaidBoss::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -134,6 +139,16 @@ void ARaidBoss::ApplyDamageForServer(float DamageAmount, AController* Instigator
 	}
 
 	const float ClampedDamage = FMath::Max(0.0f, DamageAmount);
+	if (ClampedDamage <= KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=NoDamage HP=%.2f Damage=%.2f Instigator=%s Causer=%s"),
+			CurrentHP,
+			ClampedDamage,
+			InstigatorController ? *InstigatorController->GetName() : TEXT("None"),
+			DamageCauser ? *DamageCauser->GetName() : TEXT("None"));
+		return;
+	}
+
 	if (IsDefeated())
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=BossDead HP=%.2f Damage=%.2f Instigator=%s Causer=%s"),
@@ -147,6 +162,31 @@ void ARaidBoss::ApplyDamageForServer(float DamageAmount, AController* Instigator
 	const float PreviousHP = CurrentHP;
 	CurrentHP = FMath::Clamp(CurrentHP - ClampedDamage, 0.0f, MaxHP);
 	ForceNetUpdate();
+	RefreshPrototypeVisualHPText();
+	const float ActualDamage = FMath::Max(0.0f, PreviousHP - CurrentHP);
+	if (ActualDamage <= KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossDamageIgnored: Reason=NoHPChange HP=%.2f Damage=%.2f Instigator=%s Causer=%s"),
+			CurrentHP,
+			ClampedDamage,
+			InstigatorController ? *InstigatorController->GetName() : TEXT("None"),
+			DamageCauser ? *DamageCauser->GetName() : TEXT("None"));
+		return;
+	}
+
+	if (ActualDamage > KINDA_SMALL_NUMBER)
+	{
+		Multicast_PlayBossDamagedVisual(ActualDamage, PreviousHP, CurrentHP, DamageCauser);
+		if (GetNetMode() == NM_Standalone)
+		{
+			PlayBossDamagedVisualLocally(ActualDamage, PreviousHP, CurrentHP, DamageCauser);
+		}
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual BossDamaged: Damage=%.2f OldHP=%.2f NewHP=%.2f Causer=%s"),
+			ActualDamage,
+			PreviousHP,
+			CurrentHP,
+			DamageCauser ? *DamageCauser->GetName() : TEXT("None"));
+	}
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidBoss DamageApplied: Damage=%.2f HP=%.2f/%.2f PreviousHP=%.2f Instigator=%s Causer=%s"),
 		ClampedDamage,
@@ -384,6 +424,11 @@ bool ARaidBoss::StartDebugTelegraphedAreaAttackForServer(FVector AttackCenter, f
 		SafeTelegraphSeconds,
 		*GetName(),
 		ToBossAttackRaidStateLogString(RaidGameState));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual TelegraphStart: Shape=Circle Location=%s Radius=%.2f Duration=%.2f Boss=%s"),
+		*AttackCenter.ToString(),
+		SafeRadiusCm,
+		SafeTelegraphSeconds,
+		*GetName());
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;
@@ -492,6 +537,64 @@ bool ARaidBoss::IsVisualReadyForCamera() const
 	return false;
 }
 
+void ARaidBoss::Multicast_PlayBossDamagedVisual_Implementation(float Damage, float OldHP, float NewHP, AActor* DamageCauser)
+{
+	PlayBossDamagedVisualLocally(Damage, OldHP, NewHP, DamageCauser);
+}
+
+void ARaidBoss::PlayBossDamagedVisualLocally(float Damage, float OldHP, float NewHP, AActor* DamageCauser)
+{
+	RefreshPrototypeVisualHPText();
+	BP_OnBossDamagedVisual(Damage, OldHP, NewHP, DamageCauser);
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (UWorld* World = GetWorld())
+	{
+		DrawDebugSphere(World, GetActorLocation(), PrototypeVisualRadiusCm + 16.0f, 16, FColor::Orange, false, 0.40f, 0, 4.0f);
+	}
+}
+
+void ARaidBoss::BP_OnBossDamagedVisual_Implementation(float Damage, float OldHP, float NewHP, AActor* DamageCauser)
+{
+	(void)DamageCauser;
+#if WITH_DEV_AUTOMATION_TESTS
+	CombatVisualBossDamagedCountForTest++;
+	LastCombatVisualBossDamageForTest = Damage;
+	LastCombatVisualBossOldHPForTest = OldHP;
+	LastCombatVisualBossNewHPForTest = NewHP;
+#endif
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+int32 ARaidBoss::GetCombatVisualBossDamagedCountForTest() const
+{
+	return CombatVisualBossDamagedCountForTest;
+}
+
+float ARaidBoss::GetLastCombatVisualBossDamageForTest() const
+{
+	return LastCombatVisualBossDamageForTest;
+}
+
+float ARaidBoss::GetLastCombatVisualBossOldHPForTest() const
+{
+	return LastCombatVisualBossOldHPForTest;
+}
+
+float ARaidBoss::GetLastCombatVisualBossNewHPForTest() const
+{
+	return LastCombatVisualBossNewHPForTest;
+}
+
+FString ARaidBoss::GetPrototypeVisualLabelTextForTest() const
+{
+	return PrototypeVisualLabel ? PrototypeVisualLabel->Text.ToString() : FString();
+}
+#endif
+
 void ARaidBoss::ApplyPrototypeVisualSettings()
 {
 	const float SafeRadiusCm = FMath::Max(50.0f, PrototypeVisualRadiusCm);
@@ -515,8 +618,22 @@ void ARaidBoss::ApplyPrototypeVisualSettings()
 	}
 }
 
+void ARaidBoss::RefreshPrototypeVisualHPText()
+{
+	if (!PrototypeVisualLabel)
+	{
+		return;
+	}
+
+	PrototypeVisualLabel->SetText(FText::FromString(FString::Printf(
+		TEXT("Boss HP %.0f / %.0f"),
+		CurrentHP,
+		MaxHP)));
+}
+
 void ARaidBoss::OnRep_CurrentHP()
 {
+	RefreshPrototypeVisualHPText();
 	UE_LOG(LogTemp, Log, TEXT("[Client] RaidBoss HP replicated: %.2f/%.2f"), CurrentHP, MaxHP);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossHPReplicated: HP=%.2f MaxHP=%.2f"), CurrentHP, MaxHP);
 }

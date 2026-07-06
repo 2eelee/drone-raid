@@ -347,6 +347,42 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FDroneMoveAcceptedLogThrottleTest::RunTest(const FString& Parameters)
 {
+	TestTrue(TEXT("move accepted summary interval is long enough for manual PIE readability"),
+		ADrone::GetMoveAcceptedSummaryLogIntervalSecondsForTest() >= 3.0f);
+	TestTrue(TEXT("move distance summary interval is long enough for manual PIE readability"),
+		ADrone::GetMoveDistanceSummaryLogIntervalSecondsForTest() >= 3.0f);
+	TestTrue(TEXT("first accepted move emits a summary"),
+		ADrone::ShouldEmitMoveAcceptedSummaryLogForTest(
+			0.0f,
+			-1000.0f,
+			false,
+			false,
+			FVector2D::ZeroVector,
+			FVector2D(1.0f, 0.0f)));
+	TestFalse(TEXT("same accepted axis inside interval is throttled"),
+		ADrone::ShouldEmitMoveAcceptedSummaryLogForTest(
+			1.0f,
+			0.0f,
+			true,
+			true,
+			FVector2D(1.0f, 0.0f),
+			FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("accepted axis change emits a summary inside interval"),
+		ADrone::ShouldEmitMoveAcceptedSummaryLogForTest(
+			1.0f,
+			0.0f,
+			true,
+			true,
+			FVector2D(1.0f, 0.0f),
+			FVector2D(0.0f, 1.0f)));
+	TestTrue(TEXT("same accepted axis emits again after interval"),
+		ADrone::ShouldEmitMoveAcceptedSummaryLogForTest(
+			3.1f,
+			0.0f,
+			true,
+			true,
+			FVector2D(1.0f, 0.0f),
+			FVector2D(1.0f, 0.0f)));
 	TestFalse(TEXT("same accepted move axis does not force a log"),
 		ADrone::IsMoveAcceptedSummaryAxisChangeSignificant(FVector2D(1.0f, 0.0f), FVector2D(1.0f, 0.0f)));
 	TestFalse(TEXT("tiny camera-relative axis drift does not force a log"),
