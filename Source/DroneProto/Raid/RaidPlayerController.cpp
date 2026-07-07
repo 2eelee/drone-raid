@@ -218,6 +218,7 @@ void ARaidPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (HasAuthority())
 	{
+		ClearBossTargetForServer(FName(TEXT("Travel")));
 		StopSelectionTimerForServer(TEXT("EndPlay"), false);
 	}
 
@@ -229,6 +230,8 @@ void ARaidPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ARaidPlayerController, PlayerSelectionState);
 	DOREPLIFETIME_CONDITION(ARaidPlayerController, SelectionEndServerTime, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(ARaidPlayerController, CurrentTargetBoss, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(ARaidPlayerController, bIsTargetLocked, COND_OwnerOnly);
 }
 
 void ARaidPlayerController::RequestSelectPartFromUI(EDronePartSlot Slot, FName PartID)
@@ -862,6 +865,46 @@ void ARaidPlayerController::Server_DebugTriggerBossTelegraphAttack_Implementatio
 	HandleDebugTriggerBossTelegraphAttackForServer(RadiusCm, DamageAmount, TelegraphSeconds, ForwardOffsetCm);
 }
 
+void ARaidPlayerController::DebugBossSetStunned(int32 Stunned)
+{
+	const bool bStunned = Stunned != 0;
+	if (HasAuthority())
+	{
+		HandleDebugSetBossStunnedForServer(bStunned);
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossStunDebugTrigger PC=%s Result=RequestServer Scope=DebugOnly Stunned=%s"),
+		*BuildControllerLogString(this),
+		bStunned ? TEXT("true") : TEXT("false"));
+	Server_DebugSetBossStunned(bStunned);
+}
+
+void ARaidPlayerController::Server_DebugSetBossStunned_Implementation(bool bStunned)
+{
+	// Debug-only C2S bridge. 상태 변경 검증/적용은 ARaidBoss::SetStunnedForServer가 소유한다.
+	HandleDebugSetBossStunnedForServer(bStunned);
+}
+
+void ARaidPlayerController::HandleDebugSetBossStunnedForServer(bool bStunned)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr;
+	ARaidBoss* Boss = RaidGameState ? RaidGameState->GetRaidBoss() : nullptr;
+	if (!Boss)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossStun Ignored: Reason=NoBoss PC=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	Boss->SetStunnedForServer(bStunned, FName(TEXT("DebugExec")));
+}
+
 void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 	EPartSlot Slot,
 	FName PartID,
@@ -1076,6 +1119,200 @@ bool ARaidPlayerController::HasDroneReportGenerated() const
 	return bDroneReportGenerated;
 }
 
+
+bool ARaidPlayerController::AssignBossTargetForServer()
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] AssignBossTargetForServer rejected: server authority required"));
+		return false;
+	}
+
+	ARaidBoss* Boss = nullptr;
+	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		Boss = RaidGameState->GetRaidBoss();
+	}
+
+	if (!Boss)
+	{
+		ClearBossTargetForServer(FName(TEXT("NoBoss")));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Set: Result=Failed Reason=NoBoss Player=%s"),
+			*BuildControllerLogString(this));
+		return false;
+	}
+
+	if (!Boss->IsAliveForTargeting())
+	{
+		ClearBossTargetForServer(FName(TEXT("BossDead")));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Set: Result=Failed Reason=BossDead Player=%s Boss=%s BossID=%s"),
+			*BuildControllerLogString(this),
+			*Boss->GetName(),
+			*Boss->GetBossID().ToString());
+		return false;
+	}
+
+	if (!Boss->IsTargetableForDrone())
+	{
+		ClearBossTargetForServer(FName(TEXT("NotTargetable")));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Set: Result=Failed Reason=NotTargetable Player=%s Boss=%s BossID=%s"),
+			*BuildControllerLogString(this),
+			*Boss->GetName(),
+			*Boss->GetBossID().ToString());
+		return false;
+	}
+
+	CurrentTargetBoss = Boss;
+	bIsTargetLocked = true;
+	ForceNetUpdate();
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Set: Player=%s Boss=%s BossID=%s Result=Success"),
+		*BuildControllerLogString(this),
+		*Boss->GetName(),
+		*Boss->GetBossID().ToString());
+	RefreshTargetMarkerUI();
+	return true;
+}
+
+void ARaidPlayerController::ClearBossTargetForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	ARaidBoss* PreviousTarget = CurrentTargetBoss.Get();
+	const bool bHadTargetState = PreviousTarget != nullptr || bIsTargetLocked;
+	CurrentTargetBoss = nullptr;
+	bIsTargetLocked = false;
+	ForceNetUpdate();
+
+	if (bHadTargetState)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Clear: Player=%s Boss=%s Reason=%s"),
+			*BuildControllerLogString(this),
+			PreviousTarget ? *PreviousTarget->GetName() : TEXT("None"),
+			Reason.IsNone() ? TEXT("Cleanup") : *Reason.ToString());
+		RefreshTargetMarkerUI();
+	}
+}
+
+ARaidBoss* ARaidPlayerController::GetCurrentTargetBoss() const
+{
+	ARaidBoss* TargetBoss = CurrentTargetBoss.Get();
+	return IsValid(TargetBoss) ? TargetBoss : nullptr;
+}
+
+bool ARaidPlayerController::IsTargetingBossForServer(const ARaidBoss* Boss) const
+{
+	return Boss != nullptr && CurrentTargetBoss.Get() == Boss;
+}
+
+bool ARaidPlayerController::IsTargetLocked() const
+{
+	return bIsTargetLocked;
+}
+
+bool ARaidPlayerController::HasValidBossTargetForServer() const
+{
+	FName InvalidReason;
+	return HasValidBossTargetForServer(InvalidReason);
+}
+
+bool ARaidPlayerController::HasValidBossTargetForServer(FName& OutInvalidReason) const
+{
+	OutInvalidReason = NAME_None;
+
+	if (PlayerSelectionState != EPlayerSelectionState::InBattle)
+	{
+		OutInvalidReason = FName(TEXT("NotInBattle"));
+		return false;
+	}
+
+	if (const ADrone* Drone = Cast<ADrone>(GetPawn()))
+	{
+		if (Drone->IsDead())
+		{
+			OutInvalidReason = FName(TEXT("DroneDead"));
+			return false;
+		}
+	}
+
+	ARaidBoss* TargetBoss = GetCurrentTargetBoss();
+	if (!TargetBoss)
+	{
+		if (const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+		{
+			if (const ARaidBoss* RaidBoss = RaidGameState->GetRaidBoss())
+			{
+				if (RaidBoss->IsDefeated())
+				{
+					OutInvalidReason = FName(TEXT("BossDead"));
+					return false;
+				}
+			}
+		}
+		OutInvalidReason = FName(TEXT("NoTarget"));
+		return false;
+	}
+
+	if (!bIsTargetLocked)
+	{
+		OutInvalidReason = FName(TEXT("TargetUnlocked"));
+		return false;
+	}
+
+	if (!TargetBoss->IsAliveForTargeting())
+	{
+		OutInvalidReason = FName(TEXT("BossDead"));
+		return false;
+	}
+
+	if (!TargetBoss->IsTargetableForDrone())
+	{
+		OutInvalidReason = FName(TEXT("NotTargetable"));
+		return false;
+	}
+
+	return true;
+}
+
+bool ARaidPlayerController::HasValidBossTarget() const
+{
+	return HasValidBossTargetForServer();
+}
+
+FVector ARaidPlayerController::GetTargetMarkerWorldLocation() const
+{
+	const ARaidBoss* TargetBoss = GetCurrentTargetBoss();
+	return TargetBoss ? TargetBoss->GetTargetMarkerWorldLocation() : FVector::ZeroVector;
+}
+
+void ARaidPlayerController::RefreshTargetMarkerUI()
+{
+	if (!IsLocalController() || GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	ARaidBoss* TargetBoss = GetCurrentTargetBoss();
+	const bool bVisible = bIsTargetLocked && TargetBoss && TargetBoss->IsTargetableForDrone();
+	BP_OnTargetMarkerChanged(bVisible, bVisible ? TargetBoss : nullptr);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Marker: Player=%s Visible=%s Boss=%s Location=%s"),
+		*BuildControllerLogString(this),
+		bVisible ? TEXT("true") : TEXT("false"),
+		TargetBoss ? *TargetBoss->GetName() : TEXT("None"),
+		*GetTargetMarkerWorldLocation().ToString());
+}
+
+void ARaidPlayerController::BP_OnTargetMarkerChanged_Implementation(bool bVisible, ARaidBoss* TargetBoss)
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	TargetMarkerChangedCountForTest++;
+	bLastTargetMarkerVisibleForTest = bVisible;
+	LastTargetMarkerBossForTest = TargetBoss;
+#endif
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
 void ARaidPlayerController::SetDronePartReturnManagerForTest(UDronePartReturnManager* InReturnManager)
 {
@@ -1090,6 +1327,22 @@ FDroneReportData ARaidPlayerController::GetLastDroneReportDataForTest() const
 bool ARaidPlayerController::HasDroneReportGeneratedForTest() const
 {
 	return bDroneReportGenerated;
+}
+
+
+int32 ARaidPlayerController::GetTargetMarkerChangedCountForTest() const
+{
+	return TargetMarkerChangedCountForTest;
+}
+
+bool ARaidPlayerController::WasLastTargetMarkerVisibleForTest() const
+{
+	return bLastTargetMarkerVisibleForTest;
+}
+
+ARaidBoss* ARaidPlayerController::GetLastTargetMarkerBossForTest() const
+{
+	return LastTargetMarkerBossForTest.Get();
 }
 
 void ARaidPlayerController::ResetDroneReportForTest()
@@ -1733,6 +1986,7 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 	{
 		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
 	}
+	AssignBossTargetForServer();
 	if (UWorld* World = GetWorld())
 	{
 		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
@@ -1747,6 +2001,8 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		if (RaidGameMode)
 		{
 			RaidGameMode->StartRaidTimeLimitTimerForServer();
+			RaidGameMode->StartBossPatternsForServer();
+			RaidGameMode->ClearDroneReportKeyForServer(this, FName(TEXT("RaidReady")));
 		}
 	}
 
@@ -1942,6 +2198,7 @@ void ARaidPlayerController::FinalizeRaidEndForServer(FName Reason)
 	}
 
 	StopSelectionTimerForServer(TEXT("RaidEnd"), false);
+	ClearBossTargetForServer(FName(TEXT("Cleanup")));
 	SetSelectedPartIDForSlotForServer(EPartSlot::Core, NAME_None);
 	SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, NAME_None);
 	SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, NAME_None);
@@ -1994,6 +2251,29 @@ bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Tr
 		return false;
 	}
 
+	// PC 인스턴스 bool과 별개로, 재접속(새 PC)에도 유지되는 GameMode PlayerKey set으로 중복을 막는다.
+	if (UWorld* World = GetWorld())
+	{
+		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
+		if (!RaidGameMode)
+		{
+			for (TActorIterator<ARaidGameMode> It(World); It; ++It)
+			{
+				RaidGameMode = *It;
+				break;
+			}
+		}
+		if (RaidGameMode && !RaidGameMode->TryMarkDroneReportGeneratedForServer(this))
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportDuplicateIgnored Player=%s Reason=AlreadyGeneratedForPlayerKey Trigger=%s"),
+				*PlayerLog,
+				ReportTriggerToLogString(Trigger));
+			bDroneReportGenerated = true;
+			return false;
+		}
+	}
+
+	ClearBossTargetForServer(FName(TEXT("Report")));
 	ControlledDrone->CancelDodgeForServer(FName(TEXT("Report")));
 
 	const FDroneCombatRecord CombatRecord = ControlledDrone->GetCombatRecordForServer();
@@ -2179,4 +2459,9 @@ void ARaidPlayerController::OnRep_PlayerSelectionState()
 void ARaidPlayerController::OnRep_SelectionEndServerTime()
 {
 	RefreshSelectionUI();
+}
+
+void ARaidPlayerController::OnRep_CurrentTargetBoss()
+{
+	RefreshTargetMarkerUI();
 }

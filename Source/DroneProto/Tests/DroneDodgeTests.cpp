@@ -125,6 +125,14 @@ bool FDroneDodgeInvalidStatesTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("dodge rejects C without a current direction"),
 		NoDirection.Drone->RequestDodgeForServer(FVector2D::ZeroVector));
+	TestEqual(TEXT("direct no-direction dodge records server reason"),
+		NoDirection.Drone->GetLastDodgeIgnoredReasonForTest(),
+		FName(TEXT("NoDirection")));
+	TestFalse(TEXT("C-only dodge bridge reaches server no-direction validation"),
+		NoDirection.Drone->RequestDodgeFromCurrentMoveInputForTest());
+	TestEqual(TEXT("C-only dodge bridge records server no-direction reason"),
+		NoDirection.Drone->GetLastDodgeIgnoredReasonForTest(),
+		FName(TEXT("NoDirection")));
 	DestroyDroneDodgeTestContext(NoDirection);
 
 	FDroneDodgeTestContext Report = CreateDroneDodgeTestContext(TEXT("DroneDodgeReportWorld"));
@@ -355,13 +363,13 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	BossMin.Drone->SetActorLocation(FVector(600.0f, 0.0f, 0.0f));
+	BossMin.Drone->SetActorLocation(FVector(900.0f, 0.0f, 0.0f));
 	BossMin.Drone->ResetAccumulatedMoveDistanceForServer();
 	TestTrue(TEXT("boss-min dodge succeeds"),
 		BossMin.Drone->RequestDodgeForServer(FVector2D(-1.0f, 0.0f)));
 	TickDodgeForDodgeTest(BossMin, 0.25f);
-	TestTrue(TEXT("boss-min dodge cannot enter the 5m boss center exclusion"),
-		FVector::Dist2D(BossMin.Drone->GetActorLocation(), FVector::ZeroVector) >= 500.0f - 0.1f);
+	TestTrue(TEXT("boss-min dodge cannot enter the 8m boss center exclusion"),
+		FVector::Dist2D(BossMin.Drone->GetActorLocation(), FVector::ZeroVector) >= 800.0f - 0.1f);
 	TestTrue(TEXT("boss-min-clamped dodge records actual distance only"),
 		FMath::IsNearlyEqual(BossMin.Drone->GetAccumulatedMoveDistance(), 1.0f, 0.01f));
 	TestTrue(TEXT("boss-min-clamped dodge adds actual Vector movement distance"),
@@ -370,6 +378,28 @@ bool FDroneDodgeBoundaryAndDistanceTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(BossMin.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 1.0f, 0.01f));
 
 	DestroyDroneDodgeTestContext(BossMin);
+
+	FDroneDodgeTestContext BossMinMidpoint = CreateDroneDodgeTestContext(TEXT("DroneDodgeBossMinMidpointWorld"));
+	if (!PrepareInBattleDodgeTest(*this, BossMinMidpoint, TEXT("dodge boss min midpoint")))
+	{
+		DestroyDroneDodgeTestContext(BossMinMidpoint);
+		return false;
+	}
+
+	BossMinMidpoint.Drone->SetActorLocation(FVector(-700.0f, 500.0f, 123.0f));
+	BossMinMidpoint.Drone->ResetAccumulatedMoveDistanceForServer();
+	TestTrue(TEXT("dodge starts for midpoint boss min clamp"),
+		BossMinMidpoint.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TickDodgeForDodgeTest(BossMinMidpoint, 0.125f);
+	TestTrue(TEXT("dodge midpoint remains outside boss min distance"),
+		FVector::Dist2D(BossMinMidpoint.Drone->GetActorLocation(), FVector::ZeroVector) >= 800.0f - 0.1f);
+	TestTrue(TEXT("dodge midpoint keeps fixed Z"),
+		FMath::IsNearlyEqual(BossMinMidpoint.Drone->GetActorLocation().Z, 0.0f, 0.1f));
+	TickDodgeForDodgeTest(BossMinMidpoint, 0.125f);
+	TestTrue(TEXT("dodge final remains outside boss min distance after midpoint clamp"),
+		FVector::Dist2D(BossMinMidpoint.Drone->GetActorLocation(), FVector::ZeroVector) >= 800.0f - 0.1f);
+
+	DestroyDroneDodgeTestContext(BossMinMidpoint);
 	return true;
 }
 

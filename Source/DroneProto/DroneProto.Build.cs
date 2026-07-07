@@ -22,7 +22,9 @@ public class DroneProto : ModuleRules
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
-			"SlateCore"
+			"SlateCore",
+			// FUniqueNetIdWrapper::ToString (DroneReport PlayerKey) 링크에 필요
+			"CoreOnline"
 		});
 
 		PublicIncludePaths.AddRange(new string[] {

@@ -174,11 +174,43 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone|Report")
 	bool HasDroneReportGenerated() const;
 
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Targeting")
+	bool AssignBossTargetForServer();
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Targeting")
+	void ClearBossTargetForServer(FName Reason);
+
+	UFUNCTION(BlueprintPure, Category = "Raid|Targeting")
+	ARaidBoss* GetCurrentTargetBoss() const;
+
+	UFUNCTION(BlueprintPure, Category = "Raid|Targeting")
+	bool IsTargetLocked() const;
+
+	bool HasValidBossTargetForServer() const;
+	bool HasValidBossTargetForServer(FName& OutInvalidReason) const;
+
+	// Boss EndPlay/Destroy(pending kill) 중에는 안전 getter가 nullptr를 돌려주므로 raw 비교가 필요하다.
+	bool IsTargetingBossForServer(const ARaidBoss* Boss) const;
+
+	UFUNCTION(BlueprintPure, Category = "Raid|Targeting")
+	bool HasValidBossTarget() const;
+
+	UFUNCTION(BlueprintPure, Category = "Raid|Targeting")
+	FVector GetTargetMarkerWorldLocation() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Raid|Targeting")
+	void RefreshTargetMarkerUI();
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Raid|Targeting")
+	void BP_OnTargetMarkerChanged(bool bVisible, ARaidBoss* TargetBoss);
 #if WITH_DEV_AUTOMATION_TESTS
 	void SetDronePartReturnManagerForTest(UDronePartReturnManager* InReturnManager);
 	FDroneReportData GetLastDroneReportDataForTest() const;
 	bool HasDroneReportGeneratedForTest() const;
 	void ResetDroneReportForTest();
+	int32 GetTargetMarkerChangedCountForTest() const;
+	bool WasLastTargetMarkerVisibleForTest() const;
+	ARaidBoss* GetLastTargetMarkerBossForTest() const;
 #endif
 
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Drone Parts")
@@ -201,6 +233,9 @@ public:
 
 	UFUNCTION(Server, Reliable, Category = "Raid|Boss|Debug")
 	void Server_DebugTriggerBossTelegraphAttack(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm);
+
+	UFUNCTION(Server, Reliable, Category = "Raid|Boss|Debug")
+	void Server_DebugSetBossStunned(bool bStunned);
 
 	UFUNCTION(Client, Reliable, Category = "Drone Parts")
 	void Client_NotifyPartSelectionResult(EPartSlot Slot, FName PartID, bool bSuccess, const FString& Reason);
@@ -226,6 +261,10 @@ public:
 	UFUNCTION(Exec)
 	void D6RaidEndReturn(FString ReasonText);
 
+	// PIE 수동 검증용: DebugBossSetStunned 1 / DebugBossSetStunned 0
+	UFUNCTION(Exec)
+	void DebugBossSetStunned(int32 Stunned);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -239,6 +278,12 @@ private:
 
 	UPROPERTY(ReplicatedUsing = OnRep_SelectionEndServerTime, VisibleInstanceOnly, BlueprintReadOnly, Category = "Drone Parts", meta = (AllowPrivateAccess = "true"))
 	float SelectionEndServerTime = 0.0f;
+
+	UPROPERTY(ReplicatedUsing = OnRep_CurrentTargetBoss, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Targeting", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<ARaidBoss> CurrentTargetBoss = nullptr;
+
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Targeting", meta = (AllowPrivateAccess = "true"))
+	bool bIsTargetLocked = false;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "Drone Parts")
 	FName SelectedCorePartID = NAME_None;
@@ -286,6 +331,11 @@ private:
 	float DebugBossTelegraphForwardOffsetCm = 0.0f;
 
 #if WITH_DEV_AUTOMATION_TESTS
+	int32 TargetMarkerChangedCountForTest = 0;
+	bool bLastTargetMarkerVisibleForTest = false;
+	TWeakObjectPtr<ARaidBoss> LastTargetMarkerBossForTest;
+#endif
+#if WITH_DEV_AUTOMATION_TESTS
 	UDronePartReturnManager* TestDronePartReturnManager = nullptr;
 #endif
 
@@ -307,6 +357,7 @@ private:
 	void StopSelectionTimerForServer(const FString& Reason, bool bLogSummary);
 	bool ProcessReadyForRaidForServer(bool bAutoReady);
 	void HandleDebugTriggerBossTelegraphAttackForServer(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm);
+	void HandleDebugSetBossStunnedForServer(bool bStunned);
 	static const TCHAR* ReportGradeToLogString(EDroneReportGrade Grade);
 	static const TCHAR* ReportTriggerToLogString(EDroneReportTrigger Trigger);
 	static bool ReportHasBonus(const FDroneReportData& ReportData, EDroneReportBonusType BonusType);
@@ -319,4 +370,7 @@ private:
 
 	UFUNCTION()
 	void OnRep_SelectionEndServerTime();
+
+	UFUNCTION()
+	void OnRep_CurrentTargetBoss();
 };

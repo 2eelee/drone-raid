@@ -1556,14 +1556,22 @@ bool FDroneAttackBossTest::RunTest(const FString& Parameters)
 	ADrone* Drone = World->SpawnActor<ADrone>();
 	ARaidBoss* Boss = World->SpawnActor<ARaidBoss>();
 	ARaidPlayerController* PC = World->SpawnActor<ARaidPlayerController>();
+	ARaidGameState* GameState = World->SpawnActor<ARaidGameState>();
 	TestNotNull(TEXT("drone is spawned"), Drone);
 	TestNotNull(TEXT("boss is spawned"), Boss);
 	TestNotNull(TEXT("player controller is spawned"), PC);
-	if (!Drone || !Boss || !PC)
+	TestNotNull(TEXT("game state is spawned"), GameState);
+	if (!Drone || !Boss || !PC || !GameState)
 	{
 		World->DestroyWorld(false);
 		return false;
 	}
+
+	// POR-16: 공격은 서버 타겟이 필요하므로 GameState에 보스를 등록해야 Ready 시 타겟이 배정된다.
+	// POR-17: BossMinApproachDistanceCm 클램프를 피하도록 보스를 드론에서 떨어뜨린다.
+	World->SetGameState(GameState);
+	Boss->SetActorLocation(FVector(-2000.0f, 0.0f, 0.0f));
+	GameState->SetRaidBossForServer(Boss);
 
 	PC->Possess(Drone);
 	TestEqual(TEXT("attack test starts in Selecting"),
@@ -2000,6 +2008,8 @@ bool FDroneServerDodgeAuthorityTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("valid dodge boss is spawned"), Boss);
 	if (Boss)
 	{
+		// POR-17: 보스가 드론과 같은 위치면 BossMinDistance 클램프가 dodge 시작 위치를 밀어낸다.
+		Boss->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
 		Valid.GameState->SetRaidBossForServer(Boss);
 	}
 	Valid.PC->Server_RequestReadyForRaid_Implementation();
@@ -2015,6 +2025,8 @@ bool FDroneServerDodgeAuthorityTest::RunTest(const FString& Parameters)
 	const FVector ValidLocationBefore = Valid.Drone->GetActorLocation();
 	TestTrue(TEXT("InBattle valid direction dodge succeeds"),
 		Valid.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	// D19 시간보간: 위치/이동거리는 Drone Tick이 진행돼야 반영된다 (0.10s < DodgeDuration 0.25s).
+	Valid.Drone->TickForTest(0.10f);
 	const FVector ValidLocationAfter = Valid.Drone->GetActorLocation();
 	TestTrue(TEXT("successful dodge changes server location"),
 		!ValidLocationAfter.Equals(ValidLocationBefore, 0.1f));
@@ -2186,6 +2198,8 @@ bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
 	const FVector LocationBeforeDodge = Context.Drone->GetActorLocation();
 	TestTrue(TEXT("dodge input bridge requests dodge from cached move axis"),
 		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
+	// D19 시간보간: 위치/이동거리는 Drone Tick이 진행돼야 반영된다.
+	Context.Drone->TickForTest(0.10f);
 	TestTrue(TEXT("dodge input bridge changes server location through D14 path"),
 		!Context.Drone->GetActorLocation().Equals(LocationBeforeDodge, 0.1f));
 	TestTrue(TEXT("dodge input bridge clears cached axis after request"),
@@ -2534,6 +2548,9 @@ bool FRaidBossTelegraphedAreaAttackTest::RunTest(const FString& Parameters)
 	}
 
 	DodgeMissContext.PC->SetControlRotation(FRotator::ZeroRotator);
+	// POR-17: 보스가 원점에 있으면 BossMinDistance 클램프가 dodge 시작 위치를 밀어내
+	// 무적 판정 반경(100cm) 밖으로 이탈한다. 보스를 떨어뜨려 기존 검증 기하를 유지한다.
+	DodgeMissBoss->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
 	DodgeMissContext.Drone->SetActorLocation(FVector::ZeroVector);
 	const int32 DodgeMissHealthBefore = DodgeMissContext.Drone->GetHealth();
 	TestTrue(TEXT("telegraphed dodge miss attack starts"),
@@ -2712,6 +2729,8 @@ bool FDroneCombatVisualHooksTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// POR-16/17: 보스와 드론이 원점에 겹치면 attack visual 궤적 From/To가 동일해진다.
+	AttackBoss->SetActorLocation(FVector(-2000.0f, 0.0f, 0.0f));
 	TestTrue(TEXT("combat visual attack loadout applies"),
 		AttackContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
 	const int32 AttackVisualCountBefore = AttackContext.Drone->GetCombatVisualAttackCountForTest();
@@ -2854,6 +2873,456 @@ bool FDroneD20LogSemanticsTest::RunTest(const FString& Parameters)
 		FName(TEXT("NoWeapon")));
 
 	DestroyDroneSelectionTestContext(NoWeaponContext);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR16BossTargetAssignmentTest,
+	"DroneProto.POR16.Targeting.AssignmentAndClear",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR16BossTargetAssignmentTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR16TargetAssignmentWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR16 target assignment")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestEqual(TEXT("Ready assigns the current boss target"),
+		Context.PC->GetCurrentTargetBoss(),
+		Boss);
+	TestTrue(TEXT("Ready locks the boss target"),
+		Context.PC->IsTargetLocked());
+	TestTrue(TEXT("Assigned boss is valid for server targeting"),
+		Context.PC->HasValidBossTargetForServer());
+	TestEqual(TEXT("Boss marker fallback is 2m above the actor"),
+		Boss->GetTargetMarkerWorldLocation(),
+		Boss->GetActorLocation() + FVector(0.0f, 0.0f, 200.0f));
+	TestEqual(TEXT("PC marker getter uses the current boss marker"),
+		Context.PC->GetTargetMarkerWorldLocation(),
+		Boss->GetTargetMarkerWorldLocation());
+
+	const int32 MarkerEventCountBeforeRefresh = Context.PC->GetTargetMarkerChangedCountForTest();
+	Context.PC->RefreshTargetMarkerUI();
+	const bool bMarkerHookShouldRun = Context.PC->IsLocalController() && Context.PC->GetNetMode() != NM_DedicatedServer;
+	if (bMarkerHookShouldRun)
+	{
+		TestEqual(TEXT("local marker refresh calls the Blueprint hook once"),
+			Context.PC->GetTargetMarkerChangedCountForTest(),
+			MarkerEventCountBeforeRefresh + 1);
+		TestTrue(TEXT("local marker hook is visible for an assigned live boss"),
+			Context.PC->WasLastTargetMarkerVisibleForTest());
+		TestEqual(TEXT("local marker hook receives the boss"),
+			Context.PC->GetLastTargetMarkerBossForTest(),
+			Boss);
+	}
+	else
+	{
+		TestEqual(TEXT("non-local marker refresh does not call the Blueprint hook"),
+			Context.PC->GetTargetMarkerChangedCountForTest(),
+			MarkerEventCountBeforeRefresh);
+	}
+
+	Context.PC->ClearBossTargetForServer(FName(TEXT("Automation")));
+	TestEqual(TEXT("target clear removes the boss"),
+		Context.PC->GetCurrentTargetBoss(),
+		static_cast<ARaidBoss*>(nullptr));
+	TestFalse(TEXT("target clear unlocks targeting"),
+		Context.PC->IsTargetLocked());
+	TestFalse(TEXT("cleared target is invalid for server targeting"),
+		Context.PC->HasValidBossTargetForServer());
+	Context.PC->ClearBossTargetForServer(FName(TEXT("AutomationAgain")));
+	TestEqual(TEXT("second target clear remains cleared"),
+		Context.PC->GetCurrentTargetBoss(),
+		static_cast<ARaidBoss*>(nullptr));
+	TestFalse(TEXT("second target clear remains unlocked"),
+		Context.PC->IsTargetLocked());
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR16BossTargetAttackValidationTest,
+	"DroneProto.POR16.Targeting.AttackValidation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR16BossTargetAttackValidationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext NoBossContext = CreateDroneSelectionTestContext(TEXT("POR16NoBossWorld"));
+	TestNotNull(TEXT("no boss context has PC"), NoBossContext.PC);
+	TestNotNull(TEXT("no boss context has drone"), NoBossContext.Drone);
+	if (!NoBossContext.PC || !NoBossContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(NoBossContext);
+		return false;
+	}
+	NoBossContext.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("NoBoss ready still enters battle for existing flow"),
+		NoBossContext.PC->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("NoBoss ready leaves target empty"),
+		NoBossContext.PC->GetCurrentTargetBoss(),
+		static_cast<ARaidBoss*>(nullptr));
+	TestTrue(TEXT("NoBoss loadout applies"),
+		NoBossContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	NoBossContext.Drone->RequestAttackBoss();
+	TestEqual(TEXT("NoBoss attack records NoTarget"),
+		NoBossContext.Drone->GetLastAttackIgnoredReasonForTest(),
+		FName(TEXT("NoTarget")));
+	DestroyDroneSelectionTestContext(NoBossContext);
+
+	FDroneSelectionTestContext SelectingContext = CreateDroneSelectionTestContext(TEXT("POR16SelectingAttackWorld"));
+	ARaidBoss* SelectingBoss = SelectingContext.World ? SelectingContext.World->SpawnActor<ARaidBoss>() : nullptr;
+	TestNotNull(TEXT("selecting boss is spawned"), SelectingBoss);
+	if (!SelectingContext.PC || !SelectingContext.Drone || !SelectingBoss)
+	{
+		DestroyDroneSelectionTestContext(SelectingContext);
+		return false;
+	}
+	SelectingContext.GameState->SetRaidBossForServer(SelectingBoss);
+	TestTrue(TEXT("selecting loadout applies"),
+		SelectingContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	const float SelectingBossHPBefore = SelectingBoss->GetCurrentHP();
+	SelectingContext.Drone->RequestAttackBoss();
+	TestTrue(TEXT("Selecting attack leaves boss HP unchanged"),
+		FMath::IsNearlyEqual(SelectingBoss->GetCurrentHP(), SelectingBossHPBefore, 0.001f));
+	TestEqual(TEXT("Selecting attack records NotInBattle"),
+		SelectingContext.Drone->GetLastAttackIgnoredReasonForTest(),
+		FName(TEXT("NotInBattle")));
+	DestroyDroneSelectionTestContext(SelectingContext);
+
+	FDroneSelectionTestContext ValidContext = CreateDroneSelectionTestContext(TEXT("POR16ValidAttackWorld"));
+	ARaidBoss* ValidBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, ValidContext, ValidBoss, TEXT("POR16 valid attack")))
+	{
+		DestroyDroneSelectionTestContext(ValidContext);
+		return false;
+	}
+	TestTrue(TEXT("valid attack loadout applies"),
+		ValidContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	ValidContext.Drone->SetActorLocation(FVector(-100000.0f, 0.0f, 0.0f));
+	ValidBoss->SetActorLocation(FVector(100000.0f, 500.0f, 200.0f));
+	const FVector ExpectedAttackDirection = (ValidBoss->GetActorLocation() - ValidContext.Drone->GetActorLocation()).GetSafeNormal();
+	const float ValidBossHPBefore = ValidBoss->GetCurrentHP();
+	const int32 AttackVisualCountBefore = ValidContext.Drone->GetCombatVisualAttackCountForTest();
+	ValidContext.Drone->RequestAttackBoss();
+	TestTrue(TEXT("valid target attack deals damage regardless of distance"),
+		ValidBoss->GetCurrentHP() < ValidBossHPBefore);
+	TestEqual(TEXT("valid target attack fires attack visual"),
+		ValidContext.Drone->GetCombatVisualAttackCountForTest(),
+		AttackVisualCountBefore + 1);
+	const FVector ActualAttackDirection = (
+		ValidContext.Drone->GetLastCombatVisualAttackToForTest()
+		- ValidContext.Drone->GetLastCombatVisualAttackFromForTest()).GetSafeNormal();
+	TestTrue(TEXT("attack visual direction uses boss minus drone direction"),
+		ActualAttackDirection.Equals(ExpectedAttackDirection, 0.001f));
+
+	ValidContext.PC->ClearBossTargetForServer(FName(TEXT("AutomationNoTarget")));
+	const float NoTargetBossHPBefore = ValidBoss->GetCurrentHP();
+	ValidContext.Drone->RequestAttackBoss();
+	TestTrue(TEXT("cleared target attack leaves boss HP unchanged"),
+		FMath::IsNearlyEqual(ValidBoss->GetCurrentHP(), NoTargetBossHPBefore, 0.001f));
+	TestEqual(TEXT("cleared target attack records NoTarget"),
+		ValidContext.Drone->GetLastAttackIgnoredReasonForTest(),
+		FName(TEXT("NoTarget")));
+
+	TestTrue(TEXT("target can be reassigned after clear"),
+		ValidContext.PC->AssignBossTargetForServer());
+	ValidContext.Drone->ApplyDamageForServer(ValidContext.Drone->GetMaxHealth() + 10, FName(TEXT("Automation")));
+	TestTrue(TEXT("drone death clears target"),
+		ValidContext.PC->GetCurrentTargetBoss() == nullptr);
+	const float DeadDroneBossHPBefore = ValidBoss->GetCurrentHP();
+	ValidContext.Drone->RequestAttackBoss();
+	TestTrue(TEXT("dead drone attack leaves boss HP unchanged"),
+		FMath::IsNearlyEqual(ValidBoss->GetCurrentHP(), DeadDroneBossHPBefore, 0.001f));
+	TestEqual(TEXT("dead drone attack records DroneDead"),
+		ValidContext.Drone->GetLastAttackIgnoredReasonForTest(),
+		FName(TEXT("DroneDead")));
+	DestroyDroneSelectionTestContext(ValidContext);
+
+	FDroneSelectionTestContext BossDeadContext = CreateDroneSelectionTestContext(TEXT("POR16BossDeadWorld"));
+	ARaidBoss* BossDeadBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, BossDeadContext, BossDeadBoss, TEXT("POR16 boss dead attack")))
+	{
+		DestroyDroneSelectionTestContext(BossDeadContext);
+		return false;
+	}
+	// 테스트 월드는 InitializeActorsForPlay를 거치지 않아 PC가 이터레이터에 자동 등록되지 않는다.
+	BossDeadContext.World->AddController(BossDeadContext.PC);
+	TestTrue(TEXT("boss dead loadout applies"),
+		BossDeadContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	BossDeadBoss->ApplyDamageForServer(BossDeadBoss->GetMaxHP() + 10.0f, BossDeadContext.PC, BossDeadContext.Drone);
+	TestTrue(TEXT("boss is defeated for targeting"),
+		BossDeadBoss->IsDefeated());
+	TestEqual(TEXT("boss death clears current target"),
+		BossDeadContext.PC->GetCurrentTargetBoss(),
+		static_cast<ARaidBoss*>(nullptr));
+	const float BossDeadHPBefore = BossDeadBoss->GetCurrentHP();
+	BossDeadContext.Drone->RequestAttackBoss();
+	TestTrue(TEXT("boss dead attack leaves HP unchanged"),
+		FMath::IsNearlyEqual(BossDeadBoss->GetCurrentHP(), BossDeadHPBefore, 0.001f));
+	TestEqual(TEXT("boss dead attack records BossDead"),
+		BossDeadContext.Drone->GetLastAttackIgnoredReasonForTest(),
+		FName(TEXT("BossDead")));
+	DestroyDroneSelectionTestContext(BossDeadContext);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR18BossDestroyClearsTargetTest,
+	"DroneProto.POR18.Targeting.BossDestroyClearsTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR18BossDestroyClearsTargetTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR18BossDestroyWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR18 boss destroy")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	// 테스트 월드는 InitializeActorsForPlay를 거치지 않아 PC가 이터레이터에 자동 등록되지 않는다.
+	Context.World->AddController(Context.PC);
+
+	TestNotNull(TEXT("ready assigns a boss target before destroy"),
+		Context.PC->GetCurrentTargetBoss());
+	TestTrue(TEXT("target is locked before destroy"),
+		Context.PC->IsTargetLocked());
+
+	// defeat 경로 없이 보스가 파괴되는 경우: EndPlay가 서버의 모든 PC 타겟을 해제해야 한다.
+	Boss->Destroy();
+	TestEqual(TEXT("boss destroy clears current target"),
+		Context.PC->GetCurrentTargetBoss(),
+		static_cast<ARaidBoss*>(nullptr));
+	TestFalse(TEXT("boss destroy unlocks target"),
+		Context.PC->IsTargetLocked());
+	TestFalse(TEXT("boss destroy invalidates target for attack"),
+		Context.PC->HasValidBossTarget());
+
+	TestTrue(TEXT("destroyed boss loadout applies for attack check"),
+		Context.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	Context.Drone->RequestAttackBoss();
+	TestEqual(TEXT("attack after boss destroy records NoTarget"),
+		Context.Drone->GetLastAttackIgnoredReasonForTest(),
+		FName(TEXT("NoTarget")));
+	DestroyDroneSelectionTestContext(Context);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR18ReportPlayerKeyGuardTest,
+	"DroneProto.POR18.Report.PlayerKeyDuplicateGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR18ReportPlayerKeyGuardTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR18ReportKeyWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("report key game mode is spawned"), GameMode);
+	ARaidBoss* Boss = nullptr;
+	if (!GameMode || !PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR18 report key")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("first report is created"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+
+	// 재접속(새 PC 인스턴스) 시뮬레이션: PC bool만 리셋해도 GameMode PlayerKey set이 중복을 막아야 한다.
+	Context.PC->ResetDroneReportForTest();
+	TestFalse(TEXT("PC-level reset alone cannot duplicate the report"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+
+	// 새 레이드 시작(RaidReady)과 같은 키 해제 후에는 다시 생성 가능해야 한다.
+	GameMode->ClearDroneReportKeyForServer(Context.PC, FName(TEXT("Automation")));
+	Context.PC->ResetDroneReportForTest();
+	TestTrue(TEXT("report can be created again after key clear"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	DestroyDroneSelectionTestContext(Context);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR18StatsRecalcGuardTest,
+	"DroneProto.POR18.Drone.StatsRecalcInBattleGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR18StatsRecalcGuardTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR18StatsRecalcWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR18 stats recalc")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("InBattle loadout applies"),
+		Context.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	Context.Drone->ApplyDamageForServer(30, FName(TEXT("Automation")));
+	const int32 HealthAfterDamage = Context.Drone->GetHealth();
+	TestTrue(TEXT("drone takes damage for the guard check"),
+		HealthAfterDamage < Context.Drone->GetMaxHealth());
+
+	// InBattle 중 RecalculateStats(ApplyLoadout 경유)가 풀피 회복을 일으키지 않아야 한다.
+	TestTrue(TEXT("InBattle loadout re-apply succeeds"),
+		Context.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+	TestEqual(TEXT("InBattle recalc attempt keeps damaged health"),
+		Context.Drone->GetHealth(),
+		HealthAfterDamage);
+	DestroyDroneSelectionTestContext(Context);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR19BossPatternLifecycleTest,
+	"DroneProto.POR19.BossPattern.StartStopLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR19BossPatternLifecycleTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR19PatternLifecycleWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR19 pattern lifecycle")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern start succeeds in battle"), Boss->StartBossPatternForServer());
+	TestTrue(TEXT("pattern timer is active after start"), Boss->IsBossPatternTimerActiveForTest());
+	TestFalse(TEXT("duplicate start is ignored"), Boss->StartBossPatternForServer());
+	TestTrue(TEXT("pattern timer stays active after duplicate start"), Boss->IsBossPatternTimerActiveForTest());
+
+	// 수동 1회 fire: 기존 telegraph 서버 공격 경로를 그대로 재사용해야 한다.
+	Boss->FireBossPatternOnceForTest();
+	TestEqual(TEXT("pattern fire increments sequence"), Boss->GetBossPatternFireSequenceForTest(), 1);
+	int32 TelegraphCount = 0;
+	for (TActorIterator<ARaidBossAttackTelegraph> It(Context.World); It; ++It)
+	{
+		TelegraphCount++;
+	}
+	TestEqual(TEXT("pattern fire spawns a telegraph actor"), TelegraphCount, 1);
+
+	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	TestFalse(TEXT("pattern timer is inactive after stop"), Boss->IsBossPatternTimerActiveForTest());
+
+	// 보스 사망 경로가 패턴을 자체 정지해야 한다.
+	TestTrue(TEXT("pattern restart succeeds"), Boss->StartBossPatternForServer());
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() + 10.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss is defeated for pattern stop"), Boss->IsDefeated());
+	TestFalse(TEXT("boss death stops the pattern timer"), Boss->IsBossPatternTimerActiveForTest());
+	TestFalse(TEXT("start is ignored while boss is dead"), Boss->StartBossPatternForServer());
+	DestroyDroneSelectionTestContext(Context);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR19BossPatternRaidFlowTest,
+	"DroneProto.POR19.BossPattern.BattleStartAndRaidEndFlow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR19BossPatternRaidFlowTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR19PatternRaidFlowWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("pattern game mode is spawned"), GameMode);
+	ARaidBoss* Boss = nullptr;
+	if (!GameMode || !PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR19 pattern raid flow")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// Ready→Battle 전이 시 GameMode 오케스트레이션이 모든 보스 패턴을 시작해야 한다.
+	TestTrue(TEXT("battle transition starts the boss pattern"),
+		Boss->IsBossPatternTimerActiveForTest());
+
+	// RaidEnd 상태에서 fire가 오면 공격 없이 자체 정지해야 한다 (정지 누락 대비 마지막 저지선).
+	Context.GameState->SetRaidStateForServer(ERaidState::End);
+	Boss->FireBossPatternOnceForTest();
+	TestFalse(TEXT("raid end fire stops the pattern"), Boss->IsBossPatternTimerActiveForTest());
+	TestEqual(TEXT("raid end fire does not run the attack"),
+		Boss->GetBossPatternFireSequenceForTest(), 0);
+
+	// RaidEnd 반환 플로우(GameMode)가 패턴을 정지해야 한다.
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	TestTrue(TEXT("pattern restarts for raid end flow"), Boss->StartBossPatternForServer());
+	// 테스트 월드는 InitializeActorsForPlay를 거치지 않아 PC가 이터레이터에 자동 등록되지 않는다.
+	Context.World->AddController(Context.PC);
+	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("RaidTimeLimit")));
+	TestFalse(TEXT("raid end return stops the pattern"), Boss->IsBossPatternTimerActiveForTest());
+	DestroyDroneSelectionTestContext(Context);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR19BossStunDamageMultiplierTest,
+	"DroneProto.POR19.BossStun.DamageMultiplier",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR19BossStunDamageMultiplierTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR19BossStunWorld"));
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("POR19 boss stun")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// 스턴 전: 기본 데미지 그대로.
+	const float HPStart = Boss->GetCurrentHP();
+	Boss->ApplyDamageForServer(100.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("base damage is applied without stun"),
+		FMath::IsNearlyEqual(HPStart - Boss->GetCurrentHP(), 100.0f, 0.001f));
+
+	// 스턴 중: 데미지 x StunDamageMultiplier(기본 1.5).
+	Boss->SetStunnedForServer(true, FName(TEXT("Automation")));
+	TestTrue(TEXT("boss enters stun on server"), Boss->IsStunned());
+	const float HPBeforeStunnedHit = Boss->GetCurrentHP();
+	Boss->ApplyDamageForServer(100.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("stunned damage applies the multiplier"),
+		FMath::IsNearlyEqual(HPBeforeStunnedHit - Boss->GetCurrentHP(), 150.0f, 0.001f));
+
+	// 스턴 해제 후: 기본 데미지로 복원.
+	Boss->SetStunnedForServer(false, FName(TEXT("Automation")));
+	TestFalse(TEXT("boss leaves stun on server"), Boss->IsStunned());
+	const float HPBeforeNormalHit = Boss->GetCurrentHP();
+	Boss->ApplyDamageForServer(100.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("damage returns to base after stun end"),
+		FMath::IsNearlyEqual(HPBeforeNormalHit - Boss->GetCurrentHP(), 100.0f, 0.001f));
+
+	// 죽은 보스는 스턴 진입 불가.
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() + 1000.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss is defeated for stun guard"), Boss->IsDefeated());
+	Boss->SetStunnedForServer(true, FName(TEXT("Automation")));
+	TestFalse(TEXT("dead boss cannot be stunned"), Boss->IsStunned());
+
+	// 복제/OnRep 등록 확인.
+	FProperty* StunProperty = ARaidBoss::StaticClass()->FindPropertyByName(FName(TEXT("bIsStunned")));
+	TestNotNull(TEXT("bIsStunned property exists"), StunProperty);
+	if (StunProperty)
+	{
+		TestTrue(TEXT("bIsStunned is replicated"), StunProperty->HasAnyPropertyFlags(CPF_Net));
+		TestEqual(TEXT("bIsStunned rep notify targets OnRep_IsStunned"),
+			StunProperty->RepNotifyFunc,
+			FName(TEXT("OnRep_IsStunned")));
+	}
+	DestroyDroneSelectionTestContext(Context);
+
 	return true;
 }
 
@@ -3875,9 +4344,11 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("raid end attack ignored summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=RaidEnd")));
 	TestTrue(TEXT("boss dead attack ignored summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=BossDead")));
-	TestTrue(TEXT("no boss attack failed summary log marker exists"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Failed: Reason=NoBoss")));
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=%s"))
+		&& DroneSource.Contains(TEXT("FName(TEXT(\"BossDead\"))")));
+	TestTrue(TEXT("no target attack ignored summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Ignored: Reason=%s"))
+		&& DroneSource.Contains(TEXT("FName(TEXT(\"NoTarget\"))")));
 	TestTrue(TEXT("invalid pawn attack failed summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] Attack Failed: Reason=InvalidPawn")));
 	TestTrue(TEXT("attack path checks PlayerSelectionState"),
@@ -4050,16 +4521,22 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("if (DodgeAction)")));
 	TestTrue(TEXT("dodge input action uses a single press-style binding"),
 		DroneSource.Contains(TEXT("BindAction(DodgeAction, ETriggerEvent::Started")));
-	TestTrue(TEXT("dodge input bridge has a local zero direction ignore log"),
-		DroneSource.Contains(TEXT("[DR_SUMMARY] DodgeInputIgnored")));
+	TestTrue(TEXT("dodge zero direction ignore reason marker exists"),
+		DroneSource.Contains(TEXT("NoDirection")));
 	TestTrue(TEXT("dodge summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] Dodge PC=")));
+	TestTrue(TEXT("dodge accepted summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Dodge Accepted:")));
 	TestTrue(TEXT("dodge ignored summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] Dodge Ignored")));
+	TestTrue(TEXT("dodge invincible begin summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DodgeInvincible: State=Begin")));
+	TestTrue(TEXT("dodge invincible end summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] DodgeInvincible: State=End")));
 	TestTrue(TEXT("server dodge applied summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] ServerDodgeApplied PC=")));
 	TestTrue(TEXT("dodge move-distance policy marker exists"),
-		DroneSource.Contains(TEXT("MoveDistancePolicy=Excluded")));
+		DroneSource.Contains(TEXT("MoveDistancePolicy=Included")));
 	TestTrue(TEXT("dead heal ignored marker exists"),
 		DroneSource.Contains(TEXT("TEXT(\"Heal\")")));
 	TestTrue(TEXT("weapon calculation summary log marker exists"),
@@ -4109,6 +4586,10 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		&& DroneSource.Contains(TEXT("[DR_SUMMARY] ReturnAfterReport Player=")));
 	TestTrue(TEXT("move input summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveInput PC=")));
+	TestTrue(TEXT("movement boundary clamp summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveClamp: Reason=Boundary")));
+	TestTrue(TEXT("movement boss-min clamp summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] MoveClamp: Reason=BossMinDistance")));
 	TestTrue(TEXT("move accepted summary uses shared throttle helper"),
 		DroneSource.Contains(TEXT("ShouldEmitMoveAcceptedSummaryLog(")));
 	TestTrue(TEXT("server move applied summary log marker exists"),
@@ -4129,6 +4610,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		DroneSource.Contains(TEXT("bPawnMatchesDrone=")));
 	TestTrue(TEXT("replicated location summary log marker exists"),
 		DroneSource.Contains(TEXT("[DR_SUMMARY] ReplicatedLocation PC=")));
+	TestTrue(TEXT("boss-facing camera configured summary log marker exists"),
+		DroneSource.Contains(TEXT("[DR_SUMMARY] Camera: Result=Configured Mode=BossFacingQuarterView")));
 	TestTrue(TEXT("view target result summary marker exists"),
 		DroneSource.Contains(TEXT("ViewTargetResult=")));
 	TestTrue(TEXT("view target matched pawn result marker exists"),

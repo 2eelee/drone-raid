@@ -319,6 +319,14 @@ void ADrone::Move(const FInputActionValue& Value)
 	if (RawAxis.IsNearlyZero())
 	{
 		ClearCachedMoveInputForDodge();
+		if (HasAuthority())
+		{
+			ApplyMoveInputForServer(FVector2D::ZeroVector);
+		}
+		else
+		{
+			Server_SetMoveInput(FVector2D::ZeroVector);
+		}
 		return;
 	}
 
@@ -327,6 +335,14 @@ void ADrone::Move(const FInputActionValue& Value)
 	if (WorldAxis.IsNearlyZero())
 	{
 		ClearCachedMoveInputForDodge();
+		if (HasAuthority())
+		{
+			ApplyMoveInputForServer(FVector2D::ZeroVector);
+		}
+		else
+		{
+			Server_SetMoveInput(FVector2D::ZeroVector);
+		}
 		return;
 	}
 
@@ -374,6 +390,14 @@ void ADrone::ClearMoveInputForDodge(const FInputActionValue& Value)
 {
 	(void)Value;
 	ClearCachedMoveInputForDodge();
+	if (HasAuthority())
+	{
+		ApplyMoveInputForServer(FVector2D::ZeroVector);
+	}
+	else
+	{
+		Server_SetMoveInput(FVector2D::ZeroVector);
+	}
 }
 
 float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
@@ -511,6 +535,9 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	const FVector2D Direction = ClampMoveInputAxisForServer(RawDirection, bWasClamped);
 	const auto LogIgnored = [this, &Direction](const TCHAR* Reason, float CooldownRemaining = 0.0f)
 	{
+#if WITH_DEV_AUTOMATION_TESTS
+		LastDodgeIgnoredReasonForTest = FName(Reason ? Reason : TEXT("Unknown"));
+#endif
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Ignored: Reason=%s Player=%s Drone=%s Direction=%s CooldownRemaining=%.2f"),
 			Reason ? Reason : TEXT("Unknown"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
@@ -564,7 +591,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 			*BuildDroneControllerLogString(RaidPC),
 			*StartLocation.ToString());
 	}
-	LockZPositionForServer(StartLocation);
+	StartLocation = ClampFinalMovementPositionForServer(StartLocation);
 	if (!GetActorLocation().Equals(StartLocation, 0.1f))
 	{
 		SetActorLocation(StartLocation, false, nullptr, ETeleportType::TeleportPhysics);
@@ -578,26 +605,11 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 			*BuildDroneControllerLogString(RaidPC),
 			*RequestedLocation.ToString());
 	}
-	LockZPositionForServer(RequestedLocation);
+	FVector FinalLocation = ClampFinalMovementPositionForServer(RequestedLocation);
 
-	const FVector BoundaryInput = RequestedLocation;
-	FVector FinalLocation = ClampPositionToMovementBoundaryForServer(BoundaryInput);
-	if (!FinalLocation.Equals(BoundaryInput, 0.1f))
-	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge BoundaryClamp: Before=%s After=%s"),
-			*BoundaryInput.ToString(),
-			*FinalLocation.ToString());
-	}
-
-	const FVector BossMinInput = FinalLocation;
-	FinalLocation = ClampPositionOutsideBossCenterForServer(FinalLocation);
-	if (!FinalLocation.Equals(BossMinInput, 0.1f))
-	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge BossMinClamp: Before=%s After=%s MinDistance=5"),
-			*BossMinInput.ToString(),
-			*FinalLocation.ToString());
-	}
-
+#if WITH_DEV_AUTOMATION_TESTS
+	LastDodgeIgnoredReasonForTest = NAME_None;
+#endif
 	bIsDodging = true;
 	bIsInvincible = true;
 	LastServerMoveInput = FVector2D::ZeroVector;
@@ -641,6 +653,9 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	Multicast_SetDodgeInvincibleVisual(true);
 	ApplyDodgeInvincibleVisualLocally(true);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleStart Player=%s Duration=%.2f"),
+		*BuildDroneControllerLogString(RaidPC),
+		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DodgeInvincible: State=Begin Player=%s Duration=%.2f"),
 		*BuildDroneControllerLogString(RaidPC),
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualHidden: Player=%s Reason=InvincibleStart Duration=%.2f"),
@@ -847,15 +862,6 @@ bool ADrone::RequestDodgeFromCurrentMoveInput()
 {
 	const FVector2D DodgeDirection = CachedMoveInputForDodge;
 	ClearCachedMoveInputForDodge();
-
-	if (DodgeDirection.IsNearlyZero())
-	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DodgeInputIgnored PC=%s Reason=NoDirection"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())));
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Ignored: Reason=NoDirection Player=%s"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())));
-		return false;
-	}
 
 	if (HasAuthority())
 	{
@@ -1275,6 +1281,16 @@ FName ADrone::GetLastAttackNoDamageReasonForTest() const
 	return LastAttackNoDamageReasonForTest;
 }
 
+FName ADrone::GetLastAttackIgnoredReasonForTest() const
+{
+	return LastAttackIgnoredReasonForTest;
+}
+
+FName ADrone::GetLastDodgeIgnoredReasonForTest() const
+{
+	return LastDodgeIgnoredReasonForTest;
+}
+
 float ADrone::GetMoveAcceptedSummaryLogIntervalSecondsForTest()
 {
 	return MoveAcceptedSummaryLogIntervalSeconds;
@@ -1354,6 +1370,14 @@ FVector2D ADrone::GetCachedMoveInputForDodgeForTest() const
 void ADrone::ClearMoveInputForDodgeForTest()
 {
 	ClearCachedMoveInputForDodge();
+	if (HasAuthority())
+	{
+		ApplyMoveInputForServer(FVector2D::ZeroVector);
+	}
+	else
+	{
+		Server_SetMoveInput(FVector2D::ZeroVector);
+	}
 }
 
 bool ADrone::RequestDodgeFromCurrentMoveInputForTest()
@@ -1554,6 +1578,23 @@ void ADrone::ServerEquipPart(TSubclassOf<UDronePart> PartClass)
 
 void ADrone::RecalculateStats()
 {
+	// InBattle 중 재계산은 Health=MaxHealth 풀피 회복 버그를 만들므로 서버에서 차단한다.
+	if (HasAuthority())
+	{
+		if (const ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
+		{
+			if (RaidPC->GetPlayerSelectionState() == EPlayerSelectionState::InBattle)
+			{
+				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] StatsRecalcIgnored: Reason=InBattle Player=%s Drone=%s Health=%.0f MaxHealth=%d"),
+					*BuildDroneControllerLogString(Cast<AController>(GetController())),
+					*GetName(),
+					Health,
+					MaxHealth);
+				return;
+			}
+		}
+	}
+
 	int32 TotalHealth = 100;
 	int32 TotalAttack = 0;
 
@@ -1569,7 +1610,7 @@ void ADrone::RecalculateStats()
 	MaxHealth   = TotalHealth;
 	AttackPower = TotalAttack;
 	Health      = MaxHealth;  // 장착 시 HP 최대치 초기화 — OnRep_Health 트리거 보장
-	             // 암묵 제약: 전투 중 RecalculateStats 호출 금지 (풀피 회복 버그)
+	             // 전투 중 호출은 위의 InBattle 가드가 차단한다 (풀피 회복 버그 방지)
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] Stats: MaxHealth=%d, AttackPower=%d"), MaxHealth, AttackPower);
 }
@@ -1588,6 +1629,7 @@ void ADrone::HandleDeath()
 
 	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
 	{
+		RaidPC->ClearBossTargetForServer(FName(TEXT("DroneDead")));
 		const FName CorePartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::Core);
 		const FName LeftWeaponPartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon);
 		const FName RightWeaponPartID = RaidPC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon);
@@ -1619,10 +1661,18 @@ void ADrone::HandleDeath()
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone death handled: equipped parts returned"));
 }
 
+void ADrone::RecordAttackIgnoredForServer(FName Reason)
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	LastAttackIgnoredReasonForTest = Reason;
+#endif
+}
+
 void ADrone::HandleAttackBossForServer()
 {
 	if (!HasAuthority())
 	{
+		RecordAttackIgnoredForServer(FName(TEXT("NotAuthority")));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Failed: Reason=NotAuthority Player=%s Drone=%s"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
 			*GetName());
@@ -1632,6 +1682,7 @@ void ADrone::HandleAttackBossForServer()
 	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
 	if (!RaidPC || RaidPC->GetPawn() != this)
 	{
+		RecordAttackIgnoredForServer(FName(TEXT("PossessMismatch")));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=PossessMismatch Drone=%s"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
 			*GetName());
@@ -1644,6 +1695,7 @@ void ADrone::HandleAttackBossForServer()
 
 	if (bIsDodging)
 	{
+		RecordAttackIgnoredForServer(FName(TEXT("Dodging")));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=Dodging Player=%s Drone=%s"),
 			*BuildDroneControllerLogString(RaidPC),
 			*GetName());
@@ -1654,6 +1706,7 @@ void ADrone::HandleAttackBossForServer()
 	{
 		if (RaidGameState->RaidState == ERaidState::End)
 		{
+			RecordAttackIgnoredForServer(FName(TEXT("RaidEnd")));
 			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=RaidEnd Player=%s Drone=%s RaidState=End"),
 				*BuildDroneControllerLogString(RaidPC),
 				*GetName());
@@ -1661,8 +1714,12 @@ void ADrone::HandleAttackBossForServer()
 		}
 	}
 
-	if (RaidPC && RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
+	if (RaidPC->GetPlayerSelectionState() != EPlayerSelectionState::InBattle)
 	{
+		RecordAttackIgnoredForServer(FName(TEXT("NotInBattle")));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Invalid: Reason=NotInBattle Player=%s Drone=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName());
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=NotInBattle SelectionState=%s"),
 			*BuildDroneControllerLogString(RaidPC),
 			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()));
@@ -1674,31 +1731,48 @@ void ADrone::HandleAttackBossForServer()
 
 	if (bIsDead)
 	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=Dead Drone=%s"),
+		RecordAttackIgnoredForServer(FName(TEXT("DroneDead")));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Invalid: Reason=DroneDead Player=%s Drone=%s"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=DroneDead Drone=%s"),
 			*BuildDroneControllerLogString(RaidPC),
 			*GetName());
 		LogDeadInputIgnored(TEXT("Attack"));
 		return;
 	}
 
-	ARaidBoss* Boss = FindRaidBossForServer();
-	if (!Boss)
+	FName TargetInvalidReason;
+	if (!RaidPC->HasValidBossTargetForServer(TargetInvalidReason))
 	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=NoBoss Drone=%s"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
-			*GetName());
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Failed: Reason=NoBoss Player=%s Drone=%s"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		if (TargetInvalidReason == FName(TEXT("BossDead")))
+		{
+			RaidPC->ClearBossTargetForServer(FName(TEXT("BossDead")));
+		}
+		RecordAttackIgnoredForServer(TargetInvalidReason);
+		const ARaidBoss* InvalidTargetBoss = RaidPC->GetCurrentTargetBoss();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Invalid: Reason=%s Player=%s Drone=%s Target=%s"),
+			TargetInvalidReason.IsNone() ? TEXT("Unknown") : *TargetInvalidReason.ToString(),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName(),
+			InvalidTargetBoss ? *InvalidTargetBoss->GetName() : TEXT("None"));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=%s Player=%s Drone=%s Target=Invalid"),
+			TargetInvalidReason.IsNone() ? TEXT("Unknown") : *TargetInvalidReason.ToString(),
+			*BuildDroneControllerLogString(RaidPC),
 			*GetName());
 		return;
 	}
 
-	if (Boss->IsDefeated())
+	ARaidBoss* Boss = RaidPC->GetCurrentTargetBoss();
+	if (!Boss)
 	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=BossDead Player=%s Drone=%s BossHP=%.2f"),
-			*BuildDroneControllerLogString(Cast<AController>(GetController())),
-			*GetName(),
-			Boss->GetCurrentHP());
+		RecordAttackIgnoredForServer(FName(TEXT("NoTarget")));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Invalid: Reason=NoTarget Player=%s Drone=%s Target=None"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=NoTarget Player=%s Drone=%s Target=Invalid"),
+			*BuildDroneControllerLogString(RaidPC),
+			*GetName());
 		return;
 	}
 
@@ -1725,6 +1799,7 @@ void ADrone::HandleAttackBossForServer()
 	};
 	FScopedDroneAttackFlag ScopedAttackFlag(this);
 
+	RecordAttackIgnoredForServer(NAME_None);
 #if WITH_DEV_AUTOMATION_TESTS
 	LastAttackNoDamageReasonForTest = NAME_None;
 #endif
@@ -1796,8 +1871,16 @@ void ADrone::HandleAttackBossForServer()
 	}
 	if (DamageDealt > KINDA_SMALL_NUMBER)
 	{
-		const FVector AttackFrom = GetActorLocation() + FVector(0.0f, 0.0f, 80.0f);
-		const FVector AttackTo = Boss->GetActorLocation() + FVector(0.0f, 0.0f, 120.0f);
+		const FVector AttackFrom = GetActorLocation();
+		FVector AttackDirection = (Boss->GetActorLocation() - AttackFrom).GetSafeNormal();
+		if (AttackDirection.IsNearlyZero())
+		{
+			AttackDirection = GetActorForwardVector().GetSafeNormal();
+		}
+		const float AttackDistance = FVector::Dist(AttackFrom, Boss->GetActorLocation());
+		const FVector AttackTo = AttackDirection.IsNearlyZero()
+			? Boss->GetActorLocation()
+			: AttackFrom + AttackDirection * AttackDistance;
 		Multicast_PlayDroneAttackVisual(
 			EquippedLeftWeaponPartID,
 			EquippedRightWeaponPartID,
@@ -1813,11 +1896,12 @@ void ADrone::HandleAttackBossForServer()
 				AttackFrom,
 				AttackTo);
 		}
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual Attack: Player=%s Damage=%.2f From=%s To=%s LeftWeapon=%s RightWeapon=%s"),
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual Attack: Player=%s Damage=%.2f From=%s To=%s AimDirection=%s LeftWeapon=%s RightWeapon=%s"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
 			DamageDealt,
 			*AttackFrom.ToString(),
 			*AttackTo.ToString(),
+			*AttackDirection.ToString(),
 			*EquippedLeftWeaponPartID.ToString(),
 			*EquippedRightWeaponPartID.ToString());
 	}
@@ -1862,8 +1946,10 @@ void ADrone::HandleAttackBossForServer()
 		HealAmount,
 		Boss->GetCurrentHP(),
 		Boss->GetMaxHP());
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Accepted: Player=%s Core=%s LeftWeapon=%s RightWeapon=%s Damage=%.2f LeftDamage=%.2f RightDamage=%.2f BossHPBefore=%.2f BossHPAfter=%.2f"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Accepted: Player=%s Target=Boss Boss=%s BossID=%s Core=%s LeftWeapon=%s RightWeapon=%s Damage=%.2f LeftDamage=%.2f RightDamage=%.2f BossHPBefore=%.2f BossHPAfter=%.2f"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
+		*Boss->GetName(),
+		*Boss->GetBossID().ToString(),
 		*EquippedCorePartID.ToString(),
 		*EquippedLeftWeaponPartID.ToString(),
 		*EquippedRightWeaponPartID.ToString(),
@@ -1876,13 +1962,13 @@ void ADrone::HandleAttackBossForServer()
 
 	if (bBossDefeatedByThisAttack)
 	{
+		RaidPC->ClearBossTargetForServer(FName(TEXT("BossDead")));
 		if (ARaidGameMode* RaidGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ARaidGameMode>() : nullptr)
 		{
 			RaidGameMode->HandleBossDefeatedForServer();
 		}
 	}
 }
-
 void ADrone::UpdateLocalCombatCamera(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
@@ -2056,6 +2142,11 @@ void ADrone::UpdateLocalCombatCamera(float DeltaSeconds)
 			CombatCameraTargetScreenPosition.Y,
 			CombatCameraBossScreenYRange.X,
 			CombatCameraBossScreenYRange.Y);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Camera: Result=Configured Mode=BossFacingQuarterView LocalPlayer=%s Distance=%.0f Height=%.1f FOV=%.0f"),
+			*BuildDroneControllerLogString(PC),
+			CombatCameraDistanceCm * MoveDistanceCmToMeters,
+			CombatCameraHeightCm * MoveDistanceCmToMeters,
+			CombatCameraFOV);
 	}
 
 	const bool bBossValidityChanged = !bHasLastCombatCameraBossValid || bLastCombatCameraBossValid != bBossValid;
@@ -2291,6 +2382,16 @@ void ADrone::LockZPositionForServer(FVector& Position) const
 	Position.Z = FixedZPosition;
 }
 
+FVector ADrone::ClampFinalMovementPositionForServer(FVector RequestedPosition)
+{
+	LockZPositionForServer(RequestedPosition);
+	FVector FinalLocation = ClampPositionToMovementBoundaryForServer(RequestedPosition);
+	FinalLocation = ClampPositionOutsideBossCenterForServer(FinalLocation);
+	FinalLocation = ClampPositionToMovementBoundaryForServer(FinalLocation);
+	LockZPositionForServer(FinalLocation);
+	return FinalLocation;
+}
+
 FVector ADrone::ResolveMovementBoundaryCenterForServer() const
 {
 	if (bHasMovementBoundaryCenter)
@@ -2356,6 +2457,10 @@ FVector ADrone::ClampPositionToMovementBoundaryForServer(FVector RequestedPositi
 		*RequestedPosition.ToString(),
 		*ClampedPosition.ToString(),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveClamp: Reason=Boundary Before=%s After=%s Player=%s"),
+		*RequestedPosition.ToString(),
+		*ClampedPosition.ToString(),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())));
 	return ClampedPosition;
 }
 
@@ -2410,9 +2515,15 @@ FVector ADrone::ClampPositionOutsideBossCenterForServer(FVector RequestedPositio
 		false))
 	{
 		LastMoveBossMinClampSummaryLogTime = Now;
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move BossMinClamp: Before=%s After=%s MinDistance=5 Player=%s"),
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move BossMinClamp: Before=%s After=%s MinDistance=%.0f Player=%s"),
 			*RequestedPosition.ToString(),
 			*ClampedPosition.ToString(),
+			SafeMinDistanceCm * MoveDistanceCmToMeters,
+			*BuildDroneControllerLogString(Cast<AController>(GetController())));
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] MoveClamp: Reason=BossMinDistance Before=%s After=%s MinDistance=%.0f Player=%s"),
+			*RequestedPosition.ToString(),
+			*ClampedPosition.ToString(),
+			SafeMinDistanceCm * MoveDistanceCmToMeters,
 			*BuildDroneControllerLogString(Cast<AController>(GetController())));
 	}
 	return ClampedPosition;
@@ -2535,7 +2646,7 @@ void ADrone::ApplyDodgeInterpolatedLocationForServer(float Alpha)
 
 	const float ClampedAlpha = FMath::Clamp(Alpha, 0.0f, 1.0f);
 	FVector DesiredLocation = FMath::Lerp(DodgeStartLocationForServer, DodgeTargetLocationForServer, ClampedAlpha);
-	LockZPositionForServer(DesiredLocation);
+	DesiredLocation = ClampFinalMovementPositionForServer(DesiredLocation);
 
 	if (!GetActorLocation().Equals(DesiredLocation, 0.1f))
 	{
@@ -2758,6 +2869,8 @@ void ADrone::EndDodgeInvincibilityForServer()
 	ApplyDodgeInvincibleVisualLocally(false);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleEnd Player=%s"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DodgeInvincible: State=End Player=%s"),
+		*BuildDroneControllerLogString(Cast<AController>(GetController())));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualShown: Player=%s Reason=InvincibleEnd"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())));
 }
@@ -2901,9 +3014,7 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 			*BuildDroneControllerLogString(RaidPC),
 			*RequestedLocation.ToString());
 	}
-	LockZPositionForServer(RequestedLocation);
-	FVector FinalLocation = ClampPositionToMovementBoundaryForServer(RequestedLocation);
-	FinalLocation = ClampPositionOutsideBossCenterForServer(FinalLocation);
+	const FVector FinalLocation = ClampFinalMovementPositionForServer(RequestedLocation);
 	SetActorLocation(FinalLocation, false, nullptr, ETeleportType::TeleportPhysics);
 	const FVector CurrentLocation = GetActorLocation();
 	if (CurrentLocation.Equals(PreviousLocation, 0.1f))

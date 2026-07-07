@@ -160,6 +160,14 @@ bool FDroneBasicMovementSpeedAndAxisTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("raw input longer than one is normalized on the server"),
 		Context.Drone->GetLastServerMoveInputForTest().Equals(FVector2D(1.0f, 0.0f), 0.001f));
 
+	TestTrue(TEXT("move release test starts with cached dodge direction"),
+		Context.Drone->CacheMoveInputForDodgeForTest(FVector2D(1.0f, 0.0f)));
+	Context.Drone->ClearMoveInputForDodgeForTest();
+	TestTrue(TEXT("move release clears pending server movement"),
+		Context.Drone->GetLastServerMoveInputForTest().IsNearlyZero());
+	TestTrue(TEXT("move release clears cached dodge direction"),
+		Context.Drone->GetCachedMoveInputForDodgeForTest().IsNearlyZero());
+
 	TestFalse(TEXT("zero input is ignored as immediate stop"),
 		Context.Drone->ApplyMoveInputForServerForTest(FVector2D::ZeroVector));
 	TestTrue(TEXT("zero input leaves no pending server movement"),
@@ -199,16 +207,16 @@ bool FDroneMovementBoundaryAndBossClampTest::RunTest(const FString& Parameters)
 		FVector::Dist2D(Context.Drone->GetActorLocation(), FVector::ZeroVector) <= 5000.0f + 0.1f);
 
 	const FVector BossClamped = Context.Drone->ClampPositionOutsideBossCenterForServer(FVector(200.0f, 0.0f, 777.0f));
-	TestTrue(TEXT("boss helper pushes targets out to 5m minimum distance"),
-		FMath::IsNearlyEqual(FVector::Dist2D(BossClamped, FVector::ZeroVector), 500.0f, 0.1f));
+	TestTrue(TEXT("boss helper pushes targets out to 8m minimum distance"),
+		FMath::IsNearlyEqual(FVector::Dist2D(BossClamped, FVector::ZeroVector), 800.0f, 0.1f));
 	TestTrue(TEXT("boss helper keeps Z locked"),
 		FMath::IsNearlyEqual(BossClamped.Z, 0.0f, 0.1f));
 
-	Context.Drone->SetActorLocation(FVector(600.0f, 0.0f, 777.0f));
+	Context.Drone->SetActorLocation(FVector(900.0f, 0.0f, 777.0f));
 	Context.Drone->ResetAccumulatedMoveDistanceForServer();
-	MoveDroneForMovementTest(Context.Drone, FVector2D(0.0f, -1.0f), 1.0f);
-	TestTrue(TEXT("server movement cannot enter the boss 5m minimum distance"),
-		FVector::Dist2D(Context.Drone->GetActorLocation(), FVector::ZeroVector) >= 500.0f - 0.1f);
+	MoveDroneForMovementTest(Context.Drone, FVector2D(-1.0f, 0.0f), 1.0f);
+	TestTrue(TEXT("server movement cannot enter the boss 8m minimum distance"),
+		FVector::Dist2D(Context.Drone->GetActorLocation(), FVector::ZeroVector) >= 800.0f - 0.1f);
 	TestTrue(TEXT("server movement keeps Z locked after boss clamp"),
 		FMath::IsNearlyEqual(Context.Drone->GetActorLocation().Z, 0.0f, 0.1f));
 

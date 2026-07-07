@@ -161,6 +161,10 @@
 - 서버 권한 판정을 클라로 옮기지 않는다.
 - 새 RPC/Replicated 변수는 필요성과 책임 분리를 보고한 뒤 최소로만 추가한다.
 
+### 7. Codex 검증 실행 주의
+- `UnrealEditor-Cmd.exe` 자동화는 한 프로세스에 여러 `Automation RunTests`를 넣으면 첫 큐만 실행될 수 있다. 증거가 필요한 테스트 그룹은 한 프로세스당 하나의 `Automation RunTests ...; Quit`로 실행한다.
+- Codex Windows sandbox에서 `codex-windows-sandbox-setup.exe ... program not found`가 나오면 코드/테스트 실패가 아니라 로컬 실행 환경 문제다. 같은 범위의 검증이나 파일 편집은 사용자 승인 후 승인 경로로 재시도하고, 최종 보고에 실제 exit code를 남긴다.
+
 ## DroneRaid Naming Rules
 - D 번호는 `현현_개발마일스톤`의 원래 Day 번호 기준이다.
 - 새 작업마다 D 번호를 자동 증가시키지 않는다.

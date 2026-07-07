@@ -268,6 +268,7 @@ void ARaidGameMode::Logout(AController* Exiting)
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Exiting))
 		{
+			RaidPC->ClearBossTargetForServer(FName(TEXT("Cleanup")));
 			if (RaidPC->GetPlayerSelectionState() == EPlayerSelectionState::Selecting)
 			{
 				UE_LOG(LogTemp, Log, TEXT("[Server] Logout return path: Player=%s PlayerSelectionState=Selecting Source=SelectedParts"),
@@ -329,6 +330,7 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 	const EDroneReportTrigger ReportTrigger = ResolveReportTriggerForRaidEndReason(Reason);
 	const bool bBossDefeated = ReportTrigger == EDroneReportTrigger::BossDefeated;
 	ClearRaidTimeLimitTimerForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+	StopBossPatternsForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 	int32 EligiblePlayerCount = 0;
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
@@ -357,6 +359,8 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
 		{
+			const FName TargetClearReason = Reason == FName(TEXT("BossDefeated")) ? FName(TEXT("BossDead")) : FName(TEXT("RaidEnd"));
+			RaidPC->ClearBossTargetForServer(TargetClearReason);
 			const EPlayerSelectionState SelectionState = RaidPC->GetPlayerSelectionState();
 			if (SelectionState == EPlayerSelectionState::Selecting)
 			{
@@ -402,6 +406,44 @@ void ARaidGameMode::HandleBossDefeatedForServer()
 	}
 
 	ReturnAllEquippedPartsForRaidEnd(FName(TEXT("BossDefeated")));
+}
+
+void ARaidGameMode::StartBossPatternsForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ARaidBoss> It(World); It; ++It)
+	{
+		It->StartBossPatternForServer();
+	}
+}
+
+void ARaidGameMode::StopBossPatternsForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ARaidBoss> It(World); It; ++It)
+	{
+		It->StopBossPatternForServer(Reason);
+	}
 }
 
 void ARaidGameMode::StartRaidTimeLimitTimerForServer()
@@ -518,4 +560,67 @@ void ARaidGameMode::ExpireRaidTimeLimitForTest()
 UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const
 {
 	return DronePartReturnManager;
+}
+
+FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const ARaidPlayerController* RaidPC)
+{
+	if (!RaidPC)
+	{
+		return FString();
+	}
+
+	if (const APlayerState* PS = RaidPC->PlayerState)
+	{
+		const FUniqueNetIdRepl& UniqueId = PS->GetUniqueId();
+		if (UniqueId.IsValid())
+		{
+			return FString::Printf(TEXT("UID:%s"), *UniqueId.ToString());
+		}
+		return FString::Printf(TEXT("PID:%d"), PS->GetPlayerId());
+	}
+
+	// 오프라인/테스트 월드에서 PlayerState가 없으면 PC 이름으로 격리한다.
+	return FString::Printf(TEXT("PC:%s"), *RaidPC->GetName());
+}
+
+bool ARaidGameMode::TryMarkDroneReportGeneratedForServer(ARaidPlayerController* RaidPC)
+{
+	if (!HasAuthority() || !RaidPC)
+	{
+		return false;
+	}
+
+	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	if (PlayerKey.IsEmpty())
+	{
+		return false;
+	}
+
+	if (GeneratedDroneReportPlayerKeys.Contains(PlayerKey))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneReport DuplicateIgnored: Player=%s Reason=AlreadyGeneratedForPlayerKey Key=%s"),
+			*RaidPC->GetName(),
+			*PlayerKey);
+		return false;
+	}
+
+	GeneratedDroneReportPlayerKeys.Add(PlayerKey);
+	return true;
+}
+
+void ARaidGameMode::ClearDroneReportKeyForServer(ARaidPlayerController* RaidPC, FName Reason)
+{
+	if (!HasAuthority() || !RaidPC)
+	{
+		return;
+	}
+
+	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	if (!PlayerKey.IsEmpty() && GeneratedDroneReportPlayerKeys.Remove(PlayerKey) > 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneReport KeyCleared: Player=%s Key=%s Reason=%s"),
+			*RaidPC->GetName(),
+			*PlayerKey,
+			Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString());
+	}
 }

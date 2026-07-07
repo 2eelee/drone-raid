@@ -205,6 +205,8 @@ public:
 	int32 GetCombatVisualDroneDamageIgnoredCountForTest() const;
 	FName GetLastCombatVisualDroneDamageIgnoredReasonForTest() const;
 	FName GetLastAttackNoDamageReasonForTest() const;
+	FName GetLastAttackIgnoredReasonForTest() const;
+	FName GetLastDodgeIgnoredReasonForTest() const;
 	static float GetMoveAcceptedSummaryLogIntervalSecondsForTest();
 	static float GetMoveDistanceSummaryLogIntervalSecondsForTest();
 	static bool ShouldEmitMoveAcceptedSummaryLogForTest(
@@ -583,7 +585,7 @@ private:
 	float MovementBoundaryRadiusCm = 5000.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Movement", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
-	float BossMinApproachDistanceCm = 500.0f;
+	float BossMinApproachDistanceCm = 800.0f;
 
 	UPROPERTY(Transient)
 	FVector MovementBoundaryCenter = FVector::ZeroVector;
@@ -595,6 +597,7 @@ private:
 	void RecalculateStats();
 	void HandleDeath();
 	void HandleAttackBossForServer();
+	void RecordAttackIgnoredForServer(FName Reason);
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	void UpdateLocalCombatCamera(float DeltaSeconds);
 	void DisableLocalCombatCameraRotationInput(APlayerController* PC);
@@ -644,6 +647,7 @@ private:
 	void RefreshMovementBoundaryCenterForServer();
 	FVector ResolveMovementBoundaryCenterForServer() const;
 	void LockZPositionForServer(FVector& Position) const;
+	FVector ClampFinalMovementPositionForServer(FVector RequestedPosition);
 	bool CanAccumulateMoveDistanceForServer(FName& OutIgnoreReason) const;
 	void LogMoveDistanceIgnored(FName Reason);
 	FDroneWeaponCalculationResult CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon);
@@ -674,5 +678,7 @@ private:
 	int32 CombatVisualDroneDamageIgnoredCountForTest = 0;
 	FName LastCombatVisualDroneDamageIgnoredReasonForTest = NAME_None;
 	FName LastAttackNoDamageReasonForTest = NAME_None;
+	FName LastAttackIgnoredReasonForTest = NAME_None;
+	FName LastDodgeIgnoredReasonForTest = NAME_None;
 #endif
 };
