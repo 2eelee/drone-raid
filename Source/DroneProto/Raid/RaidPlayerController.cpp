@@ -519,6 +519,16 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 	}
 
 	const FString PlayerLog = BuildControllerLogString(this);
+	if (PlayerSelectionState == EPlayerSelectionState::Selecting)
+	{
+		if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+		{
+			if (RaidGameState->RaidState == ERaidState::Waiting)
+			{
+				RaidGameState->SetRaidStateForServer(ERaidState::Drafting);
+			}
+		}
+	}
 	const FString RaidStateLog = GetRaidStateLogString(this);
 	const auto LogSelectSummary = [this, Slot, &PlayerLog, &RaidStateLog](FName PartID, bool bSuccess, const FString& Reason)
 	{
@@ -1855,6 +1865,33 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		*SelectedLeftWeaponPartID.ToString(),
 		*SelectedRightWeaponPartID.ToString());
 
+	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (RaidGameState->RaidState == ERaidState::End)
+		{
+			const FString FailureReason = TEXT("Raid ended");
+			UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s PlayerSelectionState=%s RaidState=%s"),
+				*PlayerLog,
+				bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+				*FailureReason,
+				ToPlayerSelectionStateLogString(PlayerSelectionState),
+				*RaidStateLog);
+
+			if (bAutoReady)
+			{
+				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=RaidEnd SelectionState=%s"),
+					*PlayerLog,
+					ToPlayerSelectionStateLogString(PlayerSelectionState));
+			}
+			else
+			{
+				LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+				Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+			}
+			return false;
+		}
+	}
+
 	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
 	{
 		const FString FailureReason = TEXT("Selection locked");
@@ -1984,7 +2021,11 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 
 	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
 	{
-		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+		if (RaidGameState->RaidState == ERaidState::Waiting
+			|| RaidGameState->RaidState == ERaidState::Drafting)
+		{
+			RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+		}
 	}
 	AssignBossTargetForServer();
 	if (UWorld* World = GetWorld())

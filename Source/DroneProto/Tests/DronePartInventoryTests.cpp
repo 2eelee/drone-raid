@@ -1195,6 +1195,95 @@ bool FDronePlayerSelectionStateTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidStateDraftingFlowTest,
+	"DroneProto.Q3.RaidState.DraftingFlow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidStateDraftingFlowTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("RaidStateDraftingFlowWorld"), ReturnManager);
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+
+	TestNotNull(TEXT("drafting flow world is created"), Context.World);
+	TestNotNull(TEXT("drafting flow game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("drafting flow inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("drafting flow player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drafting flow drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("drafting flow return manager is created"), ReturnManager);
+	TestNotNull(TEXT("drafting flow game mode is spawned"), GameMode);
+	if (!Context.World || !Context.GameState || !Context.Inventory || !Context.PC || !Context.Drone || !ReturnManager || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestEqual(TEXT("raid starts Waiting before the first selection entry"), Context.GameState->RaidState, ERaidState::Waiting);
+
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::LeftWeapon, PulseLaser);
+	TestEqual(TEXT("first player selection entry selects pulse"), Context.PC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon), PulseLaser);
+	TestEqual(TEXT("first player selection entry moves the global raid to Drafting"),
+		Context.GameState->RaidState,
+		ERaidState::Drafting);
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("Ready success moves player into battle"),
+		Context.PC->GetPlayerSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Ready success moves the global raid from Drafting to Battle"),
+		Context.GameState->RaidState,
+		ERaidState::Battle);
+
+	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
+	TestEqual(TEXT("RaidEnd keeps the global End transition"),
+		Context.GameState->RaidState,
+		ERaidState::End);
+
+	ARaidPlayerController* LateJoinPC = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* LateJoinDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("late join player controller is spawned after End"), LateJoinPC);
+	TestNotNull(TEXT("late join drone is spawned after End"), LateJoinDrone);
+	if (!LateJoinPC || !LateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(LateJoinPC);
+	LateJoinPC->Possess(LateJoinDrone);
+	LateJoinPC->SetDronePartReturnManagerForTest(ReturnManager);
+
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+	LateJoinPC->Server_RequestSelectPart_Implementation(EPartSlot::RightWeapon, VectorCannon);
+	TestEqual(TEXT("late join selection after End does not move the raid back to Drafting"),
+		Context.GameState->RaidState,
+		ERaidState::End);
+	TestEqual(TEXT("late join selection after End can remain pending"),
+		LateJoinPC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		VectorCannon);
+	LateJoinPC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("late join Ready after End does not enter InBattle"),
+		LateJoinPC->GetPlayerSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestEqual(TEXT("late join Ready after End keeps selected weapon pending"),
+		LateJoinPC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		VectorCannon);
+	TestEqual(TEXT("late join Ready after End does not equip weapon"),
+		LateJoinPC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("late join Ready after End does not move the global raid back to Battle"),
+		Context.GameState->RaidState,
+		ERaidState::End);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneSelectionTimerAutoReadyTest,
 	"DroneProto.D5.RaidPlayerController.SelectionTimerAutoReady",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

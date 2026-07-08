@@ -178,6 +178,10 @@ void ARaidGameMode::PostLogin(APlayerController* NewPlayer)
 		{
 			GS->CurrentPlayers++;
 			UE_LOG(LogTemp, Log, TEXT("[Server] PostLogin: CurrentPlayers = %d"), GS->CurrentPlayers);
+			if (GS->RaidState == ERaidState::Waiting)
+			{
+				GS->SetRaidStateForServer(ERaidState::Drafting);
+			}
 		}
 	}
 }

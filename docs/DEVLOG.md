@@ -1568,3 +1568,27 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE/manual movement feel for Drain 0.9 speed remains unverified.
+
+---
+
+## 2026-07-08 - Q3 RaidState Drafting flow
+
+### Scope
+- Applied Q3 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Formalized the global raid state flow as Waiting -> Drafting -> Battle -> End while keeping `PlayerSelectionState` separate.
+- Kept selection timer, AutoReady timer handling, part return/loadout paths, RPC, replication, UMG, assets, and BossState untouched.
+
+### Changes
+- `ARaidGameMode::PostLogin()` moves Waiting raids to Drafting when the first server-side player enters.
+- `ARaidPlayerController::Server_RequestSelectPart_Implementation()` also moves Waiting to Drafting on real selection entry, covering test worlds and selection-stage entry.
+- `ProcessReadyForRaidForServer()` rejects Ready while RaidState is End and only promotes Waiting/Drafting to Battle.
+- `ARaidGameState::SetRaidStateForServer()` now logs named `[DR_SUMMARY] RaidState Previous=... New=...` transitions.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q3.RaidState.DraftingFlow; Quit` failed before the production edit on missing Drafting and End -> Battle re-entry.
+- GREEN: same Q3 test passed after the production edit and logged Waiting -> Drafting -> Battle -> End.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 66 tests, 66 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual UI reaction to the named RaidState log and OnRep path remains unverified.

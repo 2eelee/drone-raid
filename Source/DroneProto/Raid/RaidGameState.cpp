@@ -24,6 +24,23 @@ const TCHAR* ToNetRoleLogString(ENetRole Role)
 	}
 }
 
+const TCHAR* ToRaidStateLogString(ERaidState State)
+{
+	switch (State)
+	{
+	case ERaidState::Waiting:
+		return TEXT("Waiting");
+	case ERaidState::Drafting:
+		return TEXT("Drafting");
+	case ERaidState::Battle:
+		return TEXT("Battle");
+	case ERaidState::End:
+		return TEXT("End");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
 FString BuildInventoryReplicationDebugString(const ADronePartInventory* Inventory)
 {
 	if (!Inventory)
@@ -83,9 +100,12 @@ void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
 		return;
 	}
 
+	const ERaidState PreviousRaidState = RaidState;
 	RaidState = NewRaidState;
 	ForceNetUpdate();
-	UE_LOG(LogTemp, Log, TEXT("[Server] RaidState changed -> %d"), static_cast<int32>(RaidState));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidState Previous=%s New=%s"),
+		ToRaidStateLogString(PreviousRaidState),
+		ToRaidStateLogString(RaidState));
 }
 
 void ARaidGameState::SetDronePartInventory(ADronePartInventory* InDronePartInventory)
@@ -131,7 +151,7 @@ void ARaidGameState::SetRaidBossForServer(ARaidBoss* InRaidBoss)
 
 void ARaidGameState::OnRep_RaidState()
 {
-	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %d"), static_cast<int32>(RaidState));
+	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %s"), ToRaidStateLogString(RaidState));
 }
 
 void ARaidGameState::OnRep_DronePartInventory()
