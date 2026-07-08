@@ -589,6 +589,10 @@ bool FDroneCombatFormulaTest::RunTest(const FString& Parameters)
 	ZenithInput.CurrentHP = 50.0f;
 	ZenithInput.MaxHP = 100.0f;
 	const FDroneCoreCalculationResult ZenithResult = FDroneCombatRules::CalculateCoreBonus(ZenithInput);
+	TestTrue(TEXT("Zenith base attack modifier stays 1.0"),
+		FMath::IsNearlyEqual(ZenithResult.CoreAttackModifier, 1.0f, 0.01f));
+	TestTrue(TEXT("Zenith base move speed modifier stays 1.0"),
+		FMath::IsNearlyEqual(ZenithResult.CoreMoveSpeedModifier, 1.0f, 0.01f));
 	TestTrue(TEXT("Zenith at 50 percent HP gives 1.10 bonus modifier"),
 		FMath::IsNearlyEqual(ZenithResult.CoreBonusAttackModifier, 1.10f, 0.01f));
 
@@ -596,10 +600,22 @@ bool FDroneCombatFormulaTest::RunTest(const FString& Parameters)
 	BoosterInput.CoreType = EDroneCombatCoreType::Booster;
 	BoosterInput.AccumulatedMoveDistanceMeters = 210.0f;
 	const FDroneCoreCalculationResult BoosterResult = FDroneCombatRules::CalculateCoreBonus(BoosterInput);
+	TestTrue(TEXT("Booster base attack modifier applies 0.95"),
+		FMath::IsNearlyEqual(BoosterResult.CoreAttackModifier, 0.95f, 0.01f));
+	TestTrue(TEXT("Booster base move speed modifier stays 1.0"),
+		FMath::IsNearlyEqual(BoosterResult.CoreMoveSpeedModifier, 1.0f, 0.01f));
 	TestTrue(TEXT("Booster speed bonus caps at 0.30"),
 		FMath::IsNearlyEqual(BoosterResult.MoveSpeedBonus, 0.30f, 0.01f));
 	TestTrue(TEXT("Booster attack bonus is half of speed bonus"),
 		FMath::IsNearlyEqual(BoosterResult.CoreBonusAttackModifier, 1.15f, 0.01f));
+
+	FDroneCoreCalculationInput DrainInput;
+	DrainInput.CoreType = EDroneCombatCoreType::Drain;
+	const FDroneCoreCalculationResult DrainResult = FDroneCombatRules::CalculateCoreBonus(DrainInput);
+	TestTrue(TEXT("Drain base attack modifier applies 0.85"),
+		FMath::IsNearlyEqual(DrainResult.CoreAttackModifier, 0.85f, 0.01f));
+	TestTrue(TEXT("Drain base move speed modifier applies 0.9"),
+		FMath::IsNearlyEqual(DrainResult.CoreMoveSpeedModifier, 0.9f, 0.01f));
 
 	TestTrue(TEXT("Drain heal is 12 percent of dealt damage"),
 		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(11.0f), 1.32f, 0.01f));
@@ -642,14 +658,14 @@ bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
 	ExpectCore(EDroneCombatCoreType::Zenith, 10.0f, 100.0f, 0.0f, 1.0f, 1.02f, 0.0f, TEXT("Zenith 10 percent HP"));
 	ExpectCore(EDroneCombatCoreType::Zenith, 50.0f, 100.0f, 0.0f, 1.0f, 1.10f, 0.0f, TEXT("Zenith 50 percent HP"));
 	ExpectCore(EDroneCombatCoreType::Zenith, 100.0f, 100.0f, 0.0f, 1.0f, 1.20f, 0.0f, TEXT("Zenith 100 percent HP"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 0.0f, 1.0f, 1.0f, 0.0f, TEXT("Booster 0m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 19.99f, 1.0f, 1.0f, 0.0f, TEXT("Booster 19.99m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 20.0f, 1.0f, 1.015f, 0.03f, TEXT("Booster 20m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 40.0f, 1.0f, 1.03f, 0.06f, TEXT("Booster 40m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 199.99f, 1.0f, 1.135f, 0.27f, TEXT("Booster just before cap"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 200.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster cap"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 1000.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster over cap"));
-	ExpectCore(EDroneCombatCoreType::Drain, 100.0f, 100.0f, 200.0f, 1.0f, 1.0f, 0.0f, TEXT("Drain no unspecified penalty"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 0.0f, 0.95f, 1.0f, 0.0f, TEXT("Booster 0m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 19.99f, 0.95f, 1.0f, 0.0f, TEXT("Booster 19.99m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 20.0f, 0.95f, 1.015f, 0.03f, TEXT("Booster 20m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 40.0f, 0.95f, 1.03f, 0.06f, TEXT("Booster 40m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 199.99f, 0.95f, 1.135f, 0.27f, TEXT("Booster just before cap"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 200.0f, 0.95f, 1.15f, 0.30f, TEXT("Booster cap"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 1000.0f, 0.95f, 1.15f, 0.30f, TEXT("Booster over cap"));
+	ExpectCore(EDroneCombatCoreType::Drain, 100.0f, 100.0f, 200.0f, 0.85f, 1.0f, 0.0f, TEXT("Drain base penalty"));
 
 	const auto ExpectWeapon = [this](EDroneCombatWeaponType WeaponType, int32 PulseCount, float VectorMeters, float ExpectedDamage, float ExpectedBaseDamage, float ExpectedBonusDamage, int32 ExpectedHitCount, int32 ExpectedAdditionalHitCount, bool bExpectedResetVector, int32 ExpectedPulseCount, const TCHAR* Label)
 	{
@@ -711,6 +727,22 @@ bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(Context.Drone->GetCombatRecordForTest().BossDamage, 5.0f, 0.001f));
 
 	DestroyDroneSelectionTestContext(Context);
+
+	FDroneSelectionTestContext MoveSpeedContext = CreateDroneSelectionTestContext(TEXT("DroneQ2CoreMoveSpeedWorld"));
+	if (!MoveSpeedContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(MoveSpeedContext);
+		return false;
+	}
+	TestTrue(TEXT("Drain move speed loadout applies"),
+		MoveSpeedContext.Drone->ApplyLoadout(DrainCore, NAME_None, NAME_None));
+	TestTrue(TEXT("Drain core applies 0.9 base move speed on the server path"),
+		FMath::IsNearlyEqual(MoveSpeedContext.Drone->GetCurrentMoveSpeed(), 4.05f, 0.001f));
+	TestTrue(TEXT("Booster core keeps base move speed before movement stacks"),
+		MoveSpeedContext.Drone->ApplyLoadout(ADronePartInventory::GetCoreBoosterPartID(), NAME_None, NAME_None));
+	TestTrue(TEXT("Booster zero stacks keeps 4.5 m/s base speed"),
+		FMath::IsNearlyEqual(MoveSpeedContext.Drone->GetCurrentMoveSpeed(), 4.5f, 0.001f));
+	DestroyDroneSelectionTestContext(MoveSpeedContext);
 	return true;
 }
 
@@ -1760,8 +1792,8 @@ bool FDroneFractureBurstCombatTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Fracture plus Fracture with CORE_002 loadout applies"),
 		Context.Drone->ApplyLoadout(ADronePartInventory::GetCoreBoosterPartID(), FractureBurst, FractureBurst));
-	TestTrue(TEXT("Fracture plus Fracture with no movement keeps base 22 damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 22.0f, 0.01f));
+	TestTrue(TEXT("Fracture plus Fracture with CORE_002 applies 0.95 base modifier"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 20.9f, 0.01f));
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -1823,10 +1855,10 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 		Context.Drone->ApplyLoadout(DrainCore, FractureBurst, FractureBurst));
 	Context.Drone->ApplyDamageForServer(20, FName(TEXT("Automation")));
 	const float HPBeforeFractureDrain = Context.Drone->GetHealthValueForTest();
-	TestTrue(TEXT("Drain Fracture plus Fracture deals unmodified 22 damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 22.0f, 0.01f));
+	TestTrue(TEXT("Drain Fracture plus Fracture applies 0.85 base modifier"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 18.7f, 0.01f));
 	TestTrue(TEXT("Drain heals from total Fracture damage once per input"),
-		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.64f, 0.01f));
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.244f, 0.01f));
 
 	TestTrue(TEXT("Drain with empty weapons loadout applies"),
 		Context.Drone->ApplyLoadout(DrainCore, NAME_None, NAME_None));
@@ -1843,8 +1875,8 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 	AttackBossAndMeasureDamage(Context.Drone, Boss);
 	AttackBossAndMeasureDamage(Context.Drone, Boss);
 	const float HPBeforeStrongDrain = Context.Drone->GetHealthValueForTest();
-	TestTrue(TEXT("third Drain double Pulse attack deals capped-heal damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 36.0f, 0.01f));
+	TestTrue(TEXT("third Drain double Pulse attack applies base modifier before capped heal"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.6f, 0.01f));
 	TestTrue(TEXT("Drain heal is capped at 3 per attack input"),
 		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeStrongDrain + 3.0f, 0.01f));
 
@@ -1893,7 +1925,7 @@ bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("movement setup accumulates 40 meters for Booster"),
 		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 40.0f, 0.01f));
 	TestTrue(TEXT("double Vector uses capped damage and Booster attack bonus"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.9f, 0.01f));
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 29.355f, 0.01f));
 	TestTrue(TEXT("Vector attack resets Vector distance only"),
 		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
 	TestTrue(TEXT("Vector attack keeps Booster distance"),
@@ -1901,7 +1933,7 @@ bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
 
 	const FDroneCombatRecord Record = Context.Drone->GetCombatRecordForTest();
 	TestTrue(TEXT("CombatRecord accumulates boss damage"),
-		FMath::IsNearlyEqual(Record.BossDamage, 30.9f, 0.01f));
+		FMath::IsNearlyEqual(Record.BossDamage, 29.355f, 0.01f));
 	TestTrue(TEXT("CombatRecord accumulates move distance"),
 		FMath::IsNearlyEqual(Record.MoveDistance, 40.0f, 0.01f));
 	TestTrue(TEXT("CombatRecord stores boss max HP for ratio calculation"),

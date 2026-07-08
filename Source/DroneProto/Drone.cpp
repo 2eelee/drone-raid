@@ -3318,12 +3318,13 @@ FDroneCoreCalculationResult ADrone::CalculateCoreForServer(FName CorePartID) con
 	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
 
 	const FDroneCoreCalculationResult Result = FDroneCombatRules::CalculateCoreBonus(Input);
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=%s HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreModifier=%.2f CoreBonusAttackModifier=%.2f MoveSpeedBonus=%.2f HealAmount=0.00"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=%s HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreAttackModifier=%.2f CoreMoveSpeedModifier=%.2f CoreBonusAttackModifier=%.2f MoveSpeedBonus=%.2f HealAmount=0.00"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
 		ToCombatCoreTypeLogString(Input.CoreType),
 		Result.HPRatio,
 		Input.AccumulatedMoveDistanceMeters,
 		Result.CoreAttackModifier,
+		Result.CoreMoveSpeedModifier,
 		Result.CoreBonusAttackModifier,
 		Result.MoveSpeedBonus);
 	return Result;
@@ -3414,10 +3415,20 @@ float ADrone::ApplyDrainHealForServer(float DamageDealt)
 		ForceNetUpdate();
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=Drain HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreBonusAttackModifier=1.00 MoveSpeedBonus=0.00 HealAmount=%.2f"),
+	FDroneCoreCalculationInput DrainCoreInput;
+	DrainCoreInput.CoreType = EDroneCombatCoreType::Drain;
+	DrainCoreInput.CurrentHP = Health;
+	DrainCoreInput.MaxHP = static_cast<float>(MaxHealth);
+	DrainCoreInput.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
+	const FDroneCoreCalculationResult DrainCoreResult = FDroneCombatRules::CalculateCoreBonus(DrainCoreInput);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=Drain HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreAttackModifier=%.2f CoreMoveSpeedModifier=%.2f CoreBonusAttackModifier=%.2f MoveSpeedBonus=%.2f HealAmount=%.2f"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
-		MaxHealth > 0 ? FMath::Clamp(Health / static_cast<float>(MaxHealth), 0.0f, 1.0f) : 0.0f,
+		DrainCoreResult.HPRatio,
 		BoosterAccumulatedMoveDistanceMeters,
+		DrainCoreResult.CoreAttackModifier,
+		DrainCoreResult.CoreMoveSpeedModifier,
+		DrainCoreResult.CoreBonusAttackModifier,
+		DrainCoreResult.MoveSpeedBonus,
 		AppliedHealAmount);
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DrainHeal PC=%s DamageDealt=%.2f Heal=%.2f HP=%.2f/%d Capped=%s"),
@@ -3552,7 +3563,7 @@ void ADrone::RefreshMoveSpeedForServer()
 	Input.MaxHP = static_cast<float>(MaxHealth);
 	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
 	const FDroneCoreCalculationResult CoreResult = FDroneCombatRules::CalculateCoreBonus(Input);
-	FloatingMovement->MaxSpeed = BaseMoveSpeedCmPerSecond * (1.0f + CoreResult.MoveSpeedBonus);
+	FloatingMovement->MaxSpeed = BaseMoveSpeedCmPerSecond * CoreResult.CoreMoveSpeedModifier * (1.0f + CoreResult.MoveSpeedBonus);
 }
 
 void ADrone::ResetCombatRuntimeStateForReason(FName Reason)

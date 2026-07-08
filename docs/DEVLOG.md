@@ -1544,3 +1544,27 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE/manual balance remains unverified: 16-player real DPS and average DPS 330 are planning assumptions, not proven by this code pass.
+
+---
+
+## 2026-07-08 - Q2 Core base modifiers
+
+### Scope
+- Applied Q2 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added core base attack/move modifiers from the Core data-table values.
+- Kept Zenith/Booster/Drain special formulas, Drain heal cap, weapon formulas, RecalculateStats guard, boss HP/pattern/timer, RPC, replication, UMG, and assets unchanged.
+
+### Changes
+- `FDroneCoreCalculationResult` now carries `CoreMoveSpeedModifier`.
+- `CalculateCoreBonus()` returns Zenith 1.0/1.0, Booster 0.95/1.0, and Drain 0.85/0.9.
+- `RefreshMoveSpeedForServer()` now uses `BaseMoveSpeed * CoreMoveSpeedModifier * (1 + MoveSpeedBonus)`.
+- Updated D7/D9/D13 tests and added server-path coverage for Drain 4.05 m/s.
+
+### Verification
+- RED: `Automation RunTests DroneProto.D13.DroneCombat.SpecAlignment; Quit` failed before the production edit on Booster/Drain base modifiers and Drain move speed.
+- GREEN: same D13 test passed after the production edit.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 65 tests, 65 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual movement feel for Drain 0.9 speed remains unverified.
