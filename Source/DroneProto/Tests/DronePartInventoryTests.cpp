@@ -718,9 +718,9 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 {
 	FDroneCombatRecord CappedBaseRecord;
 	CappedBaseRecord.SurvivalTime = 240.0f;
-	CappedBaseRecord.BossDamage = 80.0f;
-	CappedBaseRecord.BossMaxHP = 1000.0f;
-	CappedBaseRecord.BossHPOnJoin = 1000.0f;
+	CappedBaseRecord.BossDamage = 4800.0f;
+	CappedBaseRecord.BossMaxHP = 60000.0f;
+	CappedBaseRecord.BossHPOnJoin = 60000.0f;
 	CappedBaseRecord.MoveDistance = 600.0f;
 	CappedBaseRecord.HealAmount = 60.0f;
 	CappedBaseRecord.DamageTakenCount = 1;
@@ -735,7 +735,7 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("750 score maps to grade A"), CappedBaseReport.Grade, EDroneReportGrade::A);
 
 	FDroneCombatRecord LowDamageRecord = CappedBaseRecord;
-	LowDamageRecord.BossDamage = 5.0f;
+	LowDamageRecord.BossDamage = 300.0f;
 	LowDamageRecord.MoveDistance = 600.0f;
 	LowDamageRecord.HealAmount = 60.0f;
 	const FDroneReportData LowDamageReport = FDroneReportRules::BuildReportData(LowDamageRecord, false);
@@ -744,7 +744,7 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Low contribution report has no bonuses"), LowDamageReport.BonusScore, 0);
 
 	FDroneCombatRecord AllBonusRecord = CappedBaseRecord;
-	AllBonusRecord.BossDamage = 120.0f;
+	AllBonusRecord.BossDamage = 7200.0f;
 	AllBonusRecord.MoveDistance = 900.0f;
 	AllBonusRecord.HealAmount = 70.0f;
 	AllBonusRecord.DamageTakenCount = 0;
@@ -754,7 +754,7 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("All five bonus types are listed before cap"), AllBonusReport.AchievedBonusList.Num(), 5);
 
 	FDroneCombatRecord BossSlayerRecord = CappedBaseRecord;
-	BossSlayerRecord.BossDamage = 30.0f;
+	BossSlayerRecord.BossDamage = 1800.0f;
 	BossSlayerRecord.MoveDistance = 0.0f;
 	BossSlayerRecord.HealAmount = 0.0f;
 	BossSlayerRecord.DamageTakenCount = 1;
@@ -765,8 +765,8 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 		BossSlayerReport.AchievedBonusList.Contains(EDroneReportBonusType::BossSlayer));
 
 	FDroneCombatRecord LateJoinRecord = BossSlayerRecord;
-	LateJoinRecord.BossDamage = 10.0f;
-	LateJoinRecord.BossHPOnJoin = 250.0f;
+	LateJoinRecord.BossDamage = 600.0f;
+	LateJoinRecord.BossHPOnJoin = 15000.0f;
 	LateJoinRecord.CombatEndTime = 30.0f;
 	const FDroneReportData LateJoinReport = FDroneReportRules::BuildReportData(LateJoinRecord, true);
 	TestEqual(TEXT("Late join BossSlayer bonus is limited to 40"), LateJoinReport.BonusScore, 40);
@@ -2213,6 +2213,36 @@ bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
 		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
 	TestTrue(TEXT("C without direction leaves server location unchanged"),
 		Context.Drone->GetActorLocation().Equals(LocationBeforeZeroDodge, 0.1f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossSpecMaxHPTest,
+	"DroneProto.Q1.RaidBoss.SpecMaxHP",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossSpecMaxHPTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidBossSpecMaxHPWorld"));
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	TestNotNull(TEXT("Q1 boss is spawned"), Boss);
+	if (!Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("Q1 boss MaxHP matches current 60000 spec"),
+		FMath::IsNearlyEqual(Boss->GetMaxHP(), 60000.0f, 0.01f));
+	TestTrue(TEXT("Q1 boss CurrentHP initializes from MaxHP"),
+		FMath::IsNearlyEqual(Boss->GetCurrentHP(), Boss->GetMaxHP(), 0.01f));
+
+	const float HPBeforeDamage = Boss->GetCurrentHP();
+	Boss->ApplyDamageForServer(1000.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("Q1 1000 damage is chip damage against 60000 HP boss"),
+		FMath::IsNearlyEqual(Boss->GetCurrentHP(), HPBeforeDamage - 1000.0f, 0.01f));
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;

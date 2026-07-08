@@ -113,10 +113,10 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Targeting", meta = (AllowPrivateAccess = "true"))
 	FName TargetMarkerSocketName;
 	UPROPERTY(Replicated, EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))
-	float MaxHP = 1000.0f;
+	float MaxHP = 60000.0f;
 
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentHP, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))
-	float CurrentHP = 1000.0f;
+	float CurrentHP = 60000.0f;
 
 	UFUNCTION()
 	void OnRep_CurrentHP();

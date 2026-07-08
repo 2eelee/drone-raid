@@ -1520,3 +1520,27 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 - 빌드 트러블슈팅에 시간이 들었으나, 캐시·플러그인·빌드 구성 등
   언리얼 빌드 파이프라인의 동작을 이해하는 계기가 됨
 - 다음: GameManager(GameMode/GameState 분리) → Player → Drone+DronePart 통합 구현
+
+---
+
+## 2026-07-08 - Q1 Boss MaxHP 60,000 alignment
+
+### Scope
+- Applied Q1 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Changed the raid boss default HP to the current spec value: 60,000.
+- Kept the change C++/test-only. No UMG, `.uasset`, `.umap`, timer, boss pattern, or damage-formula logic changes.
+
+### Changes
+- `ARaidBoss::MaxHP` default: `1000.0f` -> `60000.0f`.
+- `ARaidBoss::CurrentHP` default: `1000.0f` -> `60000.0f`; existing `BeginPlay()` still copies `MaxHP` into `CurrentHP` on authority.
+- Added `DroneProto.Q1.RaidBoss.SpecMaxHP` automation coverage.
+- Updated DroneReport formula fixtures from 1,000-based test inputs to 60,000-based inputs while preserving the same intended boss-damage ratios.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q1.RaidBoss.SpecMaxHP; Quit` failed before the production edit on `Q1 boss MaxHP matches current 60000 spec`.
+- GREEN: same Q1 test passed after the HP change and logged `[DR_SUMMARY] BossDamage: OldHP=60000.00 Damage=1000.00 NewHP=59000.00 MaxHP=60000.00`.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 65 tests, 65 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual balance remains unverified: 16-player real DPS and average DPS 330 are planning assumptions, not proven by this code pass.
