@@ -3,6 +3,68 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-07-08 — 기획서 전문 감사 + 문서 체계 재배치 + 작업큐 생성 (branch docs/spec-audit-20260708)
+
+### 목적
+docs/sources 기획서 원문 전체를 코드 대비 감사하고, 에이전트가 항상 참조 가능한 문서 체계로 재배치. 누락표 기준 다음 작업 큐 생성.
+
+### 읽은 기획서 (전문 판독, 11종)
+플로우/코어루프, 클래스GameManager(수정중), 레이드입장, 드론부품, 드론부품선택, 드론부품환원, 드론 이동/회피, 드론 타겟팅, 보스, DroneReport (docx 10) + 현현_데이터테이블.xlsx 16시트. **보스 패턴/전투조작/튜토리얼 상세 기획서는 원문 부재** — 해당 영역은 SpecDecisionNeeded 유지.
+
+### 생성/갱신/이동 문서
+- 신규: `docs/Audit/ImplementationGap_CurrentSpec_20260708.md` (누락표, 이전 감사 대체), `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md` (작업 큐 + 상위 5개 Codex 프롬프트), `docs/AI/DRONERAID_DOC_MAP_20260708.md` (문서맵)
+- 이동: 감사/계획 문서 6종 → `docs/Audit/` (ImplementationAudit 3종, DRONERAID_FABLE_AUDIT_20260707, Fable_Final5HourPlan_20260707, D4_D5_SHARED_INVENTORY_TEST)
+- 갱신: `AGENTS.md` 상단에 "문서맵 (작업 전 필독)" 섹션 추가
+- 삭제 없음. 기획서 원문 유지.
+
+### 누락표 요약 (Complete 9 / Partial 4 / SpecMismatch 2 / 기획부재 1)
+- **Critical**: 보스 MaxHP 1000 vs 기획 60,000 (RaidBoss.h:116). push 미실행(로컬 유일본).
+- **High**: 코어 기본 배율 no-op — 데이터테이블 AttackModifier(Booster 0.95/Drain 0.85)·MoveSpeedModifier(Drain 0.9) 미적용, CoreAttackModifier 항상 1.0.
+- **Medium**: RaidState Drafting 미사용(Waiting→Battle 직행), BossState enum(Spawn/Battle/Dead/Clear) 부재+입장 차단 게이트 불명시, 맵로드/스폰 실패 ReturnToLobby TODO 미구현, 레이드 잔여시간 클라 미복제.
+- **일치 확인**: 부품 수량 5/6/5/11/10/11, 무기/코어 계산식 전수치, Dodge 4수치, 경계 50m/보스 800cm, 카메라 4수치, Report 점수식/보너스/등급/late join 보정 — 전부 기획서·데이터테이블과 일치.
+- **문서가 낡음(코드 아님)**: CLAUDE.md 보류 목록의 이동 동기화 TODO(해소됨), Booster/Drain/Vector 효과(구현 완료), IsSlotEnabled dead(호출 체인 존재).
+
+### 다음 작업 큐 Top 5 (상세·Codex 프롬프트는 NextWorkQueue 문서)
+0. (오너 수동) push + 잔여 PIE 검증(보스 패턴 실피격) — 코드 작업 선행 게이트
+1. 보스 MaxHP 60,000 정합 (+테스트 기대값)
+2. 코어 기본 배율 적용 (0.95/0.85/이속 0.9)
+3. RaidState Drafting 정식화
+4. BossState enum + 신규 입장 차단 게이트
+5. DataTable 전환 1단계 (스키마+CSV+fallback)
+
+### gitignore 처리
+- `.gitignore` 선택 (`.git/info/exclude` 아님 — 기획서 바이너리 커밋 방지는 저장소 전체 규칙이어야 하고 규칙 자체가 버전 관리되어야 함). 기존 `docs/*` + `!docs/DEVLOG.md` 규칙 유지, `!docs/D4_D5_SHARED_INVENTORY_TEST.md` 예외 제거.
+- `git rm --cached docs/D4_D5_SHARED_INVENTORY_TEST.md` (index에서만 제거, 파일은 docs/Audit/로 이동 보존).
+- tracked 유지: README.md(필수), AGENTS.md(에이전트 규칙, 팀 공유), docs/DEVLOG.md(canonical 기록, 팀 공유). 나머지 docs/ 문서 전부 로컬 전용(ignore).
+
+### 커밋
+- pending commit (이 항목 작성 시점). 커밋 후 해시는 git log 참조.
+- 검증: 빌드/자동화 재실행 없음(문서 전용 변경, C++/Config/에셋/테스트 무변경).
+
+---
+## 2026-07-08 — Post-commit 2 Client PIE 로그 확인: Target Marker Visible, BossStunChanged true/false, StunMultiplier=1.50, BossDead 후 BossPattern Stopped 및 Target Clear 확인. 실제 BossAttackHit/DroneDamaged는 OutOfRange만 발생해 별도 미검증.
+
+---
+## 2026-07-08 — POR-16~19 통합 커밋 봉인 (6f5bfd2)
+
+### 작업
+
+- 미커밋 13파일(+1522/−75)을 커밋 전 안전검산했다. 내용물은 4계열 혼재: POR-16 타겟팅 / POR-17 이동 클램프(보스 최소접근 500→800cm) / POR-18 방어 3종 / POR-19 보스 패턴·스턴.
+- 기존 "2분할 커밋" 계획(07-07 계획 ①방어3종+Destroyed / ②패턴+스턴)은 **폐기**. `ARaidBoss::EndPlay/Destroyed`(POR-18)가 `StopBossPatternForServer`(POR-19)를 같은 hunk에서 호출해 ①만으로는 컴파일 불가. hunk 수동 편집으로 억지 분리하면 64/64가 검증한 코드와 다른 중간 커밋이 생기므로 배제.
+- 검증된 스냅샷 그대로 1커밋 `6f5bfd2`로 봉인. 커밋 메시지에 분할 불가 사유와 SpecDecisionNeeded placeholder를 기록. 워킹 트리 클린.
+
+### 검증
+
+- 커밋 전 검산은 git diff/log 기반 정적 분석(이 세션에서 빌드/자동화 재실행 없음). 64/64(EXIT CODE 0) 근거는 2026-07-07 세션 기록(`docs/Fable_Final5HourPlan_20260707.md` §7).
+- 구 테스트와 신 코드의 교차 회귀 후보 3건을 정적으로 배제: BossDamage 로그 포맷 변경(테스트는 값 검사만), `ResetDroneReportForTest`(구 테스트 미사용), 500cm 기대 테스트(변경이 같은 커밋에 동승).
+
+### 남은 것
+
+- **push 미실행** — 원격 미반영, 로컬 유일본 상태.
+- **2 Client PIE 수동 검증 미실행** — 클라 OnRep 계열(타겟 마커 표시/숨김, 스턴 visual)은 자동화 미커버. 검색어 목록은 `Fable_Final5HourPlan_20260707.md` §7 참조.
+- **README 최신화 필요** — D5 기준으로 낡음, POR-19까지 반영해야 함.
+
+---
 ## 2026-07-06 — POR-14/POR-15 전투 가시화 및 로그 의미 정리
 
 ### 작업

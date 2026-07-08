@@ -1,5 +1,13 @@
 # DroneProto — 드론 MMORPG 프로토타입
 
+## 문서맵 (작업 전 필독)
+- 작업 시작 전 반드시 `docs/AI/DRONERAID_DOC_MAP_20260708.md`를 먼저 읽는다.
+- 기획 판단은 `docs/sources/` 최신 기획서 원문 우선. 오래된 기초플랜/마일스톤과 충돌하면 최신 기획서가 이긴다.
+- 마일스톤은 일정 참고용으로만 사용한다 (명세 근거로 쓰지 않음).
+- 구현 지시는 `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md` 기준. 구현 현황 판정은 `docs/Audit/ImplementationGap_CurrentSpec_20260708.md` 기준.
+- `docs/DEVLOG.md`는 append-only — 기존 항목 수정/덮어쓰기 금지.
+- UMG/`.uasset`/`.umap`/맵 수정은 사용자 담당. Codex/에이전트는 C++ 훅(BindWidgetOptional, getter, OnRep, ClientRPC)까지만.
+
 ## 프로젝트 개요
 - UE 5.7, C++/Blueprint 하이브리드
 - 장르: PvE 보스 레이드 + 드론 조립 MMORPG
