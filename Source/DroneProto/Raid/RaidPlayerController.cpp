@@ -33,7 +33,7 @@ const TCHAR* ToPlayerSelectionStateLogString(EPlayerSelectionState State)
 	return ARaidPlayerController::SelectionStateToLogString(State);
 }
 
-const TCHAR* ToRaidStateLogString(ERaidState State)
+const TCHAR* ToRaidStateLogStringForPlayerController(ERaidState State)
 {
 	switch (State)
 	{
@@ -54,7 +54,7 @@ FString GetRaidStateLogString(const APlayerController* PC)
 {
 	const UWorld* World = PC ? PC->GetWorld() : nullptr;
 	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
-	return RaidGameState ? ToRaidStateLogString(RaidGameState->RaidState) : TEXT("None");
+	return RaidGameState ? ToRaidStateLogStringForPlayerController(RaidGameState->RaidState) : TEXT("None");
 }
 
 const TCHAR* ToNetModeLogString(ENetMode NetMode)
@@ -2206,7 +2206,7 @@ void ARaidPlayerController::HandleDebugTriggerBossTelegraphAttackForServer(float
 		TelegraphSeconds,
 		ForwardOffsetCm,
 		ToPlayerSelectionStateLogString(PlayerSelectionState),
-		ToRaidStateLogString(RaidGameState->RaidState));
+		ToRaidStateLogStringForPlayerController(RaidGameState->RaidState));
 
 	Boss->StartDebugTelegraphedAreaAttackForServer(AttackCenter, RadiusCm, DamageAmount, TelegraphSeconds);
 }

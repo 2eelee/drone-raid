@@ -1,4 +1,6 @@
 #include "DronePartInventory.h"
+#include "DroneDataTableRows.h"
+#include "Engine/DataTable.h"
 #include "Net/UnrealNetwork.h"
 
 ADronePartInventory::ADronePartInventory()
@@ -10,6 +12,16 @@ ADronePartInventory::ADronePartInventory()
 	SetNetUpdateFrequency(10.0f);
 
 	InitializeDefaultStocks();
+}
+
+void ADronePartInventory::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (HasAuthority())
+	{
+		InitializeDefaultStocks();
+	}
 }
 
 void ADronePartInventory::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -177,6 +189,59 @@ void ADronePartInventory::OnRep_PartStocks()
 }
 
 void ADronePartInventory::InitializeDefaultStocks()
+{
+	if (InitializeStocksFromPartCountDataTable())
+	{
+		return;
+	}
+
+	InitializeFallbackStocks();
+}
+
+bool ADronePartInventory::InitializeStocksFromPartCountDataTable()
+{
+	if (!PartCountDataTable)
+	{
+		return false;
+	}
+
+	TArray<FDronePartCountRow*> Rows;
+	static const FString ContextString(TEXT("ADronePartInventory::InitializeStocksFromPartCountDataTable"));
+	PartCountDataTable->GetAllRows(ContextString, Rows);
+
+	TArray<FDronePartStock> LoadedStocks;
+	LoadedStocks.Reserve(Rows.Num());
+	for (const FDronePartCountRow* Row : Rows)
+	{
+		if (!Row || Row->PartID.IsNone() || !Row->IsSelectable || Row->MaxCount < 0)
+		{
+			continue;
+		}
+
+		FDronePartStock Stock;
+		Stock.PartID = Row->PartID;
+		Stock.PartType = Row->Type;
+		Stock.CurrentCount = Row->MaxCount;
+		Stock.MaxCount = Row->MaxCount;
+		LoadedStocks.Add(Stock);
+	}
+
+	if (LoadedStocks.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] PartStocks Source=DataTable Result=Fallback Reason=NoSelectableRows Table=%s"),
+			*GetNameSafe(PartCountDataTable));
+		return false;
+	}
+
+	PartStocks = MoveTemp(LoadedStocks);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] PartStocks Source=DataTable Table=%s StockNum=%d"),
+		*GetNameSafe(PartCountDataTable), PartStocks.Num());
+	OnPartStocksChanged.Broadcast();
+	ForceNetUpdate();
+	return true;
+}
+
+void ADronePartInventory::InitializeFallbackStocks()
 {
 	PartStocks = {
 		{ GetCoreZenithPartID(), EDronePartType::Core, 5, 5 },

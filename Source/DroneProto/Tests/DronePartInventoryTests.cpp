@@ -8,6 +8,7 @@
 #include "Drone.h"
 #include "DronePart.h"
 #include "Raid/DronePartInventory.h"
+#include "Raid/DroneDataTableRows.h"
 #include "Raid/DroneCombatTypes.h"
 #include "Raid/DronePartReturnManager.h"
 #include "Raid/DroneReportWidget.h"
@@ -23,6 +24,7 @@
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/DefaultPawn.h"
@@ -956,6 +958,198 @@ bool FDronePartInventoryStockTest::RunTest(const FString& Parameters)
 
 	TestFalse(TEXT("unknown part cannot be consumed"), Inventory->TryConsumePart(TEXT("UNKNOWN_PART")));
 	TestEqual(TEXT("unknown part count is zero"), Inventory->GetCurrentCount(TEXT("UNKNOWN_PART")), 0);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ5DataTableSchemaRowsTest,
+	"DroneProto.Q5.DataTable.SchemaRows",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ5DataTableSchemaRowsTest::RunTest(const FString& Parameters)
+{
+	FDronePartCountRow PartRow;
+	PartRow.PartID = ADronePartInventory::GetCoreZenithPartID();
+	PartRow.Name = FText::FromString(TEXT("Zenith Core"));
+	PartRow.Type = EDronePartType::Core;
+	PartRow.MaxCount = 5;
+	PartRow.IsSelectable = true;
+	TestEqual(TEXT("part row exposes PartID"), PartRow.PartID, ADronePartInventory::GetCoreZenithPartID());
+	TestEqual(TEXT("part row exposes Name"), PartRow.Name.ToString(), FString(TEXT("Zenith Core")));
+	TestEqual(TEXT("part row exposes Type"), static_cast<uint8>(PartRow.Type), static_cast<uint8>(EDronePartType::Core));
+	TestEqual(TEXT("part row exposes MaxCount"), PartRow.MaxCount, 5);
+	TestTrue(TEXT("part row exposes IsSelectable"), PartRow.IsSelectable);
+
+	FDroneCoreRow CoreRow;
+	CoreRow.CoreID = ADronePartInventory::GetCoreDrainPartID();
+	CoreRow.AttackModifier = 0.85f;
+	CoreRow.MoveSpeedModifier = 0.9f;
+	CoreRow.EffectType = FName(TEXT("DAMAGE_TO_HEAL"));
+	CoreRow.EffectValue01 = 0.2f;
+	CoreRow.EffectValue02 = 0.0f;
+	CoreRow.EffectMaxValue = 3.0f;
+	TestEqual(TEXT("core row exposes CoreID"), CoreRow.CoreID, ADronePartInventory::GetCoreDrainPartID());
+	TestEqual(TEXT("core row exposes AttackModifier"), CoreRow.AttackModifier, 0.85f);
+	TestEqual(TEXT("core row exposes MoveSpeedModifier"), CoreRow.MoveSpeedModifier, 0.9f);
+	TestEqual(TEXT("core row exposes EffectType"), CoreRow.EffectType, FName(TEXT("DAMAGE_TO_HEAL")));
+	TestEqual(TEXT("core row exposes EffectValue01"), CoreRow.EffectValue01, 0.2f);
+	TestEqual(TEXT("core row exposes EffectValue02"), CoreRow.EffectValue02, 0.0f);
+	TestEqual(TEXT("core row exposes EffectMaxValue"), CoreRow.EffectMaxValue, 3.0f);
+
+	FDroneWeaponRow WeaponRow;
+	WeaponRow.WeaponID = ADronePartInventory::GetFractureBurstPartID();
+	WeaponRow.BaseDamage = 5.0f;
+	WeaponRow.SpecialEffectType = FName(TEXT("FRACTURE_MULTI_HIT"));
+	WeaponRow.SpecialValue01 = 3.0f;
+	WeaponRow.SpecialValue02 = 2.0f;
+	WeaponRow.SpecialMaxValue = 0.0f;
+	WeaponRow.HitCount = 4;
+	TestEqual(TEXT("weapon row exposes WeaponID"), WeaponRow.WeaponID, ADronePartInventory::GetFractureBurstPartID());
+	TestEqual(TEXT("weapon row exposes BaseDamage"), WeaponRow.BaseDamage, 5.0f);
+	TestEqual(TEXT("weapon row exposes SpecialEffectType"), WeaponRow.SpecialEffectType, FName(TEXT("FRACTURE_MULTI_HIT")));
+	TestEqual(TEXT("weapon row exposes SpecialValue01"), WeaponRow.SpecialValue01, 3.0f);
+	TestEqual(TEXT("weapon row exposes SpecialValue02"), WeaponRow.SpecialValue02, 2.0f);
+	TestEqual(TEXT("weapon row exposes SpecialMaxValue"), WeaponRow.SpecialMaxValue, 0.0f);
+	TestEqual(TEXT("weapon row exposes HitCount"), WeaponRow.HitCount, 4);
+
+	FDroneBonusRow BonusRow;
+	BonusRow.BonusID = FName(TEXT("BONUS_001"));
+	BonusRow.BonusName = FName(TEXT("BossSlayer"));
+	BonusRow.BonusDisplayName = FText::FromString(TEXT("Boss Slayer"));
+	BonusRow.BonusScore = 80;
+	BonusRow.MinCombatDuration = 60.0f;
+	BonusRow.MinBossDamageRatio = 0.03f;
+	BonusRow.MaxScore = 80;
+	TestEqual(TEXT("bonus row exposes BonusID"), BonusRow.BonusID, FName(TEXT("BONUS_001")));
+	TestEqual(TEXT("bonus row exposes BonusName"), BonusRow.BonusName, FName(TEXT("BossSlayer")));
+	TestEqual(TEXT("bonus row exposes BonusDisplayName"), BonusRow.BonusDisplayName.ToString(), FString(TEXT("Boss Slayer")));
+	TestEqual(TEXT("bonus row exposes BonusScore"), BonusRow.BonusScore, 80);
+	TestEqual(TEXT("bonus row exposes MinCombatDuration"), BonusRow.MinCombatDuration, 60.0f);
+	TestEqual(TEXT("bonus row exposes MinBossDamageRatio"), BonusRow.MinBossDamageRatio, 0.03f);
+	TestEqual(TEXT("bonus row exposes MaxScore"), BonusRow.MaxScore, 80);
+
+	FDroneGradeRow GradeRow;
+	GradeRow.Grade = EDroneReportGrade::S;
+	GradeRow.MinScore = 850.0f;
+	GradeRow.MaxScore = 1000.0f;
+	TestEqual(TEXT("grade row exposes Grade"), static_cast<uint8>(GradeRow.Grade), static_cast<uint8>(EDroneReportGrade::S));
+	TestEqual(TEXT("grade row exposes MinScore"), GradeRow.MinScore, 850.0f);
+	TestEqual(TEXT("grade row exposes MaxScore"), GradeRow.MaxScore, 1000.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ5DataTableFallbackStockTest,
+	"DroneProto.Q5.DataTable.FallbackStock",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ5DataTableFallbackStockTest::RunTest(const FString& Parameters)
+{
+	const FProperty* PartCountTableProperty = ADronePartInventory::StaticClass()->FindPropertyByName(TEXT("PartCountDataTable"));
+	TestNotNull(TEXT("inventory exposes a PartCountDataTable candidate"), PartCountTableProperty);
+	const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(PartCountTableProperty);
+	TestNotNull(TEXT("PartCountDataTable is an object property"), ObjectProperty);
+	if (ObjectProperty)
+	{
+		TestTrue(TEXT("PartCountDataTable accepts UDataTable assets"), ObjectProperty->PropertyClass->IsChildOf(UDataTable::StaticClass()));
+	}
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Q5DataTableFallbackStockWorld")));
+	TestNotNull(TEXT("fallback stock world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("fallback inventory actor is spawned"), Inventory);
+	if (!Inventory)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	TestEqual(TEXT("fallback keeps six selectable stock rows"), Inventory->GetPartStocks().Num(), 6);
+	TestEqual(TEXT("fallback Zenith count remains 5"), Inventory->GetCurrentCount(ADronePartInventory::GetCoreZenithPartID()), 5);
+	TestEqual(TEXT("fallback Booster count remains 6"), Inventory->GetCurrentCount(ADronePartInventory::GetCoreBoosterPartID()), 6);
+	TestEqual(TEXT("fallback Drain count remains 5"), Inventory->GetCurrentCount(ADronePartInventory::GetCoreDrainPartID()), 5);
+	TestEqual(TEXT("fallback Pulse count remains 11"), Inventory->GetCurrentCount(ADronePartInventory::GetPulseLaserPartID()), 11);
+	TestEqual(TEXT("fallback Fracture count remains 10"), Inventory->GetCurrentCount(ADronePartInventory::GetFractureBurstPartID()), 10);
+	TestEqual(TEXT("fallback Vector count remains 11"), Inventory->GetCurrentCount(ADronePartInventory::GetVectorCannonPartID()), 11);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ5DataTablePartCountLoadTest,
+	"DroneProto.Q5.DataTable.PartCountLoad",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ5DataTablePartCountLoadTest::RunTest(const FString& Parameters)
+{
+	UDataTable* PartCountTable = NewObject<UDataTable>();
+	TestNotNull(TEXT("transient part count data table is created"), PartCountTable);
+	if (!PartCountTable)
+	{
+		return false;
+	}
+	PartCountTable->RowStruct = FDronePartCountRow::StaticStruct();
+
+	FDronePartCountRow SelectableRow;
+	SelectableRow.PartID = FName(TEXT("CORE_TEST"));
+	SelectableRow.Name = FText::FromString(TEXT("Test Core"));
+	SelectableRow.Type = EDronePartType::Core;
+	SelectableRow.MaxCount = 2;
+	SelectableRow.IsSelectable = true;
+	PartCountTable->AddRow(FName(TEXT("PART_CORE_TEST")), SelectableRow);
+
+	FDronePartCountRow NonSelectableRow;
+	NonSelectableRow.PartID = FName(TEXT("WEAPON_HIDDEN"));
+	NonSelectableRow.Name = FText::FromString(TEXT("Hidden Weapon"));
+	NonSelectableRow.Type = EDronePartType::Weapon;
+	NonSelectableRow.MaxCount = 99;
+	NonSelectableRow.IsSelectable = false;
+	PartCountTable->AddRow(FName(TEXT("PART_WEAPON_HIDDEN")), NonSelectableRow);
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Q5DataTablePartCountLoadWorld")));
+	TestNotNull(TEXT("part count load world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("part count load inventory is spawned"), Inventory);
+	if (!Inventory)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(
+		ADronePartInventory::StaticClass()->FindPropertyByName(TEXT("PartCountDataTable")));
+	TestNotNull(TEXT("PartCountDataTable property can be assigned for tests"), ObjectProperty);
+	if (!ObjectProperty)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	ObjectProperty->SetObjectPropertyValue_InContainer(Inventory, PartCountTable);
+	Inventory->DispatchBeginPlay();
+
+	TestEqual(TEXT("data table load replaces fallback row count"), Inventory->GetPartStocks().Num(), 1);
+	TestEqual(TEXT("data table selectable row sets current count from max"), Inventory->GetCurrentCount(FName(TEXT("CORE_TEST"))), 2);
+	TestEqual(TEXT("data table selectable row sets max count"), Inventory->GetMaxCount(FName(TEXT("CORE_TEST"))), 2);
+	TestEqual(TEXT("data table excludes non-selectable rows"), Inventory->GetCurrentCount(FName(TEXT("WEAPON_HIDDEN"))), 0);
+
+	EDronePartType LoadedType = EDronePartType::Weapon;
+	TestTrue(TEXT("data table row registers part type"), Inventory->GetPartType(FName(TEXT("CORE_TEST")), LoadedType));
+	TestEqual(TEXT("data table row preserves part type"), static_cast<uint8>(LoadedType), static_cast<uint8>(EDronePartType::Core));
 
 	World->DestroyWorld(false);
 	return true;

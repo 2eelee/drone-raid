@@ -24,7 +24,7 @@ const TCHAR* ToNetRoleLogString(ENetRole Role)
 	}
 }
 
-const TCHAR* ToRaidStateLogString(ERaidState State)
+const TCHAR* ToRaidStateLogStringForGameState(ERaidState State)
 {
 	switch (State)
 	{
@@ -104,8 +104,8 @@ void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
 	RaidState = NewRaidState;
 	ForceNetUpdate();
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidState Previous=%s New=%s"),
-		ToRaidStateLogString(PreviousRaidState),
-		ToRaidStateLogString(RaidState));
+		ToRaidStateLogStringForGameState(PreviousRaidState),
+		ToRaidStateLogStringForGameState(RaidState));
 }
 
 void ARaidGameState::SetDronePartInventory(ADronePartInventory* InDronePartInventory)
@@ -151,7 +151,7 @@ void ARaidGameState::SetRaidBossForServer(ARaidBoss* InRaidBoss)
 
 void ARaidGameState::OnRep_RaidState()
 {
-	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %s"), ToRaidStateLogString(RaidState));
+	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %s"), ToRaidStateLogStringForGameState(RaidState));
 }
 
 void ARaidGameState::OnRep_DronePartInventory()

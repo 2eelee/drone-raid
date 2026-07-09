@@ -38,7 +38,7 @@ const TCHAR* ToBossAttackRaidStateLogString(const ARaidGameState* RaidGameState)
 	}
 }
 
-const TCHAR* ToBossStateLogString(EBossState State)
+const TCHAR* ToBossStateLogStringForBoss(EBossState State)
 {
 	switch (State)
 	{
@@ -288,7 +288,7 @@ void ARaidBoss::SetBossStateForServer(EBossState NewBossState, FName Reason)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Client] SetBossStateForServer rejected: Boss=%s NewState=%s"),
 			*GetName(),
-			ToBossStateLogString(NewBossState));
+			ToBossStateLogStringForBoss(NewBossState));
 		return;
 	}
 
@@ -302,8 +302,8 @@ void ARaidBoss::SetBossStateForServer(EBossState NewBossState, FName Reason)
 	ForceNetUpdate();
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossState Previous=%s New=%s Reason=%s Boss=%s HP=%.2f/%.2f"),
-		ToBossStateLogString(PreviousBossState),
-		ToBossStateLogString(BossState),
+		ToBossStateLogStringForBoss(PreviousBossState),
+		ToBossStateLogStringForBoss(BossState),
 		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
 		*GetName(),
 		CurrentHP,
@@ -975,7 +975,7 @@ void ARaidBoss::OnRep_CurrentHP()
 void ARaidBoss::OnRep_BossState()
 {
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossState Replicated State=%s Boss=%s"),
-		ToBossStateLogString(BossState),
+		ToBossStateLogStringForBoss(BossState),
 		*GetName());
 	BP_OnBossStateChangedVisual(BossState);
 }

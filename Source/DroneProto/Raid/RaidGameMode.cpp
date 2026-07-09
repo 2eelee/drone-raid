@@ -51,39 +51,6 @@ const TCHAR* ToReportTriggerLogString(EDroneReportTrigger Trigger)
 	}
 }
 
-const TCHAR* ToRaidStateLogString(ERaidState State)
-{
-	switch (State)
-	{
-	case ERaidState::Waiting:
-		return TEXT("Waiting");
-	case ERaidState::Drafting:
-		return TEXT("Drafting");
-	case ERaidState::Battle:
-		return TEXT("Battle");
-	case ERaidState::End:
-		return TEXT("End");
-	default:
-		return TEXT("Unknown");
-	}
-}
-
-const TCHAR* ToBossStateLogString(EBossState State)
-{
-	switch (State)
-	{
-	case EBossState::Spawn:
-		return TEXT("Spawn");
-	case EBossState::Battle:
-		return TEXT("Battle");
-	case EBossState::Dead:
-		return TEXT("Dead");
-	case EBossState::Clear:
-		return TEXT("Clear");
-	default:
-		return TEXT("Unknown");
-	}
-}
 }
 
 ARaidGameMode::ARaidGameMode()

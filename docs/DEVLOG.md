@@ -1617,3 +1617,29 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE/manual OnRep_BossState client visual-hook firing remains unverified.
+
+---
+
+## 2026-07-09 - Q5 DataTable schema and part-count fallback
+
+### Scope
+- Applied Q5 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Prepared C++ DataTable row schemas for part counts, cores, weapons, bonuses, and grades.
+- Kept `.uasset` DataTable creation/import, UMG, maps, formulas, RPC, replication, FastArray conversion, inventory return, Ready, Q1 boss HP, Q2 core modifiers, Q3 RaidState, and Q4 BossState behavior unchanged.
+
+### Changes
+- Added `FDronePartCountRow`, `FDroneCoreRow`, `FDroneWeaponRow`, `FDroneBonusRow`, and `FDroneGradeRow` in `Raid/DroneDataTableRows.h`.
+- Added an `EditDefaultsOnly` `PartCountDataTable` candidate to `ADronePartInventory`.
+- `ADronePartInventory` can now load selectable part stock rows from a `UDataTable` during server BeginPlay.
+- DataTable-missing or invalid-table fallback keeps the existing hardcoded stock values: Zenith 5, Booster 6, Drain 5, Pulse 11, Fracture 10, Vector 11.
+- Renamed file-local log helper functions in Q3/Q4 raid files to avoid UE unity-build anonymous-namespace collisions; no state formula or transition behavior changed.
+
+### Verification
+- Baseline before Q5 edits: `Automation RunTests DroneProto; Quit` found 67 tests, 67 succeeded, 0 failed, exit code 0.
+- RED: Build failed after the Q5 tests were added because `Raid/DroneDataTableRows.h` did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q5.DataTable; Quit` found 3 tests, 3 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 70 tests, 70 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- Editor `.uasset` DataTable creation/import remains unperformed by Codex and is still an owner/editor task.
