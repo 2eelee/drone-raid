@@ -1740,3 +1740,27 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - Boss pattern/stun source spec is still required before adding pattern variants, changing placeholder values, adding natural stun triggers, or changing stun-vs-pattern pause/resume policy.
+
+---
+
+## 2026-07-09 - Q10 Tutorial C++ state skeleton
+
+### Scope
+- Applied Q10 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added only the tutorial C++ state-machine skeleton for the first-run tutorial flow.
+- Kept maps, cutscenes, dialogue, debris/enemy behavior, UMG layout/assets, SaveGame/login/DB first-run persistence, RaidState, PlayerSelectionState, Inventory, Return, Loadout, Report, RaidEnd, boss pattern/stun, RPC, and replication unchanged.
+
+### Changes
+- Added `ETutorialStep` with `None`, `MoveLeft`, `Attack`, `Dodge`, and `Complete`.
+- Added `ATutorialGameMode` as a tutorial-map-only GameMode parent that can start/advance/complete a tutorial controller behind authority checks.
+- Added `ATutorialPlayerController` with local input hooks for Left, Z, and C+Up, Blueprint getters/events, completion state, and a guarded `ReturnToLobbyAfterTutorial()` C++ hook targeting `LobbyMap`.
+- Added Q10 automation coverage for step order, complete-state idempotence, return-to-lobby suppression, and isolation from `RaidState`/`PlayerSelectionState`.
+
+### Verification
+- RED: Build failed after Q10 tests were added because `Tutorial/TutorialGameMode.h` did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q10.Tutorial; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 79 tests, 79 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- Tutorial map assignment, UMG layout/text, dialogue/cutscene timing, debris actor behavior, and first-run persistence remain owner/editor or future-system tasks.

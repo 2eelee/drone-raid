@@ -1,0 +1,85 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/PlayerController.h"
+#include "TutorialTypes.h"
+#include "TutorialPlayerController.generated.h"
+
+UCLASS()
+class DRONEPROTO_API ATutorialPlayerController : public APlayerController
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION(BlueprintCallable, Category = "Tutorial")
+	void StartTutorial();
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial")
+	void AdvanceTutorialStep();
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial")
+	void CompleteTutorial();
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
+	bool NotifyTutorialMoveInput(FVector2D RawAxis);
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
+	bool NotifyTutorialAttackInput();
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
+	bool NotifyTutorialDodgeInput(FVector2D RawDirection);
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial")
+	bool ReturnToLobbyAfterTutorial();
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial")
+	ETutorialStep GetCurrentTutorialStep() const { return CurrentTutorialStep; }
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial")
+	bool IsTutorialComplete() const { return CurrentTutorialStep == ETutorialStep::Complete; }
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial")
+	bool IsTutorialActive() const { return bTutorialActive; }
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
+	void BP_OnTutorialStepChanged(ETutorialStep PreviousStep, ETutorialStep NewStep);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
+	void BP_OnTutorialComplete();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
+	void BP_OnReturnToLobbyAfterTutorial(FName TargetMap);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	void SetSuppressTutorialLobbyTravelForTest(bool bInSuppressTravel) { bSuppressTutorialLobbyTravelForTest = bInSuppressTravel; }
+	int32 GetTutorialLobbyTravelRequestCountForTest() const { return TutorialLobbyTravelRequestCountForTest; }
+#endif
+
+protected:
+	virtual void SetupInputComponent() override;
+
+private:
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
+	ETutorialStep CurrentTutorialStep = ETutorialStep::None;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
+	bool bTutorialActive = false;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
+	FName LobbyMapName = FName(TEXT("LobbyMap"));
+
+	bool bReturnToLobbyRequested = false;
+	bool bUpPressedForTutorialDodge = false;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	bool bSuppressTutorialLobbyTravelForTest = false;
+	int32 TutorialLobbyTravelRequestCountForTest = 0;
+#endif
+
+	void SetTutorialStep(ETutorialStep NewStep, FName Reason);
+	void HandleTutorialLeftPressed();
+	void HandleTutorialAttackPressed();
+	void HandleTutorialDodgePressed();
+	void HandleTutorialUpPressed();
+	void HandleTutorialUpReleased();
+};
