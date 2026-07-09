@@ -3336,6 +3336,127 @@ bool FDronePOR18StatsRecalcGuardTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossStateJoinGateTest,
+	"DroneProto.Q4.RaidBoss.BossStateJoinGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossStateJoinGateTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q4BossStateJoinGateWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+
+	TestNotNull(TEXT("boss state gate world is created"), Context.World);
+	TestNotNull(TEXT("boss state gate game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("boss state gate inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("boss state gate player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("boss state gate drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("boss state gate game mode is spawned"), GameMode);
+	TestNotNull(TEXT("boss state gate boss is spawned"), Boss);
+	if (!Context.World || !Context.GameState || !Context.Inventory || !Context.PC || !Context.Drone || !GameMode || !Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	Context.GameState->SetRaidBossForServer(Boss);
+
+	TestEqual(TEXT("boss starts in Spawn state"), Boss->GetBossState(), EBossState::Spawn);
+	FName RejectReason;
+	TestTrue(TEXT("Waiting/Drafting with Spawn boss accepts raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("accepted join has no reject reason"), RejectReason, NAME_None);
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("Ready moves raid to Battle"), Context.GameState->RaidState, ERaidState::Battle);
+	TestEqual(TEXT("Ready/pattern start moves boss to Battle"), Boss->GetBossState(), EBossState::Battle);
+
+	ARaidPlayerController* BattleLateJoinPC = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* BattleLateJoinDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("battle late join PC is spawned"), BattleLateJoinPC);
+	TestNotNull(TEXT("battle late join drone is spawned"), BattleLateJoinDrone);
+	if (!BattleLateJoinPC || !BattleLateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	Context.World->AddController(BattleLateJoinPC);
+	BattleLateJoinPC->Possess(BattleLateJoinDrone);
+	BattleLateJoinPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("Battle late join Ready remains allowed"), BattleLateJoinPC->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Battle late join keeps boss in Battle"), Boss->GetBossState(), EBossState::Battle);
+
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() + 1.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss HP defeat flag remains HP based"), Boss->IsDefeated());
+	TestEqual(TEXT("boss death moves BossState to Dead"), Boss->GetBossState(), EBossState::Dead);
+	TestFalse(TEXT("Dead boss rejects raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("Dead boss reject reason is BossDead"), RejectReason, FName(TEXT("BossDead")));
+
+	ARaidPlayerController* DeadLateJoinPC = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* DeadLateJoinDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("dead late join PC is spawned"), DeadLateJoinPC);
+	TestNotNull(TEXT("dead late join drone is spawned"), DeadLateJoinDrone);
+	if (!DeadLateJoinPC || !DeadLateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	Context.World->AddController(DeadLateJoinPC);
+	DeadLateJoinPC->Possess(DeadLateJoinDrone);
+	DeadLateJoinPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("Dead boss Ready is rejected before InBattle"), DeadLateJoinPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+
+	GameMode->HandleBossDefeatedForServer();
+	TestEqual(TEXT("boss defeated flow moves raid to End"), Context.GameState->RaidState, ERaidState::End);
+	TestEqual(TEXT("RaidEnd completion moves BossState to Clear"), Boss->GetBossState(), EBossState::Clear);
+	TestFalse(TEXT("Clear boss rejects raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("Clear boss reject reason is BossClear"), RejectReason, FName(TEXT("BossClear")));
+
+	FDroneSelectionTestContext TimeOverContext = CreateDroneSelectionTestContext(TEXT("Q4BossStateTimeOverWorld"));
+	ARaidGameMode* TimeOverGameMode = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* TimeOverBoss = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidBoss>() : nullptr;
+	TestNotNull(TEXT("time over game mode is spawned"), TimeOverGameMode);
+	TestNotNull(TEXT("time over boss is spawned"), TimeOverBoss);
+	if (!TimeOverContext.World || !TimeOverContext.GameState || !TimeOverContext.PC || !TimeOverContext.Drone || !TimeOverGameMode || !TimeOverBoss)
+	{
+		DestroyDroneSelectionTestContext(TimeOverContext);
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TimeOverContext.World->AddController(TimeOverContext.PC);
+	TimeOverContext.GameState->SetRaidBossForServer(TimeOverBoss);
+	TestTrue(TEXT("time over raid time limit is test-configurable"),
+		SetFloatPropertyForAutomationTest(TimeOverGameMode, FName(TEXT("RaidTimeLimitSeconds")), 0.05f));
+	TimeOverContext.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("time over setup moves boss to Battle"), TimeOverBoss->GetBossState(), EBossState::Battle);
+	TimeOverGameMode->ExpireRaidTimeLimitForTest();
+	TestEqual(TEXT("time over moves raid to End"), TimeOverContext.GameState->RaidState, ERaidState::End);
+	TestEqual(TEXT("time over RaidEnd moves boss to Clear"), TimeOverBoss->GetBossState(), EBossState::Clear);
+	TestFalse(TEXT("TimeOver rejects raid join"), TimeOverGameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("TimeOver reject reason is TimeOver"), RejectReason, FName(TEXT("TimeOver")));
+
+	ARaidPlayerController* TimeOverLateJoinPC = TimeOverContext.World->SpawnActor<ARaidPlayerController>();
+	ADrone* TimeOverLateJoinDrone = TimeOverContext.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("time over late join PC is spawned"), TimeOverLateJoinPC);
+	TestNotNull(TEXT("time over late join drone is spawned"), TimeOverLateJoinDrone);
+	if (!TimeOverLateJoinPC || !TimeOverLateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(TimeOverContext);
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	TimeOverContext.World->AddController(TimeOverLateJoinPC);
+	TimeOverLateJoinPC->Possess(TimeOverLateJoinDrone);
+	TimeOverLateJoinPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("TimeOver Ready is rejected before InBattle"), TimeOverLateJoinPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+
+	DestroyDroneSelectionTestContext(TimeOverContext);
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePOR19BossPatternLifecycleTest,
 	"DroneProto.POR19.BossPattern.StartStopLifecycle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

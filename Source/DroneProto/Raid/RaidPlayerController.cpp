@@ -1865,6 +1865,46 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		*SelectedLeftWeaponPartID.ToString(),
 		*SelectedRightWeaponPartID.ToString());
 
+	if (UWorld* World = GetWorld())
+	{
+		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
+		if (!RaidGameMode)
+		{
+			for (TActorIterator<ARaidGameMode> It(World); It; ++It)
+			{
+				RaidGameMode = *It;
+				break;
+			}
+		}
+
+		if (RaidGameMode)
+		{
+			FName RejectReason;
+			if (!RaidGameMode->CanAcceptRaidJoinForServer(RejectReason))
+			{
+				const FString FailureReason = RejectReason.IsNone() ? TEXT("Raid join rejected") : RejectReason.ToString();
+				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=Ready RaidState=%s"),
+					*PlayerLog,
+					*FailureReason,
+					*RaidStateLog);
+
+				if (bAutoReady)
+				{
+					UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=%s SelectionState=%s"),
+						*PlayerLog,
+						*FailureReason,
+						ToPlayerSelectionStateLogString(PlayerSelectionState));
+				}
+				else
+				{
+					LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+					Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+				}
+				return false;
+			}
+		}
+	}
+
 	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
 	{
 		if (RaidGameState->RaidState == ERaidState::End)

@@ -38,6 +38,23 @@ const TCHAR* ToBossAttackRaidStateLogString(const ARaidGameState* RaidGameState)
 	}
 }
 
+const TCHAR* ToBossStateLogString(EBossState State)
+{
+	switch (State)
+	{
+	case EBossState::Spawn:
+		return TEXT("Spawn");
+	case EBossState::Battle:
+		return TEXT("Battle");
+	case EBossState::Dead:
+		return TEXT("Dead");
+	case EBossState::Clear:
+		return TEXT("Clear");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
 FString BuildBossAttackControllerLogString(const AController* Controller)
 {
 	return ARaidPlayerController::BuildStableControllerLogString(Controller);
@@ -96,6 +113,7 @@ void ARaidBoss::BeginPlay()
 	if (HasAuthority())
 	{
 		CurrentHP = MaxHP;
+		SetBossStateForServer(EBossState::Spawn, FName(TEXT("BeginPlay")));
 		ForceNetUpdate();
 	}
 	RefreshPrototypeVisualHPText();
@@ -166,6 +184,8 @@ bool ARaidBoss::StartBossPatternForServer()
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern StartIgnored: Reason=AlreadyActive Boss=%s"), *GetName());
 		return false;
 	}
+
+	SetBossStateForServer(EBossState::Battle, FName(TEXT("BossPatternStart")));
 
 	const float ClampedInterval = FMath::Max(0.5f, BossPatternIntervalSeconds);
 	World->GetTimerManager().SetTimer(
@@ -262,6 +282,39 @@ void ARaidBoss::BP_OnBossStunChangedVisual_Implementation(bool bNewStunned)
 	(void)bNewStunned;
 }
 
+void ARaidBoss::SetBossStateForServer(EBossState NewBossState, FName Reason)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetBossStateForServer rejected: Boss=%s NewState=%s"),
+			*GetName(),
+			ToBossStateLogString(NewBossState));
+		return;
+	}
+
+	if (BossState == NewBossState)
+	{
+		return;
+	}
+
+	const EBossState PreviousBossState = BossState;
+	BossState = NewBossState;
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossState Previous=%s New=%s Reason=%s Boss=%s HP=%.2f/%.2f"),
+		ToBossStateLogString(PreviousBossState),
+		ToBossStateLogString(BossState),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		*GetName(),
+		CurrentHP,
+		MaxHP);
+
+	if (GetNetMode() == NM_Standalone)
+	{
+		BP_OnBossStateChangedVisual(BossState);
+	}
+}
+
 void ARaidBoss::HandleBossPatternTimerFiredForServer()
 {
 	if (!HasAuthority())
@@ -340,6 +393,7 @@ void ARaidBoss::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ARaidBoss, MaxHP);
 	DOREPLIFETIME(ARaidBoss, CurrentHP);
+	DOREPLIFETIME(ARaidBoss, BossState);
 	DOREPLIFETIME(ARaidBoss, bIsStunned);
 }
 
@@ -426,6 +480,7 @@ void ARaidBoss::ApplyDamageForServer(float DamageAmount, AController* Instigator
 
 	if (PreviousHP > 0.0f && CurrentHP <= 0.0f)
 	{
+		SetBossStateForServer(EBossState::Dead, FName(TEXT("BossDead")));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossDeath: OldHP=%.2f Damage=%.2f Instigator=%s Causer=%s"),
 			PreviousHP,
 			ClampedDamage,
@@ -740,6 +795,11 @@ bool ARaidBoss::IsDefeated() const
 	return CurrentHP <= 0.0f;
 }
 
+EBossState ARaidBoss::GetBossState() const
+{
+	return BossState;
+}
+
 FName ARaidBoss::GetBossID() const
 {
 	return BossID;
@@ -819,6 +879,11 @@ void ARaidBoss::BP_OnBossDamagedVisual_Implementation(float Damage, float OldHP,
 	LastCombatVisualBossOldHPForTest = OldHP;
 	LastCombatVisualBossNewHPForTest = NewHP;
 #endif
+}
+
+void ARaidBoss::BP_OnBossStateChangedVisual_Implementation(EBossState NewBossState)
+{
+	(void)NewBossState;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -905,4 +970,12 @@ void ARaidBoss::OnRep_CurrentHP()
 	RefreshPrototypeVisualHPText();
 	UE_LOG(LogTemp, Log, TEXT("[Client] RaidBoss HP replicated: %.2f/%.2f"), CurrentHP, MaxHP);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossHPReplicated: HP=%.2f MaxHP=%.2f"), CurrentHP, MaxHP);
+}
+
+void ARaidBoss::OnRep_BossState()
+{
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossState Replicated State=%s Boss=%s"),
+		ToBossStateLogString(BossState),
+		*GetName());
+	BP_OnBossStateChangedVisual(BossState);
 }

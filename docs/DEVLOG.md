@@ -1592,3 +1592,28 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE/manual UI reaction to the named RaidState log and OnRep path remains unverified.
+
+---
+
+## 2026-07-08 - Q4 BossState and raid join gate
+
+### Scope
+- Applied Q4 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added server-owned BossState Spawn/Battle/Dead/Clear while keeping the existing HP-based `IsDefeated()` check.
+- Added explicit join/Ready rejection for BossDead, BossClear, TimeOver, and invalid RaidState without changing PlayerSelectionState, RaidState, loadout, inventory, return, pattern, or stun formulas.
+
+### Changes
+- `ARaidBoss` now replicates one new `BossState` value with `OnRep_BossState` log and BP visual hook.
+- `SetBossStateForServer()` handles server-authoritative transitions and `[DR_SUMMARY] BossState` logs.
+- Boss pattern start promotes Spawn -> Battle, HP reaching 0 promotes Battle -> Dead, and RaidEnd completion promotes Dead/Battle -> Clear.
+- `ARaidGameMode::CanAcceptRaidJoinForServer()` gates Waiting/Drafting/Battle joins against Dead/Clear/TimeOver.
+- `ProcessReadyForRaidForServer()` uses the new gate before loadout/equipped state changes and logs `[DR_SUMMARY] RaidJoinRejected`.
+
+### Verification
+- RED: Q4 test compile failed before production code because `EBossState`, `GetBossState()`, and `CanAcceptRaidJoinForServer()` did not exist.
+- GREEN: `Automation RunTests DroneProto.Q4.RaidBoss.BossStateJoinGate; Quit` passed after implementation.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 67 tests, 67 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual OnRep_BossState client visual-hook firing remains unverified.

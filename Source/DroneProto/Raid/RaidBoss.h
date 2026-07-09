@@ -8,6 +8,15 @@ class ARaidBossAttackTelegraph;
 class UStaticMeshComponent;
 class UTextRenderComponent;
 
+UENUM(BlueprintType)
+enum class EBossState : uint8
+{
+	Spawn  UMETA(DisplayName = "Spawn"),
+	Battle UMETA(DisplayName = "Battle"),
+	Dead   UMETA(DisplayName = "Dead"),
+	Clear  UMETA(DisplayName = "Clear"),
+};
+
 UCLASS()
 class DRONEPROTO_API ARaidBoss : public AActor
 {
@@ -20,6 +29,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss")
 	void ApplyDamageForServer(float DamageAmount, AController* InstigatorController, AActor* DamageCauser);
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss")
+	void SetBossStateForServer(EBossState NewBossState, FName Reason = NAME_None);
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss|Debug")
 	int32 PerformDebugAreaAttackForServer(FVector AttackCenter, float RadiusCm = 300.0f, int32 DamageAmount = 25);
@@ -54,6 +66,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss")
 	bool IsDefeated() const;
 
+	UFUNCTION(BlueprintPure, Category = "Raid|Boss")
+	EBossState GetBossState() const;
+
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss|Targeting")
 	FName GetBossID() const;
 
@@ -73,6 +88,9 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent, Category = "Raid|Boss|Visual")
 	void BP_OnBossDamagedVisual(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Raid|Boss|Visual")
+	void BP_OnBossStateChangedVisual(EBossState NewBossState);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetCombatVisualBossDamagedCountForTest() const;
@@ -118,8 +136,14 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_CurrentHP, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))
 	float CurrentHP = 60000.0f;
 
+	UPROPERTY(ReplicatedUsing = OnRep_BossState, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Boss", meta = (AllowPrivateAccess = "true"))
+	EBossState BossState = EBossState::Spawn;
+
 	UFUNCTION()
 	void OnRep_CurrentHP();
+
+	UFUNCTION()
+	void OnRep_BossState();
 
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayBossDamagedVisual(float Damage, float OldHP, float NewHP, AActor* DamageCauser);

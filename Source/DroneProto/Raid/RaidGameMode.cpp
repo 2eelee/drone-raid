@@ -50,6 +50,40 @@ const TCHAR* ToReportTriggerLogString(EDroneReportTrigger Trigger)
 		return TEXT("Unknown");
 	}
 }
+
+const TCHAR* ToRaidStateLogString(ERaidState State)
+{
+	switch (State)
+	{
+	case ERaidState::Waiting:
+		return TEXT("Waiting");
+	case ERaidState::Drafting:
+		return TEXT("Drafting");
+	case ERaidState::Battle:
+		return TEXT("Battle");
+	case ERaidState::End:
+		return TEXT("End");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+const TCHAR* ToBossStateLogString(EBossState State)
+{
+	switch (State)
+	{
+	case EBossState::Spawn:
+		return TEXT("Spawn");
+	case EBossState::Battle:
+		return TEXT("Battle");
+	case EBossState::Dead:
+		return TEXT("Dead");
+	case EBossState::Clear:
+		return TEXT("Clear");
+	default:
+		return TEXT("Unknown");
+	}
+}
 }
 
 ARaidGameMode::ARaidGameMode()
@@ -174,6 +208,15 @@ void ARaidGameMode::PostLogin(APlayerController* NewPlayer)
 
 	if (HasAuthority())
 	{
+		FName RejectReason;
+		if (!CanAcceptRaidJoinForServer(RejectReason))
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=PostLogin"),
+				*BuildRaidGameModeControllerLogString(NewPlayer),
+				RejectReason.IsNone() ? TEXT("Unknown") : *RejectReason.ToString());
+			return;
+		}
+
 		if (ARaidGameState* GS = GetGameState<ARaidGameState>())
 		{
 			GS->CurrentPlayers++;
@@ -397,6 +440,8 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 		}
 	}
 
+	SetAllBossStatesForServer(EBossState::Clear, Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd part return completed Reason=%s PlayerCount=%d"),
 		*ReasonText,
 		EligiblePlayerCount);
@@ -450,6 +495,86 @@ void ARaidGameMode::StopBossPatternsForServer(FName Reason)
 	}
 }
 
+bool ARaidGameMode::CanAcceptRaidJoinForServer(FName& OutRejectReason) const
+{
+	OutRejectReason = NAME_None;
+	if (!HasAuthority())
+	{
+		OutRejectReason = FName(TEXT("NotAuthority"));
+		return false;
+	}
+
+	if (bRaidTimeLimitExpiredForServer)
+	{
+		OutRejectReason = FName(TEXT("TimeOver"));
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	const ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!GS)
+	{
+		OutRejectReason = FName(TEXT("NoRaidState"));
+		return false;
+	}
+
+	const ARaidBoss* Boss = GS->GetRaidBoss();
+	if (!Boss)
+	{
+		for (TActorIterator<ARaidBoss> It(World); It; ++It)
+		{
+			Boss = *It;
+			break;
+		}
+	}
+
+	if (Boss)
+	{
+		if (Boss->GetBossState() == EBossState::Clear)
+		{
+			OutRejectReason = FName(TEXT("BossClear"));
+			return false;
+		}
+
+		if (Boss->GetBossState() == EBossState::Dead || Boss->IsDefeated())
+		{
+			OutRejectReason = FName(TEXT("BossDead"));
+			return false;
+		}
+	}
+
+	if (GS->RaidState != ERaidState::Waiting
+		&& GS->RaidState != ERaidState::Drafting
+		&& GS->RaidState != ERaidState::Battle)
+	{
+		OutRejectReason = GS->RaidState == ERaidState::End
+			? FName(TEXT("RaidEnded"))
+			: FName(TEXT("InvalidRaidState"));
+		return false;
+	}
+
+	return true;
+}
+
+void ARaidGameMode::SetAllBossStatesForServer(EBossState NewBossState, FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ARaidBoss> It(World); It; ++It)
+	{
+		It->SetBossStateForServer(NewBossState, Reason);
+	}
+}
+
 void ARaidGameMode::StartRaidTimeLimitTimerForServer()
 {
 	if (!HasAuthority())
@@ -491,6 +616,7 @@ void ARaidGameMode::StartRaidTimeLimitTimerForServer()
 		&ARaidGameMode::HandleRaidTimeLimitExpiredForServer,
 		ClampedTimeLimit,
 		false);
+	bRaidTimeLimitExpiredForServer = false;
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerStart Duration=%.2f"),
 		ClampedTimeLimit);
@@ -545,6 +671,7 @@ void ARaidGameMode::HandleRaidTimeLimitExpiredForServer()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerExpired Result=RaidEnd Reason=RaidTimeLimit"));
+	bRaidTimeLimitExpiredForServer = true;
 	ReturnAllEquippedPartsForRaidEnd(FName(TEXT("RaidTimeLimit")));
 }
 
