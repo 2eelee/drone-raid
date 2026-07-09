@@ -1264,6 +1264,61 @@ bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ7RaidLoadFailedReturnToLobbyTest,
+	"DroneProto.Q7.RaidLoadFailed.ReturnToLobby",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ7RaidLoadFailedReturnToLobbyTest::RunTest(const FString& Parameters)
+{
+	ARaidPlayerController* PC = NewObject<ARaidPlayerController>();
+	TestNotNull(TEXT("raid load failed PC is created"), PC);
+	if (!PC)
+	{
+		return false;
+	}
+
+	PC->SetSuppressRaidLoadFailedLobbyTravelForTest(true);
+	PC->HandleRaidLoadFailedForClient(FName(TEXT("MapLoadFailed")), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("raid load failure stores reason"), PC->GetLastRaidLoadFailedReasonForTest(), FName(TEXT("MapLoadFailed")));
+	TestEqual(TEXT("raid load failure stores target map"), PC->GetLastRaidLoadFailedTargetMapForTest(), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("raid load failure requests one lobby return"), PC->GetRaidLoadFailedReturnToLobbyCountForTest(), 1);
+
+	PC->HandleRaidLoadFailedForClient(FName(TEXT("MapLoadFailed")), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("duplicate raid load failure does not double-return to lobby"), PC->GetRaidLoadFailedReturnToLobbyCountForTest(), 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ7SpawnFailedNotificationTest,
+	"DroneProto.Q7.RaidLoadFailed.SpawnFailedNotification",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ7SpawnFailedNotificationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q7SpawnFailedNotificationWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("spawn failed world is created"), Context.World);
+	TestNotNull(TEXT("spawn failed PC is spawned"), Context.PC);
+	TestNotNull(TEXT("spawn failed game mode is spawned"), GameMode);
+	if (!Context.World || !Context.PC || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.PC->SetSuppressRaidLoadFailedLobbyTravelForTest(true);
+	TestTrue(TEXT("spawn failure mock notifies raid PC"),
+		GameMode->NotifyRaidSpawnFailedForTest(Context.PC, FName(TEXT("SpawnFailed"))));
+	TestEqual(TEXT("spawn failure stores reason"), Context.PC->GetLastRaidLoadFailedReasonForTest(), FName(TEXT("SpawnFailed")));
+	TestEqual(TEXT("spawn failure targets LobbyMap"), Context.PC->GetLastRaidLoadFailedTargetMapForTest(), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("spawn failure requests one lobby return"), Context.PC->GetRaidLoadFailedReturnToLobbyCountForTest(), 1);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartReturnManagerTest,
 	"DroneProto.D5.DronePartReturnManager.ReturnAndReplace",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

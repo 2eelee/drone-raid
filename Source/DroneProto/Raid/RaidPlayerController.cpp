@@ -9,10 +9,13 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
 {
+constexpr const TCHAR* RaidLoadFailureLobbyMapName = TEXT("LobbyMap");
+
 const TCHAR* ToSelectionSlotLogString(EPartSlot Slot)
 {
 	switch (Slot)
@@ -1014,6 +1017,75 @@ void ARaidPlayerController::Client_NotifyRaidEndedForUI_Implementation(FName Rea
 		Reason.IsNone() ? TEXT("RaidEnd") : *Reason.ToString(),
 		ToPlayerSelectionStateLogString(PlayerSelectionState));
 	RefreshSelectionUI();
+}
+
+void ARaidPlayerController::Client_NotifyRaidLoadFailed_Implementation(FName Reason, FName TargetMap)
+{
+	HandleRaidLoadFailedForClient(Reason, TargetMap);
+}
+
+void ARaidPlayerController::HandleRaidLoadFailedForClient(FName Reason, FName TargetMap)
+{
+	const FName NormalizedReason = Reason.IsNone() ? FName(TEXT("Unknown")) : Reason;
+	const FName LobbyTargetMap = TargetMap.IsNone() ? FName(RaidLoadFailureLobbyMapName) : TargetMap;
+
+	LastRaidLoadFailedReason = NormalizedReason;
+	LastRaidLoadFailedTargetMap = LobbyTargetMap;
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadFailed Player=%s Reason=%s TargetMap=%s"),
+		*BuildControllerLogString(this),
+		*NormalizedReason.ToString(),
+		*LobbyTargetMap.ToString());
+
+	BP_OnRaidLoadFailed(NormalizedReason, LobbyTargetMap);
+	ReturnToLobbyForRaidLoadFailure(NormalizedReason, LobbyTargetMap);
+}
+
+void ARaidPlayerController::ReturnToLobbyForRaidLoadFailure(FName Reason, FName TargetMap)
+{
+	if (bRaidLoadFailedReturnToLobbyRequested)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobbyIgnored Reason=AlreadyRequested Source=RaidLoadFailed Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	bRaidLoadFailedReturnToLobbyRequested = true;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bSuppressRaidLoadFailedLobbyTravelForTest)
+	{
+		++RaidLoadFailedReturnToLobbyCountForTest;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobby Reason=%s Target=%s Source=RaidLoadFailed Player=%s Mode=SuppressedForAutomation"),
+			Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+			TargetMap.IsNone() ? RaidLoadFailureLobbyMapName : *TargetMap.ToString(),
+			*BuildControllerLogString(this));
+		return;
+	}
+#endif
+
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobbyIgnored Reason=InvalidWorldOrDedicatedServer Source=RaidLoadFailed Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	if (!IsLocalController())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobbyIgnored Reason=NotLocalController Source=RaidLoadFailed Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	const FName LobbyTargetMap = TargetMap.IsNone() ? FName(RaidLoadFailureLobbyMapName) : TargetMap;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobby Reason=%s Target=%s Source=RaidLoadFailed Player=%s Method=OpenLevel"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		*LobbyTargetMap.ToString(),
+		*BuildControllerLogString(this));
+
+	UGameplayStatics::OpenLevel(World, LobbyTargetMap);
 }
 
 void ARaidPlayerController::D4SelectPart(FString SlotName, FString PartIDText)

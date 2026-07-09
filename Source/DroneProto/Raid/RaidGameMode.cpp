@@ -224,6 +224,7 @@ APawn* ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* Ne
 			*BuildRaidGameModeControllerLogString(NewPlayer),
 			World ? TEXT("Valid") : TEXT("None"),
 			*GetNameSafe(PawnClass));
+		NotifyRaidSpawnFailedForServer(NewPlayer, FName(TEXT("SpawnFailed")));
 		return nullptr;
 	}
 
@@ -273,7 +274,35 @@ APawn* ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* Ne
 		bUsedFallbackAlwaysSpawn ? TEXT("true") : TEXT("false"),
 		*SpawnTransform.ToHumanReadableString());
 
+	if (!SpawnedPawn)
+	{
+		NotifyRaidSpawnFailedForServer(NewPlayer, FName(TEXT("SpawnFailed")));
+	}
+
 	return SpawnedPawn;
+}
+
+bool ARaidGameMode::NotifyRaidSpawnFailedForServer(AController* Controller, FName Reason) const
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Controller);
+	if (!RaidPC)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] RaidLoadFailed NotifySkipped Reason=InvalidPlayerController PC=%s"),
+			*BuildRaidGameModeControllerLogString(Controller));
+		return false;
+	}
+
+	const FName FailureReason = Reason.IsNone() ? FName(TEXT("SpawnFailed")) : Reason;
+	RaidPC->Client_NotifyRaidLoadFailed(FailureReason, FName(TEXT("LobbyMap")));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadFailed NotifySent Player=%s Reason=%s TargetMap=LobbyMap"),
+		*BuildRaidGameModeControllerLogString(RaidPC),
+		*FailureReason.ToString());
+	return true;
 }
 
 void ARaidGameMode::Logout(AController* Exiting)
@@ -659,6 +688,20 @@ bool ARaidGameMode::IsRaidTimeLimitTimerActiveForTest() const
 void ARaidGameMode::ExpireRaidTimeLimitForTest()
 {
 	HandleRaidTimeLimitExpiredForServer();
+}
+
+bool ARaidGameMode::NotifyRaidSpawnFailedForTest(AController* Controller, FName Reason)
+{
+	const bool bNotified = NotifyRaidSpawnFailedForServer(Controller, Reason);
+	if (bNotified)
+	{
+		const FName FailureReason = Reason.IsNone() ? FName(TEXT("SpawnFailed")) : Reason;
+		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Controller))
+		{
+			RaidPC->HandleRaidLoadFailedForClient(FailureReason, FName(TEXT("LobbyMap")));
+		}
+	}
+	return bNotified;
 }
 #endif
 

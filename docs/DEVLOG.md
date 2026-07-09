@@ -1667,3 +1667,27 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE/manual UMG binding and visual placement for the actual boss HUD remains unverified and is still an owner/editor task.
+
+---
+
+## 2026-07-09 - Q7 Raid load failure return-to-lobby hook
+
+### Scope
+- Applied Q7 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added a C++ return-to-lobby hook for explicit raid load/spawn failure paths without UMG layout, assets, maps, ReportWidget success return path, inventory, return, loadout, RaidEnd, or matchmaking-server changes.
+
+### Changes
+- Added one owning-client RPC, `ARaidPlayerController::Client_NotifyRaidLoadFailed(FName Reason, FName TargetMap)`.
+- Added `HandleRaidLoadFailedForClient()` and `BP_OnRaidLoadFailed()` so Blueprint/UI can react to failure without Codex creating popup assets.
+- Client failure handling logs `[DR_SUMMARY] RaidLoadFailed` and uses a guarded `ReturnToLobby` path targeting `LobbyMap`.
+- `ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation()` now notifies the affected raid PlayerController only when required spawn context is missing or all spawn attempts fail.
+- Automation-only test shim mirrors the client handler after the server notification condition because the mock world has no owning client NetConnection to deliver the RPC.
+
+### Verification
+- RED: Q7 build failed after tests were added because the load-failure PC helper and spawn-failure test hook did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q7.RaidLoadFailed; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 74 tests, 74 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual popup Blueprint implementation and real map/spawn failure UX remain unverified and are still owner/editor tasks.

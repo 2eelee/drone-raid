@@ -43,6 +43,7 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	bool IsRaidTimeLimitTimerActiveForTest() const;
 	void ExpireRaidTimeLimitForTest();
+	bool NotifyRaidSpawnFailedForTest(AController* Controller, FName Reason);
 #endif
 
 private:
@@ -62,4 +63,5 @@ private:
 	void ClearRaidTimeLimitTimerForServer(FName Reason);
 	void HandleRaidTimeLimitExpiredForServer();
 	void SetAllBossStatesForServer(EBossState NewBossState, FName Reason);
+	bool NotifyRaidSpawnFailedForServer(AController* Controller, FName Reason) const;
 };
