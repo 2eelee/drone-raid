@@ -1427,6 +1427,54 @@ bool FDroneQ8DamageContributionAttackPathTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ9BossPatternSpecBoundaryTest,
+	"DroneProto.Q9.BossPatternSpecBoundary.PlaceholderGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ9BossPatternSpecBoundaryTest::RunTest(const FString& Parameters)
+{
+	const FString RaidBossHeaderPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/RaidBoss.h");
+	const FString AgentsPath = FPaths::ProjectDir() / TEXT("AGENTS.md");
+
+	FString RaidBossHeaderSource;
+	FString AgentsSource;
+	TestTrue(TEXT("RaidBoss header loads for Q9 boundary check"),
+		FFileHelper::LoadFileToString(RaidBossHeaderSource, *RaidBossHeaderPath));
+	TestTrue(TEXT("AGENTS.md loads for Q9 boundary check"),
+		FFileHelper::LoadFileToString(AgentsSource, *AgentsPath));
+	if (RaidBossHeaderSource.IsEmpty() || AgentsSource.IsEmpty())
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("RaidBoss header declares Q9 boss pattern spec boundary"),
+		RaidBossHeaderSource.Contains(TEXT("Q9_SPEC_BOUNDARY_BOSS_PATTERN_STUN")));
+	TestTrue(TEXT("RaidBoss header marks pattern and stun values as placeholders"),
+		RaidBossHeaderSource.Contains(TEXT("placeholder until boss pattern/stun source spec is available")));
+	TestTrue(TEXT("RaidBoss header keeps bIsStunned separate from BossState"),
+		RaidBossHeaderSource.Contains(TEXT("Do not merge bIsStunned into BossState")));
+	TestTrue(TEXT("RaidBoss header documents no natural stun trigger"),
+		RaidBossHeaderSource.Contains(TEXT("No natural stun trigger is specified")));
+	TestTrue(TEXT("AGENTS.md documents the boss pattern spec boundary"),
+		AgentsSource.Contains(TEXT("Q9 Boss Pattern/Stun Spec Boundary")));
+	TestTrue(TEXT("AGENTS.md forbids pattern/stun expansion before source spec"),
+		AgentsSource.Contains(TEXT("Do not extend boss pattern or stun behavior before the source spec exists")));
+
+	TestTrue(TEXT("placeholder pattern interval remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternIntervalSeconds = 6.0f")));
+	TestTrue(TEXT("placeholder pattern radius remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternRadiusCm = 300.0f")));
+	TestTrue(TEXT("placeholder pattern damage remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternDamage = 25")));
+	TestTrue(TEXT("placeholder pattern telegraph remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternTelegraphSeconds = 1.0f")));
+	TestTrue(TEXT("placeholder stun multiplier remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("StunDamageMultiplier = 1.5f")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartReturnManagerTest,
 	"DroneProto.D5.DronePartReturnManager.ReturnAndReplace",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

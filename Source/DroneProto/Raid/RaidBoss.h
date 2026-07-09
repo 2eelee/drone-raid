@@ -149,6 +149,9 @@ private:
 	void Multicast_PlayBossDamagedVisual(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
 
 	// SpecDecisionNeeded: 패턴 간격/반경/데미지/텔레그래프 시간은 기획 미확정 placeholder.
+	// Q9_SPEC_BOUNDARY_BOSS_PATTERN_STUN:
+	// Boss pattern/stun values are placeholder until boss pattern/stun source spec is available.
+	// Do not change interval/radius/damage/telegraph or add pattern variants before that spec exists.
 	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern", meta = (AllowPrivateAccess = "true", ClampMin = "0.5"))
 	float BossPatternIntervalSeconds = 6.0f;
 
@@ -168,6 +171,10 @@ private:
 
 	// SpecDecisionNeeded: 스턴 배율(1.5 placeholder)/지속시간/자연 진입 조건 미확정.
 	// 스턴 중 패턴 정지 여부도 미정 — 현재는 패턴이 계속 진행된다.
+	// Q9_SPEC_BOUNDARY_BOSS_PATTERN_STUN:
+	// Stun behavior is placeholder until boss pattern/stun source spec is available.
+	// No natural stun trigger is specified; debug/manual stun is the only current entry path.
+	// Do not merge bIsStunned into BossState.
 	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Stun", meta = (AllowPrivateAccess = "true", ClampMin = "1.0"))
 	float StunDamageMultiplier = 1.5f;
 

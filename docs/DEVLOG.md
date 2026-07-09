@@ -1717,3 +1717,26 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 ### Manual Follow-up
 - PIE/manual contribution log inspection remains unverified.
 - UI/ranking/report-display use of the central map is intentionally not implemented in Q8.
+
+---
+
+## 2026-07-09 - Q9 Boss pattern/stun spec boundary seal
+
+### Scope
+- Applied Q9 as an implementation hold from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Sealed the current boss pattern/stun behavior as placeholder-only until the boss pattern/stun source spec exists.
+- Kept boss pattern/stun runtime behavior, values, RPC, replication, BossState, RaidState, RaidEnd, Return, Report, Inventory, and Loadout paths unchanged.
+
+### Changes
+- Added an `AGENTS.md` boundary section forbidding boss pattern/stun expansion before the source spec exists.
+- Added `RaidBoss.h` comments marking pattern/stun values as placeholders and keeping `bIsStunned` separate from `BossState`.
+- Added a Q9 smoke/spec-boundary automation test that checks the documentation markers and current placeholder values without changing behavior.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q9.BossPatternSpecBoundary; Quit` found 1 test and failed because Q9 boundary markers were absent.
+- GREEN: `Automation RunTests DroneProto.Q9.BossPatternSpecBoundary; Quit` found 1 test, 1 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 77 tests, 77 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- Boss pattern/stun source spec is still required before adding pattern variants, changing placeholder values, adding natural stun triggers, or changing stun-vs-pattern pause/resume policy.
