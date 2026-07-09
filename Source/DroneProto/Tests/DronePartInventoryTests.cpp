@@ -11,6 +11,7 @@
 #include "Raid/DroneDataTableRows.h"
 #include "Raid/DroneCombatTypes.h"
 #include "Raid/DronePartReturnManager.h"
+#include "Raid/BossHUDWidget.h"
 #include "Raid/DroneReportWidget.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidBossAttackTelegraph.h"
@@ -1152,6 +1153,113 @@ bool FDroneQ5DataTablePartCountLoadTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("data table row preserves part type"), static_cast<uint8>(LoadedType), static_cast<uint8>(EDronePartType::Core));
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ6RaidTimerReplicationTest,
+	"DroneProto.Q6.RaidHUD.RaidTimerReplication",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ6RaidTimerReplicationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q6RaidTimerReplicationWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("raid timer world is created"), Context.World);
+	TestNotNull(TEXT("raid timer game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("raid timer game mode is spawned"), GameMode);
+	if (!Context.World || !Context.GameState || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	TestTrue(TEXT("raid timer duration is test-configurable"),
+		SetFloatPropertyForAutomationTest(GameMode, FName(TEXT("RaidTimeLimitSeconds")), 180.0f));
+	GameMode->StartRaidTimeLimitTimerForServer();
+
+	TestTrue(TEXT("raid timer end server time is set"),
+		Context.GameState->GetRaidTimeEndServerTime() > Context.World->GetTimeSeconds());
+	TestTrue(TEXT("raid timer remaining seconds clamps to 180 max"),
+		Context.GameState->GetRaidRemainingSeconds() > 0.0f
+		&& Context.GameState->GetRaidRemainingSeconds() <= 180.0f);
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() + 240.0f);
+	TestEqual(TEXT("manual future end time clamps display remaining to 180"),
+		Context.GameState->GetRaidRemainingSeconds(),
+		180.0f);
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() - 1.0f);
+	TestEqual(TEXT("past end time clamps remaining to zero"),
+		Context.GameState->GetRaidRemainingSeconds(),
+		0.0f);
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(0.0f);
+	TestEqual(TEXT("cleared end time has zero remaining"),
+		Context.GameState->GetRaidRemainingSeconds(),
+		0.0f);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ6BossHUDWidgetTest,
+	"DroneProto.Q6.RaidHUD.BossHUDWidget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
+{
+	UBossHUDWidget* EmptyWidget = NewObject<UBossHUDWidget>();
+	TestNotNull(TEXT("empty boss HUD widget is created"), EmptyWidget);
+	if (!EmptyWidget)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("boss HUD without world has zero HP percent"), EmptyWidget->GetBossHPPercent(), 0.0f);
+	TestEqual(TEXT("boss HUD without world has empty HP text"), EmptyWidget->GetBossHPText().ToString(), FString(TEXT("0 / 0")));
+	TestEqual(TEXT("boss HUD without world has zero remaining seconds"), EmptyWidget->GetRaidRemainingSeconds(), 0.0f);
+	TestEqual(TEXT("boss HUD without world has zero timer text"), EmptyWidget->GetRaidTimerText().ToString(), FString(TEXT("00:00")));
+
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q6BossHUDWidgetWorld"));
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossHUDWidget* Widget = Context.World ? NewObject<UBossHUDWidget>(Context.World) : nullptr;
+	TestNotNull(TEXT("boss HUD world is created"), Context.World);
+	TestNotNull(TEXT("boss HUD game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("boss HUD boss is spawned"), Boss);
+	TestNotNull(TEXT("boss HUD widget is created"), Widget);
+	if (!Context.World || !Context.GameState || !Boss || !Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidBossForServer(Boss);
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() * 0.25f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss HUD reads replicated boss HP percent"),
+		FMath::IsNearlyEqual(Widget->GetBossHPPercent(), 0.75f, 0.001f));
+	TestEqual(TEXT("boss HUD builds HP text"),
+		Widget->GetBossHPText().ToString(),
+		FString(TEXT("45000 / 60000")));
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() + 125.0f);
+	TestTrue(TEXT("boss HUD reads raid remaining seconds"),
+		FMath::IsNearlyEqual(Widget->GetRaidRemainingSeconds(), 125.0f, 0.001f));
+	TestEqual(TEXT("boss HUD builds mm:ss timer text"),
+		Widget->GetRaidTimerText().ToString(),
+		FString(TEXT("02:05")));
+
+	TestTrue(TEXT("boss MaxHP is adjustable for safety test"),
+		SetFloatPropertyForAutomationTest(Boss, FName(TEXT("MaxHP")), 0.0f));
+	Widget->RefreshBossHUD();
+	TestEqual(TEXT("boss HUD clamps zero MaxHP percent safely"), Widget->GetBossHPPercent(), 0.0f);
+	TestEqual(TEXT("boss HUD clamps zero MaxHP text safely"),
+		Widget->GetBossHPText().ToString(),
+		FString(TEXT("0 / 0")));
+
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 

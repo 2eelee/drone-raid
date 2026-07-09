@@ -577,6 +577,7 @@ void ARaidGameMode::StartRaidTimeLimitTimerForServer()
 	}
 
 	const float ClampedTimeLimit = FMath::Max(0.01f, RaidTimeLimitSeconds);
+	GS->SetRaidTimeEndServerTimeForServer(World->GetTimeSeconds() + ClampedTimeLimit);
 	World->GetTimerManager().SetTimer(
 		RaidTimeLimitTimerHandle,
 		this,
@@ -585,8 +586,9 @@ void ARaidGameMode::StartRaidTimeLimitTimerForServer()
 		false);
 	bRaidTimeLimitExpiredForServer = false;
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerStart Duration=%.2f"),
-		ClampedTimeLimit);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerStart Duration=%.2f EndServerTime=%.2f"),
+		ClampedTimeLimit,
+		GS->GetRaidTimeEndServerTime());
 }
 
 void ARaidGameMode::ClearRaidTimeLimitTimerForServer(FName Reason)
@@ -600,6 +602,11 @@ void ARaidGameMode::ClearRaidTimeLimitTimerForServer(FName Reason)
 	if (!World)
 	{
 		return;
+	}
+
+	if (ARaidGameState* GS = World->GetGameState<ARaidGameState>())
+	{
+		GS->SetRaidTimeEndServerTimeForServer(0.0f);
 	}
 
 	if (World->GetTimerManager().TimerExists(RaidTimeLimitTimerHandle))

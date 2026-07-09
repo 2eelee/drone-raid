@@ -1643,3 +1643,27 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - Editor `.uasset` DataTable creation/import remains unperformed by Codex and is still an owner/editor task.
+
+---
+
+## 2026-07-09 - Q6 Raid timer replication and boss HUD parent
+
+### Scope
+- Applied Q6 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Prepared C++ plumbing for boss HP and the 03:00 raid timer without UMG layout, assets, maps, AddToViewport automation, or client-authoritative timer decisions.
+- Kept boss HP/damage/pattern/stun values, RaidState, BossState, Report, Return, Inventory, Loadout, RPC, and existing UI presentation paths unchanged.
+
+### Changes
+- Added one replicated `RaidTimeEndServerTime` value to `ARaidGameState` with `OnRep_RaidTimeEndServerTime` logs and UI refresh marker.
+- `ARaidGameMode::StartRaidTimeLimitTimerForServer()` records the server end time when the 180-second raid timer starts, and timer cleanup clears it.
+- Added `UBossHUDWidget` as a C++ UMG parent with optional `BossHPText`, `RaidTimerText`, and `BossHPProgressBar` bindings.
+- `UBossHUDWidget` exposes `GetBossHPPercent()`, `GetBossHPText()`, `GetRaidRemainingSeconds()`, `GetRaidTimerText()`, and `RefreshBossHUD()`.
+
+### Verification
+- RED: Build failed after Q6 tests were added because `Raid/BossHUDWidget.h` did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q6.RaidHUD; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 72 tests, 72 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual UMG binding and visual placement for the actual boss HUD remains unverified and is still an owner/editor task.

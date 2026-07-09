@@ -75,6 +75,7 @@ void ARaidGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ARaidGameState, CurrentPlayers);
 	DOREPLIFETIME(ARaidGameState, DronePartInventory);
 	DOREPLIFETIME(ARaidGameState, RaidBoss);
+	DOREPLIFETIME(ARaidGameState, RaidTimeEndServerTime);
 }
 
 ADronePartInventory* ARaidGameState::GetDronePartInventory() const
@@ -85,6 +86,22 @@ ADronePartInventory* ARaidGameState::GetDronePartInventory() const
 ARaidBoss* ARaidGameState::GetRaidBoss() const
 {
 	return RaidBoss.Get();
+}
+
+float ARaidGameState::GetRaidTimeEndServerTime() const
+{
+	return RaidTimeEndServerTime;
+}
+
+float ARaidGameState::GetRaidRemainingSeconds() const
+{
+	if (RaidTimeEndServerTime <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	const float RemainingSeconds = RaidTimeEndServerTime - GetServerWorldTimeSeconds();
+	return FMath::Clamp(RemainingSeconds, 0.0f, 180.0f);
 }
 
 void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
@@ -106,6 +123,22 @@ void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidState Previous=%s New=%s"),
 		ToRaidStateLogStringForGameState(PreviousRaidState),
 		ToRaidStateLogStringForGameState(RaidState));
+}
+
+void ARaidGameState::SetRaidTimeEndServerTimeForServer(float NewRaidTimeEndServerTime)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetRaidTimeEndServerTimeForServer rejected: GameState has no authority"));
+		return;
+	}
+
+	RaidTimeEndServerTime = FMath::Max(0.0f, NewRaidTimeEndServerTime);
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimer EndServerTime=%.2f Remaining=%.2f"),
+		RaidTimeEndServerTime,
+		GetRaidRemainingSeconds());
 }
 
 void ARaidGameState::SetDronePartInventory(ADronePartInventory* InDronePartInventory)
@@ -169,6 +202,14 @@ void ARaidGameState::OnRep_RaidBoss()
 {
 	UE_LOG(LogTemp, Log, TEXT("[Client] OnRep_RaidBoss: %s"),
 		RaidBoss ? *RaidBoss->GetName() : TEXT("None"));
+}
+
+void ARaidGameState::OnRep_RaidTimeEndServerTime()
+{
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OnRep_RaidTimeEndServerTime EndServerTime=%.2f Remaining=%.2f"),
+		RaidTimeEndServerTime,
+		GetRaidRemainingSeconds());
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=OnRep_RaidTimeEndServerTime Target=BossHUD"));
 }
 
 void ARaidGameState::HandleDronePartStocksChanged()
