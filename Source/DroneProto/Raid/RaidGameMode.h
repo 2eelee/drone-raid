@@ -8,6 +8,12 @@
 class UDronePartReturnManager;
 enum class EBossState : uint8;
 
+struct FDroneBossDamageContribution
+{
+	FString PlayerKey;
+	float Damage = 0.0f;
+};
+
 UCLASS()
 class DRONEPROTO_API ARaidGameMode : public AGameModeBase
 {
@@ -38,6 +44,11 @@ public:
 	bool TryMarkDroneReportGeneratedForServer(class ARaidPlayerController* RaidPC);
 	void ClearDroneReportKeyForServer(class ARaidPlayerController* RaidPC, FName Reason);
 
+	bool RecordBossDamageForServer(APlayerController* PlayerController, float DamageAmount);
+	float GetBossDamageForPlayerKeyForServer(const FString& PlayerKey) const;
+	TArray<FDroneBossDamageContribution> GetSortedBossDamageContributionsForServer() const;
+	void ResetBossDamageContributionsForServer(FName Reason);
+
 	UDronePartReturnManager* GetDronePartReturnManager() const;
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -57,8 +68,9 @@ private:
 	bool bRaidTimeLimitExpiredForServer = false;
 
 	TSet<FString> GeneratedDroneReportPlayerKeys;
+	TMap<FString, float> PlayerBossDamageMap;
 
-	static FString BuildDroneReportPlayerKeyForServer(const ARaidPlayerController* RaidPC);
+	static FString BuildDroneReportPlayerKeyForServer(const APlayerController* PlayerController);
 	bool EnsureDronePartReturnManagerForServer();
 	void ClearRaidTimeLimitTimerForServer(FName Reason);
 	void HandleRaidTimeLimitExpiredForServer();

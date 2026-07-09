@@ -1319,6 +1319,114 @@ bool FDroneQ7SpawnFailedNotificationTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ8DamageContributionMapTest,
+	"DroneProto.Q8.Contribution.DamageMap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ8DamageContributionMapTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q8ContributionDamageMapWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidPlayerController* SecondPC = Context.World ? Context.World->SpawnActor<ARaidPlayerController>() : nullptr;
+	TestNotNull(TEXT("contribution world is created"), Context.World);
+	TestNotNull(TEXT("contribution primary PC is spawned"), Context.PC);
+	TestNotNull(TEXT("contribution second PC is spawned"), SecondPC);
+	TestNotNull(TEXT("contribution game mode is spawned"), GameMode);
+	if (!Context.World || !Context.PC || !SecondPC || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FString FirstPlayerKey = FString::Printf(TEXT("PC:%s"), *Context.PC->GetName());
+	const FString SecondPlayerKey = FString::Printf(TEXT("PC:%s"), *SecondPC->GetName());
+
+	TestTrue(TEXT("first positive contribution is recorded"),
+		GameMode->RecordBossDamageForServer(Context.PC, 10.0f));
+	TestTrue(TEXT("same player contribution accumulates"),
+		GameMode->RecordBossDamageForServer(Context.PC, 7.5f));
+	TestTrue(TEXT("second player contribution is recorded"),
+		GameMode->RecordBossDamageForServer(SecondPC, 25.0f));
+
+	TestTrue(TEXT("first player central damage is accumulated"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(FirstPlayerKey), 17.5f, 0.001f));
+	TestTrue(TEXT("second player central damage is accumulated"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(SecondPlayerKey), 25.0f, 0.001f));
+
+	TestFalse(TEXT("zero contribution is ignored"),
+		GameMode->RecordBossDamageForServer(Context.PC, 0.0f));
+	TestFalse(TEXT("negative contribution is ignored"),
+		GameMode->RecordBossDamageForServer(Context.PC, -3.0f));
+	TestFalse(TEXT("invalid player contribution is ignored"),
+		GameMode->RecordBossDamageForServer(nullptr, 5.0f));
+	TestTrue(TEXT("ignored damage does not mutate total"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(FirstPlayerKey), 17.5f, 0.001f));
+
+	const TArray<FDroneBossDamageContribution> SortedContributions = GameMode->GetSortedBossDamageContributionsForServer();
+	TestEqual(TEXT("sorted contribution count"), SortedContributions.Num(), 2);
+	if (SortedContributions.Num() >= 2)
+	{
+		TestEqual(TEXT("highest contribution is first"), SortedContributions[0].PlayerKey, SecondPlayerKey);
+		TestTrue(TEXT("highest contribution damage is preserved"),
+			FMath::IsNearlyEqual(SortedContributions[0].Damage, 25.0f, 0.001f));
+		TestEqual(TEXT("lower contribution is second"), SortedContributions[1].PlayerKey, FirstPlayerKey);
+	}
+
+	GameMode->ResetBossDamageContributionsForServer(FName(TEXT("Automation")));
+	TestEqual(TEXT("reset clears sorted contribution count"),
+		GameMode->GetSortedBossDamageContributionsForServer().Num(),
+		0);
+	TestTrue(TEXT("reset clears first player total"),
+		FMath::IsNearlyZero(GameMode->GetBossDamageForPlayerKeyForServer(FirstPlayerKey), 0.001f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ8DamageContributionAttackPathTest,
+	"DroneProto.Q8.Contribution.AttackPath",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ8DamageContributionAttackPathTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q8ContributionAttackPathWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("Q8 contribution attack path")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	TestNotNull(TEXT("Q8 contribution game mode is spawned"), GameMode);
+	if (!GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("Q8 contribution Pulse loadout applies"),
+		Context.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+
+	const float DamageDealt = AttackBossAndMeasureDamage(Context.Drone, Boss);
+	const FString PlayerKey = FString::Printf(TEXT("PC:%s"), *Context.PC->GetName());
+	TestTrue(TEXT("attack path deals expected boss damage"),
+		FMath::IsNearlyEqual(DamageDealt, 8.0f, 0.01f));
+	TestTrue(TEXT("central contribution records actual boss damage"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(PlayerKey), DamageDealt, 0.01f));
+	TestTrue(TEXT("CombatRecord still records actual boss damage"),
+		FMath::IsNearlyEqual(Context.Drone->GetCombatRecordForTest().BossDamage, DamageDealt, 0.01f));
+
+	TestTrue(TEXT("DroneReport is still generated from CombatRecord"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestTrue(TEXT("DroneReport boss damage still matches CombatRecord"),
+		FMath::IsNearlyEqual(Context.PC->GetLastDroneReportDataForTest().BossDamage, DamageDealt, 0.01f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartReturnManagerTest,
 	"DroneProto.D5.DronePartReturnManager.ReturnAndReplace",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

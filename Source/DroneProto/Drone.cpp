@@ -1907,6 +1907,22 @@ void ADrone::HandleAttackBossForServer()
 	}
 	const bool bBossDefeatedByThisAttack = BossHPBeforeAttack > 0.0f && Boss->GetCurrentHP() <= 0.0f;
 	AddBossDamageToCombatRecordForServer(DamageDealt, Boss);
+	if (UWorld* World = GetWorld())
+	{
+		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
+		if (!RaidGameMode)
+		{
+			for (TActorIterator<ARaidGameMode> It(World); It; ++It)
+			{
+				RaidGameMode = *It;
+				break;
+			}
+		}
+		if (RaidGameMode)
+		{
+			RaidGameMode->RecordBossDamageForServer(Cast<APlayerController>(GetController()), DamageDealt);
+		}
+	}
 	float HealAmount = 0.0f;
 	if (EquippedCorePartID == ADronePartInventory::GetCoreDrainPartID())
 	{

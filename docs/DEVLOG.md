@@ -1691,3 +1691,29 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE/manual popup Blueprint implementation and real map/spawn failure UX remain unverified and are still owner/editor tasks.
+
+---
+
+## 2026-07-09 - Q8 Server-only boss damage contribution map
+
+### Scope
+- Applied Q8 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added a server-only central boss damage contribution map for future contribution/ranking work.
+- Kept DroneReport calculation inputs, existing `FDroneCombatRecord` recording, Report UI, RPC, replication, boss HP/damage/pattern/stun values, inventory, return, loadout, RaidState, and BossState behavior unchanged.
+
+### Changes
+- Added `FDroneBossDamageContribution` and server-only `PlayerBossDamageMap` storage to `ARaidGameMode`.
+- Added `RecordBossDamageForServer()`, `GetBossDamageForPlayerKeyForServer()`, `GetSortedBossDamageContributionsForServer()`, and `ResetBossDamageContributionsForServer()`.
+- Reused the existing DroneReport PlayerKey policy for contribution keys.
+- `ADrone::HandleAttackBossForServer()` now records actual boss HP damage into the central map after the existing CombatRecord update.
+- RaidEnd resets the central contribution map only after the existing Report/return cleanup loop has run.
+
+### Verification
+- RED: Build failed after Q8 tests were added because the contribution struct and RaidGameMode record/query/reset APIs did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q8.Contribution; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 76 tests, 76 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual contribution log inspection remains unverified.
+- UI/ranking/report-display use of the central map is intentionally not implemented in Q8.

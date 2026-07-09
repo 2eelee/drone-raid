@@ -437,6 +437,7 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 	}
 
 	SetAllBossStatesForServer(EBossState::Clear, Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+	ResetBossDamageContributionsForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd part return completed Reason=%s PlayerCount=%d"),
 		*ReasonText,
@@ -710,14 +711,116 @@ UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const
 	return DronePartReturnManager;
 }
 
-FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const ARaidPlayerController* RaidPC)
+bool ARaidGameMode::RecordBossDamageForServer(APlayerController* PlayerController, float DamageAmount)
 {
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=NotAuthority Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(PlayerController),
+			DamageAmount);
+		return false;
+	}
+
+	if (DamageAmount <= KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=NoDamage Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(PlayerController),
+			DamageAmount);
+		return false;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(PlayerController);
 	if (!RaidPC)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=InvalidPlayer Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(PlayerController),
+			DamageAmount);
+		return false;
+	}
+
+	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	if (PlayerKey.IsEmpty())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=InvalidPlayerKey Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(RaidPC),
+			DamageAmount);
+		return false;
+	}
+
+	float& TotalDamage = PlayerBossDamageMap.FindOrAdd(PlayerKey);
+	TotalDamage += DamageAmount;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionDamage Player=%s Key=%s Added=%.2f Total=%.2f"),
+		*BuildRaidGameModeControllerLogString(RaidPC),
+		*PlayerKey,
+		DamageAmount,
+		TotalDamage);
+	return true;
+}
+
+float ARaidGameMode::GetBossDamageForPlayerKeyForServer(const FString& PlayerKey) const
+{
+	if (!HasAuthority() || PlayerKey.IsEmpty())
+	{
+		return 0.0f;
+	}
+
+	if (const float* Damage = PlayerBossDamageMap.Find(PlayerKey))
+	{
+		return *Damage;
+	}
+	return 0.0f;
+}
+
+TArray<FDroneBossDamageContribution> ARaidGameMode::GetSortedBossDamageContributionsForServer() const
+{
+	TArray<FDroneBossDamageContribution> Contributions;
+	if (!HasAuthority())
+	{
+		return Contributions;
+	}
+
+	Contributions.Reserve(PlayerBossDamageMap.Num());
+	for (const TPair<FString, float>& Pair : PlayerBossDamageMap)
+	{
+		FDroneBossDamageContribution Contribution;
+		Contribution.PlayerKey = Pair.Key;
+		Contribution.Damage = Pair.Value;
+		Contributions.Add(Contribution);
+	}
+
+	Contributions.Sort([](const FDroneBossDamageContribution& Left, const FDroneBossDamageContribution& Right)
+	{
+		if (FMath::IsNearlyEqual(Left.Damage, Right.Damage, 0.001f))
+		{
+			return Left.PlayerKey < Right.PlayerKey;
+		}
+		return Left.Damage > Right.Damage;
+	});
+	return Contributions;
+}
+
+void ARaidGameMode::ResetBossDamageContributionsForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 PreviousCount = PlayerBossDamageMap.Num();
+	PlayerBossDamageMap.Reset();
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionReset Reason=%s PreviousCount=%d"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		PreviousCount);
+}
+
+FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const APlayerController* PlayerController)
+{
+	if (!PlayerController)
 	{
 		return FString();
 	}
 
-	if (const APlayerState* PS = RaidPC->PlayerState)
+	if (const APlayerState* PS = PlayerController->PlayerState)
 	{
 		const FUniqueNetIdRepl& UniqueId = PS->GetUniqueId();
 		if (UniqueId.IsValid())
@@ -727,8 +830,8 @@ FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const ARaidPlayerContr
 		return FString::Printf(TEXT("PID:%d"), PS->GetPlayerId());
 	}
 
-	// 오프라인/테스트 월드에서 PlayerState가 없으면 PC 이름으로 격리한다.
-	return FString::Printf(TEXT("PC:%s"), *RaidPC->GetName());
+	// Offline/test worlds may not provide PlayerState, so isolate by PC name.
+	return FString::Printf(TEXT("PC:%s"), *PlayerController->GetName());
 }
 
 bool ARaidGameMode::TryMarkDroneReportGeneratedForServer(ARaidPlayerController* RaidPC)
