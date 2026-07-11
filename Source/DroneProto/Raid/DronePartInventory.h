@@ -5,6 +5,8 @@
 #include "DronePart.h"
 #include "DronePartInventory.generated.h"
 
+class UDataTable;
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDronePartStocksChanged);
 
 USTRUCT(BlueprintType)
@@ -32,6 +34,8 @@ class DRONEPROTO_API ADronePartInventory : public AInfo
 
 public:
 	ADronePartInventory();
+
+	virtual void BeginPlay() override;
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
@@ -81,6 +85,9 @@ public:
 	FOnDronePartStocksChanged OnPartStocksChanged;
 
 protected:
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Drone Parts|Data")
+	TObjectPtr<UDataTable> PartCountDataTable = nullptr;
+
 	UPROPERTY(ReplicatedUsing = OnRep_PartStocks, VisibleInstanceOnly, BlueprintReadOnly, Category = "Drone Parts")
 	TArray<FDronePartStock> PartStocks;
 
@@ -89,6 +96,8 @@ protected:
 
 private:
 	void InitializeDefaultStocks();
+	bool InitializeStocksFromPartCountDataTable();
+	void InitializeFallbackStocks();
 	FDronePartStock* FindStock(FName PartID);
 	const FDronePartStock* FindStock(FName PartID) const;
 };

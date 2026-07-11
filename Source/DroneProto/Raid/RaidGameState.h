@@ -38,15 +38,25 @@ public:
 	UPROPERTY(ReplicatedUsing = OnRep_RaidBoss, BlueprintReadOnly, Category = "Raid")
 	TObjectPtr<ARaidBoss> RaidBoss;
 
+	UPROPERTY(ReplicatedUsing = OnRep_RaidTimeEndServerTime, BlueprintReadOnly, Category = "Raid|Timer")
+	float RaidTimeEndServerTime = 0.0f;
+
 	UFUNCTION(BlueprintPure, Category = "Raid")
 	ADronePartInventory* GetDronePartInventory() const;
 
 	UFUNCTION(BlueprintPure, Category = "Raid")
 	ARaidBoss* GetRaidBoss() const;
 
+	UFUNCTION(BlueprintPure, Category = "Raid|Timer")
+	float GetRaidTimeEndServerTime() const;
+
+	UFUNCTION(BlueprintPure, Category = "Raid|Timer")
+	float GetRaidRemainingSeconds() const;
+
 	void SetDronePartInventory(ADronePartInventory* InDronePartInventory);
 	void SetRaidBossForServer(ARaidBoss* InRaidBoss);
 	void SetRaidStateForServer(ERaidState NewRaidState);
+	void SetRaidTimeEndServerTimeForServer(float NewRaidTimeEndServerTime);
 
 private:
 	UFUNCTION()
@@ -57,6 +67,9 @@ private:
 
 	UFUNCTION()
 	void OnRep_RaidBoss();
+
+	UFUNCTION()
+	void OnRep_RaidTimeEndServerTime();
 
 	UFUNCTION()
 	void HandleDronePartStocksChanged();

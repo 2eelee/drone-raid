@@ -8,8 +8,10 @@
 #include "Drone.h"
 #include "DronePart.h"
 #include "Raid/DronePartInventory.h"
+#include "Raid/DroneDataTableRows.h"
 #include "Raid/DroneCombatTypes.h"
 #include "Raid/DronePartReturnManager.h"
+#include "Raid/BossHUDWidget.h"
 #include "Raid/DroneReportWidget.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidBossAttackTelegraph.h"
@@ -23,6 +25,7 @@
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/DefaultPawn.h"
@@ -589,6 +592,10 @@ bool FDroneCombatFormulaTest::RunTest(const FString& Parameters)
 	ZenithInput.CurrentHP = 50.0f;
 	ZenithInput.MaxHP = 100.0f;
 	const FDroneCoreCalculationResult ZenithResult = FDroneCombatRules::CalculateCoreBonus(ZenithInput);
+	TestTrue(TEXT("Zenith base attack modifier stays 1.0"),
+		FMath::IsNearlyEqual(ZenithResult.CoreAttackModifier, 1.0f, 0.01f));
+	TestTrue(TEXT("Zenith base move speed modifier stays 1.0"),
+		FMath::IsNearlyEqual(ZenithResult.CoreMoveSpeedModifier, 1.0f, 0.01f));
 	TestTrue(TEXT("Zenith at 50 percent HP gives 1.10 bonus modifier"),
 		FMath::IsNearlyEqual(ZenithResult.CoreBonusAttackModifier, 1.10f, 0.01f));
 
@@ -596,10 +603,22 @@ bool FDroneCombatFormulaTest::RunTest(const FString& Parameters)
 	BoosterInput.CoreType = EDroneCombatCoreType::Booster;
 	BoosterInput.AccumulatedMoveDistanceMeters = 210.0f;
 	const FDroneCoreCalculationResult BoosterResult = FDroneCombatRules::CalculateCoreBonus(BoosterInput);
+	TestTrue(TEXT("Booster base attack modifier applies 0.95"),
+		FMath::IsNearlyEqual(BoosterResult.CoreAttackModifier, 0.95f, 0.01f));
+	TestTrue(TEXT("Booster base move speed modifier stays 1.0"),
+		FMath::IsNearlyEqual(BoosterResult.CoreMoveSpeedModifier, 1.0f, 0.01f));
 	TestTrue(TEXT("Booster speed bonus caps at 0.30"),
 		FMath::IsNearlyEqual(BoosterResult.MoveSpeedBonus, 0.30f, 0.01f));
 	TestTrue(TEXT("Booster attack bonus is half of speed bonus"),
 		FMath::IsNearlyEqual(BoosterResult.CoreBonusAttackModifier, 1.15f, 0.01f));
+
+	FDroneCoreCalculationInput DrainInput;
+	DrainInput.CoreType = EDroneCombatCoreType::Drain;
+	const FDroneCoreCalculationResult DrainResult = FDroneCombatRules::CalculateCoreBonus(DrainInput);
+	TestTrue(TEXT("Drain base attack modifier applies 0.85"),
+		FMath::IsNearlyEqual(DrainResult.CoreAttackModifier, 0.85f, 0.01f));
+	TestTrue(TEXT("Drain base move speed modifier applies 0.9"),
+		FMath::IsNearlyEqual(DrainResult.CoreMoveSpeedModifier, 0.9f, 0.01f));
 
 	TestTrue(TEXT("Drain heal is 12 percent of dealt damage"),
 		FMath::IsNearlyEqual(FDroneCombatRules::CalculateDrainHeal(11.0f), 1.32f, 0.01f));
@@ -642,14 +661,14 @@ bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
 	ExpectCore(EDroneCombatCoreType::Zenith, 10.0f, 100.0f, 0.0f, 1.0f, 1.02f, 0.0f, TEXT("Zenith 10 percent HP"));
 	ExpectCore(EDroneCombatCoreType::Zenith, 50.0f, 100.0f, 0.0f, 1.0f, 1.10f, 0.0f, TEXT("Zenith 50 percent HP"));
 	ExpectCore(EDroneCombatCoreType::Zenith, 100.0f, 100.0f, 0.0f, 1.0f, 1.20f, 0.0f, TEXT("Zenith 100 percent HP"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 0.0f, 1.0f, 1.0f, 0.0f, TEXT("Booster 0m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 19.99f, 1.0f, 1.0f, 0.0f, TEXT("Booster 19.99m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 20.0f, 1.0f, 1.015f, 0.03f, TEXT("Booster 20m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 40.0f, 1.0f, 1.03f, 0.06f, TEXT("Booster 40m"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 199.99f, 1.0f, 1.135f, 0.27f, TEXT("Booster just before cap"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 200.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster cap"));
-	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 1000.0f, 1.0f, 1.15f, 0.30f, TEXT("Booster over cap"));
-	ExpectCore(EDroneCombatCoreType::Drain, 100.0f, 100.0f, 200.0f, 1.0f, 1.0f, 0.0f, TEXT("Drain no unspecified penalty"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 0.0f, 0.95f, 1.0f, 0.0f, TEXT("Booster 0m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 19.99f, 0.95f, 1.0f, 0.0f, TEXT("Booster 19.99m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 20.0f, 0.95f, 1.015f, 0.03f, TEXT("Booster 20m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 40.0f, 0.95f, 1.03f, 0.06f, TEXT("Booster 40m"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 199.99f, 0.95f, 1.135f, 0.27f, TEXT("Booster just before cap"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 200.0f, 0.95f, 1.15f, 0.30f, TEXT("Booster cap"));
+	ExpectCore(EDroneCombatCoreType::Booster, 100.0f, 100.0f, 1000.0f, 0.95f, 1.15f, 0.30f, TEXT("Booster over cap"));
+	ExpectCore(EDroneCombatCoreType::Drain, 100.0f, 100.0f, 200.0f, 0.85f, 1.0f, 0.0f, TEXT("Drain base penalty"));
 
 	const auto ExpectWeapon = [this](EDroneCombatWeaponType WeaponType, int32 PulseCount, float VectorMeters, float ExpectedDamage, float ExpectedBaseDamage, float ExpectedBonusDamage, int32 ExpectedHitCount, int32 ExpectedAdditionalHitCount, bool bExpectedResetVector, int32 ExpectedPulseCount, const TCHAR* Label)
 	{
@@ -711,6 +730,22 @@ bool FDroneCombatSpecAlignmentTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(Context.Drone->GetCombatRecordForTest().BossDamage, 5.0f, 0.001f));
 
 	DestroyDroneSelectionTestContext(Context);
+
+	FDroneSelectionTestContext MoveSpeedContext = CreateDroneSelectionTestContext(TEXT("DroneQ2CoreMoveSpeedWorld"));
+	if (!MoveSpeedContext.Drone)
+	{
+		DestroyDroneSelectionTestContext(MoveSpeedContext);
+		return false;
+	}
+	TestTrue(TEXT("Drain move speed loadout applies"),
+		MoveSpeedContext.Drone->ApplyLoadout(DrainCore, NAME_None, NAME_None));
+	TestTrue(TEXT("Drain core applies 0.9 base move speed on the server path"),
+		FMath::IsNearlyEqual(MoveSpeedContext.Drone->GetCurrentMoveSpeed(), 4.05f, 0.001f));
+	TestTrue(TEXT("Booster core keeps base move speed before movement stacks"),
+		MoveSpeedContext.Drone->ApplyLoadout(ADronePartInventory::GetCoreBoosterPartID(), NAME_None, NAME_None));
+	TestTrue(TEXT("Booster zero stacks keeps 4.5 m/s base speed"),
+		FMath::IsNearlyEqual(MoveSpeedContext.Drone->GetCurrentMoveSpeed(), 4.5f, 0.001f));
+	DestroyDroneSelectionTestContext(MoveSpeedContext);
 	return true;
 }
 
@@ -718,9 +753,9 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 {
 	FDroneCombatRecord CappedBaseRecord;
 	CappedBaseRecord.SurvivalTime = 240.0f;
-	CappedBaseRecord.BossDamage = 80.0f;
-	CappedBaseRecord.BossMaxHP = 1000.0f;
-	CappedBaseRecord.BossHPOnJoin = 1000.0f;
+	CappedBaseRecord.BossDamage = 4800.0f;
+	CappedBaseRecord.BossMaxHP = 60000.0f;
+	CappedBaseRecord.BossHPOnJoin = 60000.0f;
 	CappedBaseRecord.MoveDistance = 600.0f;
 	CappedBaseRecord.HealAmount = 60.0f;
 	CappedBaseRecord.DamageTakenCount = 1;
@@ -735,7 +770,7 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("750 score maps to grade A"), CappedBaseReport.Grade, EDroneReportGrade::A);
 
 	FDroneCombatRecord LowDamageRecord = CappedBaseRecord;
-	LowDamageRecord.BossDamage = 5.0f;
+	LowDamageRecord.BossDamage = 300.0f;
 	LowDamageRecord.MoveDistance = 600.0f;
 	LowDamageRecord.HealAmount = 60.0f;
 	const FDroneReportData LowDamageReport = FDroneReportRules::BuildReportData(LowDamageRecord, false);
@@ -744,7 +779,7 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Low contribution report has no bonuses"), LowDamageReport.BonusScore, 0);
 
 	FDroneCombatRecord AllBonusRecord = CappedBaseRecord;
-	AllBonusRecord.BossDamage = 120.0f;
+	AllBonusRecord.BossDamage = 7200.0f;
 	AllBonusRecord.MoveDistance = 900.0f;
 	AllBonusRecord.HealAmount = 70.0f;
 	AllBonusRecord.DamageTakenCount = 0;
@@ -754,7 +789,7 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("All five bonus types are listed before cap"), AllBonusReport.AchievedBonusList.Num(), 5);
 
 	FDroneCombatRecord BossSlayerRecord = CappedBaseRecord;
-	BossSlayerRecord.BossDamage = 30.0f;
+	BossSlayerRecord.BossDamage = 1800.0f;
 	BossSlayerRecord.MoveDistance = 0.0f;
 	BossSlayerRecord.HealAmount = 0.0f;
 	BossSlayerRecord.DamageTakenCount = 1;
@@ -765,8 +800,8 @@ bool FDroneReportFormulaTest::RunTest(const FString& Parameters)
 		BossSlayerReport.AchievedBonusList.Contains(EDroneReportBonusType::BossSlayer));
 
 	FDroneCombatRecord LateJoinRecord = BossSlayerRecord;
-	LateJoinRecord.BossDamage = 10.0f;
-	LateJoinRecord.BossHPOnJoin = 250.0f;
+	LateJoinRecord.BossDamage = 600.0f;
+	LateJoinRecord.BossHPOnJoin = 15000.0f;
 	LateJoinRecord.CombatEndTime = 30.0f;
 	const FDroneReportData LateJoinReport = FDroneReportRules::BuildReportData(LateJoinRecord, true);
 	TestEqual(TEXT("Late join BossSlayer bonus is limited to 40"), LateJoinReport.BonusScore, 40);
@@ -926,6 +961,676 @@ bool FDronePartInventoryStockTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("unknown part count is zero"), Inventory->GetCurrentCount(TEXT("UNKNOWN_PART")), 0);
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ5DataTableSchemaRowsTest,
+	"DroneProto.Q5.DataTable.SchemaRows",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ5DataTableSchemaRowsTest::RunTest(const FString& Parameters)
+{
+	FDronePartCountRow PartRow;
+	PartRow.PartID = ADronePartInventory::GetCoreZenithPartID();
+	PartRow.Name = FText::FromString(TEXT("Zenith Core"));
+	PartRow.Type = EDronePartType::Core;
+	PartRow.MaxCount = 5;
+	PartRow.IsSelectable = true;
+	TestEqual(TEXT("part row exposes PartID"), PartRow.PartID, ADronePartInventory::GetCoreZenithPartID());
+	TestEqual(TEXT("part row exposes Name"), PartRow.Name.ToString(), FString(TEXT("Zenith Core")));
+	TestEqual(TEXT("part row exposes Type"), static_cast<uint8>(PartRow.Type), static_cast<uint8>(EDronePartType::Core));
+	TestEqual(TEXT("part row exposes MaxCount"), PartRow.MaxCount, 5);
+	TestTrue(TEXT("part row exposes IsSelectable"), PartRow.IsSelectable);
+
+	FDroneCoreRow CoreRow;
+	CoreRow.CoreID = ADronePartInventory::GetCoreDrainPartID();
+	CoreRow.AttackModifier = 0.85f;
+	CoreRow.MoveSpeedModifier = 0.9f;
+	CoreRow.EffectType = FName(TEXT("DAMAGE_TO_HEAL"));
+	CoreRow.EffectValue01 = 0.2f;
+	CoreRow.EffectValue02 = 0.0f;
+	CoreRow.EffectMaxValue = 3.0f;
+	TestEqual(TEXT("core row exposes CoreID"), CoreRow.CoreID, ADronePartInventory::GetCoreDrainPartID());
+	TestEqual(TEXT("core row exposes AttackModifier"), CoreRow.AttackModifier, 0.85f);
+	TestEqual(TEXT("core row exposes MoveSpeedModifier"), CoreRow.MoveSpeedModifier, 0.9f);
+	TestEqual(TEXT("core row exposes EffectType"), CoreRow.EffectType, FName(TEXT("DAMAGE_TO_HEAL")));
+	TestEqual(TEXT("core row exposes EffectValue01"), CoreRow.EffectValue01, 0.2f);
+	TestEqual(TEXT("core row exposes EffectValue02"), CoreRow.EffectValue02, 0.0f);
+	TestEqual(TEXT("core row exposes EffectMaxValue"), CoreRow.EffectMaxValue, 3.0f);
+
+	FDroneWeaponRow WeaponRow;
+	WeaponRow.WeaponID = ADronePartInventory::GetFractureBurstPartID();
+	WeaponRow.BaseDamage = 5.0f;
+	WeaponRow.SpecialEffectType = FName(TEXT("FRACTURE_MULTI_HIT"));
+	WeaponRow.SpecialValue01 = 3.0f;
+	WeaponRow.SpecialValue02 = 2.0f;
+	WeaponRow.SpecialMaxValue = 0.0f;
+	WeaponRow.HitCount = 4;
+	TestEqual(TEXT("weapon row exposes WeaponID"), WeaponRow.WeaponID, ADronePartInventory::GetFractureBurstPartID());
+	TestEqual(TEXT("weapon row exposes BaseDamage"), WeaponRow.BaseDamage, 5.0f);
+	TestEqual(TEXT("weapon row exposes SpecialEffectType"), WeaponRow.SpecialEffectType, FName(TEXT("FRACTURE_MULTI_HIT")));
+	TestEqual(TEXT("weapon row exposes SpecialValue01"), WeaponRow.SpecialValue01, 3.0f);
+	TestEqual(TEXT("weapon row exposes SpecialValue02"), WeaponRow.SpecialValue02, 2.0f);
+	TestEqual(TEXT("weapon row exposes SpecialMaxValue"), WeaponRow.SpecialMaxValue, 0.0f);
+	TestEqual(TEXT("weapon row exposes HitCount"), WeaponRow.HitCount, 4);
+
+	FDroneBonusRow BonusRow;
+	BonusRow.BonusID = FName(TEXT("BONUS_001"));
+	BonusRow.BonusName = FName(TEXT("BossSlayer"));
+	BonusRow.BonusDisplayName = FText::FromString(TEXT("Boss Slayer"));
+	BonusRow.BonusScore = 80;
+	BonusRow.MinCombatDuration = 60.0f;
+	BonusRow.MinBossDamageRatio = 0.03f;
+	BonusRow.MaxScore = 80;
+	TestEqual(TEXT("bonus row exposes BonusID"), BonusRow.BonusID, FName(TEXT("BONUS_001")));
+	TestEqual(TEXT("bonus row exposes BonusName"), BonusRow.BonusName, FName(TEXT("BossSlayer")));
+	TestEqual(TEXT("bonus row exposes BonusDisplayName"), BonusRow.BonusDisplayName.ToString(), FString(TEXT("Boss Slayer")));
+	TestEqual(TEXT("bonus row exposes BonusScore"), BonusRow.BonusScore, 80);
+	TestEqual(TEXT("bonus row exposes MinCombatDuration"), BonusRow.MinCombatDuration, 60.0f);
+	TestEqual(TEXT("bonus row exposes MinBossDamageRatio"), BonusRow.MinBossDamageRatio, 0.03f);
+	TestEqual(TEXT("bonus row exposes MaxScore"), BonusRow.MaxScore, 80);
+
+	FDroneGradeRow GradeRow;
+	GradeRow.Grade = EDroneReportGrade::S;
+	GradeRow.MinScore = 850.0f;
+	GradeRow.MaxScore = 1000.0f;
+	TestEqual(TEXT("grade row exposes Grade"), static_cast<uint8>(GradeRow.Grade), static_cast<uint8>(EDroneReportGrade::S));
+	TestEqual(TEXT("grade row exposes MinScore"), GradeRow.MinScore, 850.0f);
+	TestEqual(TEXT("grade row exposes MaxScore"), GradeRow.MaxScore, 1000.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ5DataTableFallbackStockTest,
+	"DroneProto.Q5.DataTable.FallbackStock",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ5DataTableFallbackStockTest::RunTest(const FString& Parameters)
+{
+	const FProperty* PartCountTableProperty = ADronePartInventory::StaticClass()->FindPropertyByName(TEXT("PartCountDataTable"));
+	TestNotNull(TEXT("inventory exposes a PartCountDataTable candidate"), PartCountTableProperty);
+	const FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(PartCountTableProperty);
+	TestNotNull(TEXT("PartCountDataTable is an object property"), ObjectProperty);
+	if (ObjectProperty)
+	{
+		TestTrue(TEXT("PartCountDataTable accepts UDataTable assets"), ObjectProperty->PropertyClass->IsChildOf(UDataTable::StaticClass()));
+	}
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Q5DataTableFallbackStockWorld")));
+	TestNotNull(TEXT("fallback stock world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("fallback inventory actor is spawned"), Inventory);
+	if (!Inventory)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	TestEqual(TEXT("fallback keeps six selectable stock rows"), Inventory->GetPartStocks().Num(), 6);
+	TestEqual(TEXT("fallback Zenith count remains 5"), Inventory->GetCurrentCount(ADronePartInventory::GetCoreZenithPartID()), 5);
+	TestEqual(TEXT("fallback Booster count remains 6"), Inventory->GetCurrentCount(ADronePartInventory::GetCoreBoosterPartID()), 6);
+	TestEqual(TEXT("fallback Drain count remains 5"), Inventory->GetCurrentCount(ADronePartInventory::GetCoreDrainPartID()), 5);
+	TestEqual(TEXT("fallback Pulse count remains 11"), Inventory->GetCurrentCount(ADronePartInventory::GetPulseLaserPartID()), 11);
+	TestEqual(TEXT("fallback Fracture count remains 10"), Inventory->GetCurrentCount(ADronePartInventory::GetFractureBurstPartID()), 10);
+	TestEqual(TEXT("fallback Vector count remains 11"), Inventory->GetCurrentCount(ADronePartInventory::GetVectorCannonPartID()), 11);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ5DataTablePartCountLoadTest,
+	"DroneProto.Q5.DataTable.PartCountLoad",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ5DataTablePartCountLoadTest::RunTest(const FString& Parameters)
+{
+	UDataTable* PartCountTable = NewObject<UDataTable>();
+	TestNotNull(TEXT("transient part count data table is created"), PartCountTable);
+	if (!PartCountTable)
+	{
+		return false;
+	}
+	PartCountTable->RowStruct = FDronePartCountRow::StaticStruct();
+
+	FDronePartCountRow SelectableRow;
+	SelectableRow.PartID = FName(TEXT("CORE_TEST"));
+	SelectableRow.Name = FText::FromString(TEXT("Test Core"));
+	SelectableRow.Type = EDronePartType::Core;
+	SelectableRow.MaxCount = 2;
+	SelectableRow.IsSelectable = true;
+	PartCountTable->AddRow(FName(TEXT("PART_CORE_TEST")), SelectableRow);
+
+	FDronePartCountRow NonSelectableRow;
+	NonSelectableRow.PartID = FName(TEXT("WEAPON_HIDDEN"));
+	NonSelectableRow.Name = FText::FromString(TEXT("Hidden Weapon"));
+	NonSelectableRow.Type = EDronePartType::Weapon;
+	NonSelectableRow.MaxCount = 99;
+	NonSelectableRow.IsSelectable = false;
+	PartCountTable->AddRow(FName(TEXT("PART_WEAPON_HIDDEN")), NonSelectableRow);
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Q5DataTablePartCountLoadWorld")));
+	TestNotNull(TEXT("part count load world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("part count load inventory is spawned"), Inventory);
+	if (!Inventory)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	FObjectPropertyBase* ObjectProperty = CastField<FObjectPropertyBase>(
+		ADronePartInventory::StaticClass()->FindPropertyByName(TEXT("PartCountDataTable")));
+	TestNotNull(TEXT("PartCountDataTable property can be assigned for tests"), ObjectProperty);
+	if (!ObjectProperty)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	ObjectProperty->SetObjectPropertyValue_InContainer(Inventory, PartCountTable);
+	Inventory->DispatchBeginPlay();
+
+	TestEqual(TEXT("data table load replaces fallback row count"), Inventory->GetPartStocks().Num(), 1);
+	TestEqual(TEXT("data table selectable row sets current count from max"), Inventory->GetCurrentCount(FName(TEXT("CORE_TEST"))), 2);
+	TestEqual(TEXT("data table selectable row sets max count"), Inventory->GetMaxCount(FName(TEXT("CORE_TEST"))), 2);
+	TestEqual(TEXT("data table excludes non-selectable rows"), Inventory->GetCurrentCount(FName(TEXT("WEAPON_HIDDEN"))), 0);
+
+	EDronePartType LoadedType = EDronePartType::Weapon;
+	TestTrue(TEXT("data table row registers part type"), Inventory->GetPartType(FName(TEXT("CORE_TEST")), LoadedType));
+	TestEqual(TEXT("data table row preserves part type"), static_cast<uint8>(LoadedType), static_cast<uint8>(EDronePartType::Core));
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ6RaidTimerReplicationTest,
+	"DroneProto.Q6.RaidHUD.RaidTimerReplication",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ6RaidTimerReplicationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q6RaidTimerReplicationWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("raid timer world is created"), Context.World);
+	TestNotNull(TEXT("raid timer game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("raid timer game mode is spawned"), GameMode);
+	if (!Context.World || !Context.GameState || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	TestTrue(TEXT("raid timer duration is test-configurable"),
+		SetFloatPropertyForAutomationTest(GameMode, FName(TEXT("RaidTimeLimitSeconds")), 180.0f));
+	GameMode->StartRaidTimeLimitTimerForServer();
+
+	TestTrue(TEXT("raid timer end server time is set"),
+		Context.GameState->GetRaidTimeEndServerTime() > Context.World->GetTimeSeconds());
+	TestTrue(TEXT("raid timer remaining seconds clamps to 180 max"),
+		Context.GameState->GetRaidRemainingSeconds() > 0.0f
+		&& Context.GameState->GetRaidRemainingSeconds() <= 180.0f);
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() + 240.0f);
+	TestEqual(TEXT("manual future end time clamps display remaining to 180"),
+		Context.GameState->GetRaidRemainingSeconds(),
+		180.0f);
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() - 1.0f);
+	TestEqual(TEXT("past end time clamps remaining to zero"),
+		Context.GameState->GetRaidRemainingSeconds(),
+		0.0f);
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(0.0f);
+	TestEqual(TEXT("cleared end time has zero remaining"),
+		Context.GameState->GetRaidRemainingSeconds(),
+		0.0f);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ6BossHUDWidgetTest,
+	"DroneProto.Q6.RaidHUD.BossHUDWidget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
+{
+	UBossHUDWidget* EmptyWidget = NewObject<UBossHUDWidget>();
+	TestNotNull(TEXT("empty boss HUD widget is created"), EmptyWidget);
+	if (!EmptyWidget)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("boss HUD without world has zero HP percent"), EmptyWidget->GetBossHPPercent(), 0.0f);
+	TestEqual(TEXT("boss HUD without world has empty HP text"), EmptyWidget->GetBossHPText().ToString(), FString(TEXT("0 / 0")));
+	TestEqual(TEXT("boss HUD without world has zero remaining seconds"), EmptyWidget->GetRaidRemainingSeconds(), 0.0f);
+	TestEqual(TEXT("boss HUD without world has zero timer text"), EmptyWidget->GetRaidTimerText().ToString(), FString(TEXT("00:00")));
+
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q6BossHUDWidgetWorld"));
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossHUDWidget* Widget = Context.World ? NewObject<UBossHUDWidget>(Context.World) : nullptr;
+	TestNotNull(TEXT("boss HUD world is created"), Context.World);
+	TestNotNull(TEXT("boss HUD game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("boss HUD boss is spawned"), Boss);
+	TestNotNull(TEXT("boss HUD widget is created"), Widget);
+	if (!Context.World || !Context.GameState || !Boss || !Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidBossForServer(Boss);
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() * 0.25f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss HUD reads replicated boss HP percent"),
+		FMath::IsNearlyEqual(Widget->GetBossHPPercent(), 0.75f, 0.001f));
+	TestEqual(TEXT("boss HUD builds HP text"),
+		Widget->GetBossHPText().ToString(),
+		FString(TEXT("45000 / 60000")));
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() + 125.0f);
+	TestTrue(TEXT("boss HUD reads raid remaining seconds"),
+		FMath::IsNearlyEqual(Widget->GetRaidRemainingSeconds(), 125.0f, 0.001f));
+	TestEqual(TEXT("boss HUD builds mm:ss timer text"),
+		Widget->GetRaidTimerText().ToString(),
+		FString(TEXT("02:05")));
+
+	TestTrue(TEXT("boss MaxHP is adjustable for safety test"),
+		SetFloatPropertyForAutomationTest(Boss, FName(TEXT("MaxHP")), 0.0f));
+	Widget->RefreshBossHUD();
+	TestEqual(TEXT("boss HUD clamps zero MaxHP percent safely"), Widget->GetBossHPPercent(), 0.0f);
+	TestEqual(TEXT("boss HUD clamps zero MaxHP text safely"),
+		Widget->GetBossHPText().ToString(),
+		FString(TEXT("0 / 0")));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ11BossHUDObservedBossFallbackTest,
+	"DroneProto.Q11.UI.BossHUDObservedBossFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ11BossHUDObservedBossFallbackTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q11BossHUDObservedBossFallbackWorld"));
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossHUDWidget* Widget = Context.PC ? NewObject<UBossHUDWidget>(Context.PC) : nullptr;
+	TestNotNull(TEXT("observed boss fallback world is created"), Context.World);
+	TestNotNull(TEXT("observed boss fallback game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("observed boss fallback PC is spawned"), Context.PC);
+	TestNotNull(TEXT("observed boss fallback drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("observed boss fallback boss is spawned"), Boss);
+	TestNotNull(TEXT("observed boss fallback widget is created"), Widget);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone || !Boss || !Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidBossForServer(Boss);
+	TestTrue(TEXT("PC target assignment succeeds before GameState boss is cleared"),
+		Context.PC->AssignBossTargetForServer());
+	Context.GameState->SetRaidBossForServer(nullptr);
+
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() * 0.50f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss HUD falls back to owning PC target boss when GameState boss is not available"),
+		FMath::IsNearlyEqual(Widget->GetBossHPPercent(), 0.50f, 0.001f));
+	TestEqual(TEXT("boss HUD fallback builds HP text from owning PC target"),
+		Widget->GetBossHPText().ToString(),
+		FString(TEXT("30000 / 60000")));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ11BossHUDPlayerControllerHookTest,
+	"DroneProto.Q11.UI.BossHUDPlayerControllerHooks",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ11BossHUDPlayerControllerHookTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q11BossHUDPlayerControllerHookWorld"));
+	TestNotNull(TEXT("boss HUD hook world is created"), Context.World);
+	TestNotNull(TEXT("boss HUD hook PC is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestFalse(TEXT("boss HUD starts hidden"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+	Context.PC->ShowBossHUDForLocalPlayer();
+	TestFalse(TEXT("missing BossHUDWidgetClass skips without creating a visible widget"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	Context.PC->RefreshBossHUDForLocalPlayer();
+	Context.PC->HideBossHUDForLocalPlayer();
+	TestFalse(TEXT("hide keeps missing-class boss HUD hidden"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	Context.PC->Client_NotifyRaidReadyResult_Implementation(
+		true,
+		TEXT("Q11 ready"),
+		ADronePartInventory::GetCoreZenithPartID(),
+		ADronePartInventory::GetPulseLaserPartID(),
+		ADronePartInventory::GetFractureBurstPartID());
+	TestFalse(TEXT("ready success show path still skips safely when class is unset"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	FDroneReportData ReportData;
+	ReportData.bIsReportGenerated = true;
+	Context.PC->Client_ReceiveDroneReport_Implementation(ReportData);
+	TestFalse(TEXT("report display path hides boss HUD before report UI"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	Context.PC->SetSuppressRaidLoadFailedLobbyTravelForTest(true);
+	Context.PC->HandleRaidLoadFailedForClient(FName(TEXT("Q11LoadFailed")), FName(TEXT("LobbyMap")));
+	TestFalse(TEXT("load failure path hides boss HUD before lobby return"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ11BossHUDSourceBoundaryTest,
+	"DroneProto.Q11.UI.BossHUDSourceBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ11BossHUDSourceBoundaryTest::RunTest(const FString& Parameters)
+{
+	const FString SourceRoot = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid");
+	FString RaidPlayerControllerHeaderSource;
+	FString RaidPlayerControllerSource;
+	FString BossHUDWidgetHeaderSource;
+	FString BossHUDWidgetSource;
+	const bool bHeaderLoaded = FFileHelper::LoadFileToString(
+		RaidPlayerControllerHeaderSource,
+		*(SourceRoot / TEXT("RaidPlayerController.h")));
+	const bool bSourceLoaded = FFileHelper::LoadFileToString(
+		RaidPlayerControllerSource,
+		*(SourceRoot / TEXT("RaidPlayerController.cpp")));
+	const bool bBossHUDHeaderLoaded = FFileHelper::LoadFileToString(
+		BossHUDWidgetHeaderSource,
+		*(SourceRoot / TEXT("BossHUDWidget.h")));
+	const bool bBossHUDSourceLoaded = FFileHelper::LoadFileToString(
+		BossHUDWidgetSource,
+		*(SourceRoot / TEXT("BossHUDWidget.cpp")));
+	TestTrue(TEXT("raid player controller header loads"), bHeaderLoaded);
+	TestTrue(TEXT("raid player controller source loads"), bSourceLoaded);
+	TestTrue(TEXT("boss HUD widget header loads"), bBossHUDHeaderLoaded);
+	TestTrue(TEXT("boss HUD widget source loads"), bBossHUDSourceLoaded);
+	if (!bHeaderLoaded || !bSourceLoaded || !bBossHUDHeaderLoaded || !bBossHUDSourceLoaded)
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("boss HUD widget class is editor-assignable"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("TSubclassOf<UBossHUDWidget> BossHUDWidgetClass")));
+	TestTrue(TEXT("boss HUD widget instance is transient"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("TObjectPtr<UBossHUDWidget> BossHUDWidget")));
+	TestTrue(TEXT("boss HUD show hook exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("ShowBossHUDForLocalPlayer")));
+	TestTrue(TEXT("boss HUD hide hook exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("HideBossHUDForLocalPlayer")));
+	TestTrue(TEXT("boss HUD refresh hook exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("RefreshBossHUDForLocalPlayer")));
+	TestTrue(TEXT("boss HUD visibility getter exists for null-safe automation"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("IsBossHUDVisibleForLocalPlayer")));
+
+	TestTrue(TEXT("boss HUD show implementation is local-player only"),
+		RaidPlayerControllerSource.Contains(TEXT("void ARaidPlayerController::ShowBossHUDForLocalPlayer()"))
+		&& RaidPlayerControllerSource.Contains(TEXT("if (!IsLocalController())")));
+	TestTrue(TEXT("boss HUD show implementation skips dedicated server"),
+		RaidPlayerControllerSource.Contains(TEXT("if (GetNetMode() == NM_DedicatedServer)")));
+	TestTrue(TEXT("boss HUD show implementation adds only the BossHUD widget to viewport"),
+		RaidPlayerControllerSource.Contains(TEXT("BossHUDWidget->AddToViewport()")));
+	TestTrue(TEXT("ready success path shows boss HUD after part select is hidden"),
+		RaidPlayerControllerSource.Contains(TEXT("HideDronePartSelectUI();\r\n\tShowBossHUDForLocalPlayer();"))
+		|| RaidPlayerControllerSource.Contains(TEXT("HideDronePartSelectUI();\n\tShowBossHUDForLocalPlayer();")));
+	TestTrue(TEXT("report path hides boss HUD before report widget display"),
+		RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\r\n\t\tShowDroneReportWidget(ReportData);"))
+		|| RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\n\t\tShowDroneReportWidget(ReportData);")));
+	TestTrue(TEXT("load failure path hides boss HUD before return-to-lobby handling"),
+		RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\r\n\tReturnToLobbyForRaidLoadFailure"))
+		|| RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\n\tReturnToLobbyForRaidLoadFailure")));
+	TestTrue(TEXT("boss HUD has a throttled native tick refresh path"),
+		BossHUDWidgetHeaderSource.Contains(TEXT("NativeTick"))
+		&& BossHUDWidgetSource.Contains(TEXT("BossHUDRefreshIntervalSeconds")));
+	TestTrue(TEXT("boss HUD can fall back to owning raid player controller"),
+		BossHUDWidgetSource.Contains(TEXT("GetOwningRaidPlayerController"))
+		&& BossHUDWidgetSource.Contains(TEXT("GetCurrentTargetBoss")));
+	TestTrue(TEXT("boss HUD logs refresh reasons in DR_SUMMARY format"),
+		BossHUDWidgetSource.Contains(TEXT("[DR_SUMMARY] UIRefresh BossHUD Reason=")));
+	TestTrue(TEXT("boss HUD logs missing observed boss separately from missing game state"),
+		BossHUDWidgetSource.Contains(TEXT("BossHUDSkipped Reason=NoBoss"))
+		&& BossHUDWidgetSource.Contains(TEXT("BossHUDSkipped Reason=NoGameState")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ7RaidLoadFailedReturnToLobbyTest,
+	"DroneProto.Q7.RaidLoadFailed.ReturnToLobby",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ7RaidLoadFailedReturnToLobbyTest::RunTest(const FString& Parameters)
+{
+	ARaidPlayerController* PC = NewObject<ARaidPlayerController>();
+	TestNotNull(TEXT("raid load failed PC is created"), PC);
+	if (!PC)
+	{
+		return false;
+	}
+
+	PC->SetSuppressRaidLoadFailedLobbyTravelForTest(true);
+	PC->HandleRaidLoadFailedForClient(FName(TEXT("MapLoadFailed")), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("raid load failure stores reason"), PC->GetLastRaidLoadFailedReasonForTest(), FName(TEXT("MapLoadFailed")));
+	TestEqual(TEXT("raid load failure stores target map"), PC->GetLastRaidLoadFailedTargetMapForTest(), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("raid load failure requests one lobby return"), PC->GetRaidLoadFailedReturnToLobbyCountForTest(), 1);
+
+	PC->HandleRaidLoadFailedForClient(FName(TEXT("MapLoadFailed")), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("duplicate raid load failure does not double-return to lobby"), PC->GetRaidLoadFailedReturnToLobbyCountForTest(), 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ7SpawnFailedNotificationTest,
+	"DroneProto.Q7.RaidLoadFailed.SpawnFailedNotification",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ7SpawnFailedNotificationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q7SpawnFailedNotificationWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("spawn failed world is created"), Context.World);
+	TestNotNull(TEXT("spawn failed PC is spawned"), Context.PC);
+	TestNotNull(TEXT("spawn failed game mode is spawned"), GameMode);
+	if (!Context.World || !Context.PC || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.PC->SetSuppressRaidLoadFailedLobbyTravelForTest(true);
+	TestTrue(TEXT("spawn failure mock notifies raid PC"),
+		GameMode->NotifyRaidSpawnFailedForTest(Context.PC, FName(TEXT("SpawnFailed"))));
+	TestEqual(TEXT("spawn failure stores reason"), Context.PC->GetLastRaidLoadFailedReasonForTest(), FName(TEXT("SpawnFailed")));
+	TestEqual(TEXT("spawn failure targets LobbyMap"), Context.PC->GetLastRaidLoadFailedTargetMapForTest(), FName(TEXT("LobbyMap")));
+	TestEqual(TEXT("spawn failure requests one lobby return"), Context.PC->GetRaidLoadFailedReturnToLobbyCountForTest(), 1);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ8DamageContributionMapTest,
+	"DroneProto.Q8.Contribution.DamageMap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ8DamageContributionMapTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q8ContributionDamageMapWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidPlayerController* SecondPC = Context.World ? Context.World->SpawnActor<ARaidPlayerController>() : nullptr;
+	TestNotNull(TEXT("contribution world is created"), Context.World);
+	TestNotNull(TEXT("contribution primary PC is spawned"), Context.PC);
+	TestNotNull(TEXT("contribution second PC is spawned"), SecondPC);
+	TestNotNull(TEXT("contribution game mode is spawned"), GameMode);
+	if (!Context.World || !Context.PC || !SecondPC || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FString FirstPlayerKey = FString::Printf(TEXT("PC:%s"), *Context.PC->GetName());
+	const FString SecondPlayerKey = FString::Printf(TEXT("PC:%s"), *SecondPC->GetName());
+
+	TestTrue(TEXT("first positive contribution is recorded"),
+		GameMode->RecordBossDamageForServer(Context.PC, 10.0f));
+	TestTrue(TEXT("same player contribution accumulates"),
+		GameMode->RecordBossDamageForServer(Context.PC, 7.5f));
+	TestTrue(TEXT("second player contribution is recorded"),
+		GameMode->RecordBossDamageForServer(SecondPC, 25.0f));
+
+	TestTrue(TEXT("first player central damage is accumulated"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(FirstPlayerKey), 17.5f, 0.001f));
+	TestTrue(TEXT("second player central damage is accumulated"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(SecondPlayerKey), 25.0f, 0.001f));
+
+	TestFalse(TEXT("zero contribution is ignored"),
+		GameMode->RecordBossDamageForServer(Context.PC, 0.0f));
+	TestFalse(TEXT("negative contribution is ignored"),
+		GameMode->RecordBossDamageForServer(Context.PC, -3.0f));
+	TestFalse(TEXT("invalid player contribution is ignored"),
+		GameMode->RecordBossDamageForServer(nullptr, 5.0f));
+	TestTrue(TEXT("ignored damage does not mutate total"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(FirstPlayerKey), 17.5f, 0.001f));
+
+	const TArray<FDroneBossDamageContribution> SortedContributions = GameMode->GetSortedBossDamageContributionsForServer();
+	TestEqual(TEXT("sorted contribution count"), SortedContributions.Num(), 2);
+	if (SortedContributions.Num() >= 2)
+	{
+		TestEqual(TEXT("highest contribution is first"), SortedContributions[0].PlayerKey, SecondPlayerKey);
+		TestTrue(TEXT("highest contribution damage is preserved"),
+			FMath::IsNearlyEqual(SortedContributions[0].Damage, 25.0f, 0.001f));
+		TestEqual(TEXT("lower contribution is second"), SortedContributions[1].PlayerKey, FirstPlayerKey);
+	}
+
+	GameMode->ResetBossDamageContributionsForServer(FName(TEXT("Automation")));
+	TestEqual(TEXT("reset clears sorted contribution count"),
+		GameMode->GetSortedBossDamageContributionsForServer().Num(),
+		0);
+	TestTrue(TEXT("reset clears first player total"),
+		FMath::IsNearlyZero(GameMode->GetBossDamageForPlayerKeyForServer(FirstPlayerKey), 0.001f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ8DamageContributionAttackPathTest,
+	"DroneProto.Q8.Contribution.AttackPath",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ8DamageContributionAttackPathTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q8ContributionAttackPathWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = nullptr;
+	if (!PrepareBattleAttackTest(*this, Context, Boss, TEXT("Q8 contribution attack path")))
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	TestNotNull(TEXT("Q8 contribution game mode is spawned"), GameMode);
+	if (!GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("Q8 contribution Pulse loadout applies"),
+		Context.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+
+	const float DamageDealt = AttackBossAndMeasureDamage(Context.Drone, Boss);
+	const FString PlayerKey = FString::Printf(TEXT("PC:%s"), *Context.PC->GetName());
+	TestTrue(TEXT("attack path deals expected boss damage"),
+		FMath::IsNearlyEqual(DamageDealt, 8.0f, 0.01f));
+	TestTrue(TEXT("central contribution records actual boss damage"),
+		FMath::IsNearlyEqual(GameMode->GetBossDamageForPlayerKeyForServer(PlayerKey), DamageDealt, 0.01f));
+	TestTrue(TEXT("CombatRecord still records actual boss damage"),
+		FMath::IsNearlyEqual(Context.Drone->GetCombatRecordForTest().BossDamage, DamageDealt, 0.01f));
+
+	TestTrue(TEXT("DroneReport is still generated from CombatRecord"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestTrue(TEXT("DroneReport boss damage still matches CombatRecord"),
+		FMath::IsNearlyEqual(Context.PC->GetLastDroneReportDataForTest().BossDamage, DamageDealt, 0.01f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ9BossPatternSpecBoundaryTest,
+	"DroneProto.Q9.BossPatternSpecBoundary.PlaceholderGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ9BossPatternSpecBoundaryTest::RunTest(const FString& Parameters)
+{
+	const FString RaidBossHeaderPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/RaidBoss.h");
+	const FString AgentsPath = FPaths::ProjectDir() / TEXT("AGENTS.md");
+
+	FString RaidBossHeaderSource;
+	FString AgentsSource;
+	TestTrue(TEXT("RaidBoss header loads for Q9 boundary check"),
+		FFileHelper::LoadFileToString(RaidBossHeaderSource, *RaidBossHeaderPath));
+	TestTrue(TEXT("AGENTS.md loads for Q9 boundary check"),
+		FFileHelper::LoadFileToString(AgentsSource, *AgentsPath));
+	if (RaidBossHeaderSource.IsEmpty() || AgentsSource.IsEmpty())
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("RaidBoss header declares Q9 boss pattern spec boundary"),
+		RaidBossHeaderSource.Contains(TEXT("Q9_SPEC_BOUNDARY_BOSS_PATTERN_STUN")));
+	TestTrue(TEXT("RaidBoss header marks pattern and stun values as placeholders"),
+		RaidBossHeaderSource.Contains(TEXT("placeholder until boss pattern/stun source spec is available")));
+	TestTrue(TEXT("RaidBoss header keeps bIsStunned separate from BossState"),
+		RaidBossHeaderSource.Contains(TEXT("Do not merge bIsStunned into BossState")));
+	TestTrue(TEXT("RaidBoss header documents no natural stun trigger"),
+		RaidBossHeaderSource.Contains(TEXT("No natural stun trigger is specified")));
+	TestTrue(TEXT("AGENTS.md documents the boss pattern spec boundary"),
+		AgentsSource.Contains(TEXT("Q9 Boss Pattern/Stun Spec Boundary")));
+	TestTrue(TEXT("AGENTS.md forbids pattern/stun expansion before source spec"),
+		AgentsSource.Contains(TEXT("Do not extend boss pattern or stun behavior before the source spec exists")));
+
+	TestTrue(TEXT("placeholder pattern interval remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternIntervalSeconds = 6.0f")));
+	TestTrue(TEXT("placeholder pattern radius remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternRadiusCm = 300.0f")));
+	TestTrue(TEXT("placeholder pattern damage remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternDamage = 25")));
+	TestTrue(TEXT("placeholder pattern telegraph remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("BossPatternTelegraphSeconds = 1.0f")));
+	TestTrue(TEXT("placeholder stun multiplier remains unchanged"),
+		RaidBossHeaderSource.Contains(TEXT("StunDamageMultiplier = 1.5f")));
+
 	return true;
 }
 
@@ -1159,6 +1864,95 @@ bool FDronePlayerSelectionStateTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("late join selected weapon copied to equipped slot"), LateJoinPC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon), VectorCannon);
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidStateDraftingFlowTest,
+	"DroneProto.Q3.RaidState.DraftingFlow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidStateDraftingFlowTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("RaidStateDraftingFlowWorld"), ReturnManager);
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+
+	TestNotNull(TEXT("drafting flow world is created"), Context.World);
+	TestNotNull(TEXT("drafting flow game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("drafting flow inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("drafting flow player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drafting flow drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("drafting flow return manager is created"), ReturnManager);
+	TestNotNull(TEXT("drafting flow game mode is spawned"), GameMode);
+	if (!Context.World || !Context.GameState || !Context.Inventory || !Context.PC || !Context.Drone || !ReturnManager || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestEqual(TEXT("raid starts Waiting before the first selection entry"), Context.GameState->RaidState, ERaidState::Waiting);
+
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::LeftWeapon, PulseLaser);
+	TestEqual(TEXT("first player selection entry selects pulse"), Context.PC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon), PulseLaser);
+	TestEqual(TEXT("first player selection entry moves the global raid to Drafting"),
+		Context.GameState->RaidState,
+		ERaidState::Drafting);
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("Ready success moves player into battle"),
+		Context.PC->GetPlayerSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Ready success moves the global raid from Drafting to Battle"),
+		Context.GameState->RaidState,
+		ERaidState::Battle);
+
+	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
+	TestEqual(TEXT("RaidEnd keeps the global End transition"),
+		Context.GameState->RaidState,
+		ERaidState::End);
+
+	ARaidPlayerController* LateJoinPC = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* LateJoinDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("late join player controller is spawned after End"), LateJoinPC);
+	TestNotNull(TEXT("late join drone is spawned after End"), LateJoinDrone);
+	if (!LateJoinPC || !LateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(LateJoinPC);
+	LateJoinPC->Possess(LateJoinDrone);
+	LateJoinPC->SetDronePartReturnManagerForTest(ReturnManager);
+
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+	LateJoinPC->Server_RequestSelectPart_Implementation(EPartSlot::RightWeapon, VectorCannon);
+	TestEqual(TEXT("late join selection after End does not move the raid back to Drafting"),
+		Context.GameState->RaidState,
+		ERaidState::End);
+	TestEqual(TEXT("late join selection after End can remain pending"),
+		LateJoinPC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		VectorCannon);
+	LateJoinPC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("late join Ready after End does not enter InBattle"),
+		LateJoinPC->GetPlayerSelectionState(),
+		EPlayerSelectionState::Selecting);
+	TestEqual(TEXT("late join Ready after End keeps selected weapon pending"),
+		LateJoinPC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon),
+		VectorCannon);
+	TestEqual(TEXT("late join Ready after End does not equip weapon"),
+		LateJoinPC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+	TestEqual(TEXT("late join Ready after End does not move the global raid back to Battle"),
+		Context.GameState->RaidState,
+		ERaidState::End);
+
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 
@@ -1760,8 +2554,8 @@ bool FDroneFractureBurstCombatTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("Fracture plus Fracture with CORE_002 loadout applies"),
 		Context.Drone->ApplyLoadout(ADronePartInventory::GetCoreBoosterPartID(), FractureBurst, FractureBurst));
-	TestTrue(TEXT("Fracture plus Fracture with no movement keeps base 22 damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 22.0f, 0.01f));
+	TestTrue(TEXT("Fracture plus Fracture with CORE_002 applies 0.95 base modifier"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 20.9f, 0.01f));
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -1823,10 +2617,10 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 		Context.Drone->ApplyLoadout(DrainCore, FractureBurst, FractureBurst));
 	Context.Drone->ApplyDamageForServer(20, FName(TEXT("Automation")));
 	const float HPBeforeFractureDrain = Context.Drone->GetHealthValueForTest();
-	TestTrue(TEXT("Drain Fracture plus Fracture deals unmodified 22 damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 22.0f, 0.01f));
+	TestTrue(TEXT("Drain Fracture plus Fracture applies 0.85 base modifier"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 18.7f, 0.01f));
 	TestTrue(TEXT("Drain heals from total Fracture damage once per input"),
-		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.64f, 0.01f));
+		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeFractureDrain + 2.244f, 0.01f));
 
 	TestTrue(TEXT("Drain with empty weapons loadout applies"),
 		Context.Drone->ApplyLoadout(DrainCore, NAME_None, NAME_None));
@@ -1843,8 +2637,8 @@ bool FDroneDrainCoreCombatTest::RunTest(const FString& Parameters)
 	AttackBossAndMeasureDamage(Context.Drone, Boss);
 	AttackBossAndMeasureDamage(Context.Drone, Boss);
 	const float HPBeforeStrongDrain = Context.Drone->GetHealthValueForTest();
-	TestTrue(TEXT("third Drain double Pulse attack deals capped-heal damage"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 36.0f, 0.01f));
+	TestTrue(TEXT("third Drain double Pulse attack applies base modifier before capped heal"),
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.6f, 0.01f));
 	TestTrue(TEXT("Drain heal is capped at 3 per attack input"),
 		FMath::IsNearlyEqual(Context.Drone->GetHealthValueForTest(), HPBeforeStrongDrain + 3.0f, 0.01f));
 
@@ -1893,7 +2687,7 @@ bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("movement setup accumulates 40 meters for Booster"),
 		FMath::IsNearlyEqual(Context.Drone->GetBoosterAccumulatedMoveDistanceForTest(), 40.0f, 0.01f));
 	TestTrue(TEXT("double Vector uses capped damage and Booster attack bonus"),
-		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 30.9f, 0.01f));
+		FMath::IsNearlyEqual(AttackBossAndMeasureDamage(Context.Drone, Boss), 29.355f, 0.01f));
 	TestTrue(TEXT("Vector attack resets Vector distance only"),
 		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistanceForTest(), 0.001f));
 	TestTrue(TEXT("Vector attack keeps Booster distance"),
@@ -1901,7 +2695,7 @@ bool FDroneVectorBoosterCombatRecordTest::RunTest(const FString& Parameters)
 
 	const FDroneCombatRecord Record = Context.Drone->GetCombatRecordForTest();
 	TestTrue(TEXT("CombatRecord accumulates boss damage"),
-		FMath::IsNearlyEqual(Record.BossDamage, 30.9f, 0.01f));
+		FMath::IsNearlyEqual(Record.BossDamage, 29.355f, 0.01f));
 	TestTrue(TEXT("CombatRecord accumulates move distance"),
 		FMath::IsNearlyEqual(Record.MoveDistance, 40.0f, 0.01f));
 	TestTrue(TEXT("CombatRecord stores boss max HP for ratio calculation"),
@@ -2213,6 +3007,36 @@ bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
 		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
 	TestTrue(TEXT("C without direction leaves server location unchanged"),
 		Context.Drone->GetActorLocation().Equals(LocationBeforeZeroDodge, 0.1f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossSpecMaxHPTest,
+	"DroneProto.Q1.RaidBoss.SpecMaxHP",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossSpecMaxHPTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidBossSpecMaxHPWorld"));
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	TestNotNull(TEXT("Q1 boss is spawned"), Boss);
+	if (!Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("Q1 boss MaxHP matches current 60000 spec"),
+		FMath::IsNearlyEqual(Boss->GetMaxHP(), 60000.0f, 0.01f));
+	TestTrue(TEXT("Q1 boss CurrentHP initializes from MaxHP"),
+		FMath::IsNearlyEqual(Boss->GetCurrentHP(), Boss->GetMaxHP(), 0.01f));
+
+	const float HPBeforeDamage = Boss->GetCurrentHP();
+	Boss->ApplyDamageForServer(1000.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("Q1 1000 damage is chip damage against 60000 HP boss"),
+		FMath::IsNearlyEqual(Boss->GetCurrentHP(), HPBeforeDamage - 1000.0f, 0.01f));
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -3181,6 +4005,127 @@ bool FDronePOR18StatsRecalcGuardTest::RunTest(const FString& Parameters)
 		HealthAfterDamage);
 	DestroyDroneSelectionTestContext(Context);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossStateJoinGateTest,
+	"DroneProto.Q4.RaidBoss.BossStateJoinGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossStateJoinGateTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q4BossStateJoinGateWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+
+	TestNotNull(TEXT("boss state gate world is created"), Context.World);
+	TestNotNull(TEXT("boss state gate game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("boss state gate inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("boss state gate player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("boss state gate drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("boss state gate game mode is spawned"), GameMode);
+	TestNotNull(TEXT("boss state gate boss is spawned"), Boss);
+	if (!Context.World || !Context.GameState || !Context.Inventory || !Context.PC || !Context.Drone || !GameMode || !Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	Context.GameState->SetRaidBossForServer(Boss);
+
+	TestEqual(TEXT("boss starts in Spawn state"), Boss->GetBossState(), EBossState::Spawn);
+	FName RejectReason;
+	TestTrue(TEXT("Waiting/Drafting with Spawn boss accepts raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("accepted join has no reject reason"), RejectReason, NAME_None);
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("Ready moves raid to Battle"), Context.GameState->RaidState, ERaidState::Battle);
+	TestEqual(TEXT("Ready/pattern start moves boss to Battle"), Boss->GetBossState(), EBossState::Battle);
+
+	ARaidPlayerController* BattleLateJoinPC = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* BattleLateJoinDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("battle late join PC is spawned"), BattleLateJoinPC);
+	TestNotNull(TEXT("battle late join drone is spawned"), BattleLateJoinDrone);
+	if (!BattleLateJoinPC || !BattleLateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	Context.World->AddController(BattleLateJoinPC);
+	BattleLateJoinPC->Possess(BattleLateJoinDrone);
+	BattleLateJoinPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("Battle late join Ready remains allowed"), BattleLateJoinPC->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Battle late join keeps boss in Battle"), Boss->GetBossState(), EBossState::Battle);
+
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() + 1.0f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss HP defeat flag remains HP based"), Boss->IsDefeated());
+	TestEqual(TEXT("boss death moves BossState to Dead"), Boss->GetBossState(), EBossState::Dead);
+	TestFalse(TEXT("Dead boss rejects raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("Dead boss reject reason is BossDead"), RejectReason, FName(TEXT("BossDead")));
+
+	ARaidPlayerController* DeadLateJoinPC = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* DeadLateJoinDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("dead late join PC is spawned"), DeadLateJoinPC);
+	TestNotNull(TEXT("dead late join drone is spawned"), DeadLateJoinDrone);
+	if (!DeadLateJoinPC || !DeadLateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	Context.World->AddController(DeadLateJoinPC);
+	DeadLateJoinPC->Possess(DeadLateJoinDrone);
+	DeadLateJoinPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("Dead boss Ready is rejected before InBattle"), DeadLateJoinPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+
+	GameMode->HandleBossDefeatedForServer();
+	TestEqual(TEXT("boss defeated flow moves raid to End"), Context.GameState->RaidState, ERaidState::End);
+	TestEqual(TEXT("RaidEnd completion moves BossState to Clear"), Boss->GetBossState(), EBossState::Clear);
+	TestFalse(TEXT("Clear boss rejects raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("Clear boss reject reason is BossClear"), RejectReason, FName(TEXT("BossClear")));
+
+	FDroneSelectionTestContext TimeOverContext = CreateDroneSelectionTestContext(TEXT("Q4BossStateTimeOverWorld"));
+	ARaidGameMode* TimeOverGameMode = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* TimeOverBoss = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidBoss>() : nullptr;
+	TestNotNull(TEXT("time over game mode is spawned"), TimeOverGameMode);
+	TestNotNull(TEXT("time over boss is spawned"), TimeOverBoss);
+	if (!TimeOverContext.World || !TimeOverContext.GameState || !TimeOverContext.PC || !TimeOverContext.Drone || !TimeOverGameMode || !TimeOverBoss)
+	{
+		DestroyDroneSelectionTestContext(TimeOverContext);
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TimeOverContext.World->AddController(TimeOverContext.PC);
+	TimeOverContext.GameState->SetRaidBossForServer(TimeOverBoss);
+	TestTrue(TEXT("time over raid time limit is test-configurable"),
+		SetFloatPropertyForAutomationTest(TimeOverGameMode, FName(TEXT("RaidTimeLimitSeconds")), 0.05f));
+	TimeOverContext.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("time over setup moves boss to Battle"), TimeOverBoss->GetBossState(), EBossState::Battle);
+	TimeOverGameMode->ExpireRaidTimeLimitForTest();
+	TestEqual(TEXT("time over moves raid to End"), TimeOverContext.GameState->RaidState, ERaidState::End);
+	TestEqual(TEXT("time over RaidEnd moves boss to Clear"), TimeOverBoss->GetBossState(), EBossState::Clear);
+	TestFalse(TEXT("TimeOver rejects raid join"), TimeOverGameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("TimeOver reject reason is TimeOver"), RejectReason, FName(TEXT("TimeOver")));
+
+	ARaidPlayerController* TimeOverLateJoinPC = TimeOverContext.World->SpawnActor<ARaidPlayerController>();
+	ADrone* TimeOverLateJoinDrone = TimeOverContext.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("time over late join PC is spawned"), TimeOverLateJoinPC);
+	TestNotNull(TEXT("time over late join drone is spawned"), TimeOverLateJoinDrone);
+	if (!TimeOverLateJoinPC || !TimeOverLateJoinDrone)
+	{
+		DestroyDroneSelectionTestContext(TimeOverContext);
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	TimeOverContext.World->AddController(TimeOverLateJoinPC);
+	TimeOverLateJoinPC->Possess(TimeOverLateJoinDrone);
+	TimeOverLateJoinPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("TimeOver Ready is rejected before InBattle"), TimeOverLateJoinPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+
+	DestroyDroneSelectionTestContext(TimeOverContext);
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 

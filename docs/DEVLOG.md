@@ -3,6 +3,68 @@
 서버 권한 기반 드론 조립 PvE MMORPG 프로토타입 개발 기록.
 
 ---
+## 2026-07-08 — 기획서 전문 감사 + 문서 체계 재배치 + 작업큐 생성 (branch docs/spec-audit-20260708)
+
+### 목적
+docs/sources 기획서 원문 전체를 코드 대비 감사하고, 에이전트가 항상 참조 가능한 문서 체계로 재배치. 누락표 기준 다음 작업 큐 생성.
+
+### 읽은 기획서 (전문 판독, 11종)
+플로우/코어루프, 클래스GameManager(수정중), 레이드입장, 드론부품, 드론부품선택, 드론부품환원, 드론 이동/회피, 드론 타겟팅, 보스, DroneReport (docx 10) + 현현_데이터테이블.xlsx 16시트. **보스 패턴/전투조작/튜토리얼 상세 기획서는 원문 부재** — 해당 영역은 SpecDecisionNeeded 유지.
+
+### 생성/갱신/이동 문서
+- 신규: `docs/Audit/ImplementationGap_CurrentSpec_20260708.md` (누락표, 이전 감사 대체), `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md` (작업 큐 + 상위 5개 Codex 프롬프트), `docs/AI/DRONERAID_DOC_MAP_20260708.md` (문서맵)
+- 이동: 감사/계획 문서 6종 → `docs/Audit/` (ImplementationAudit 3종, DRONERAID_FABLE_AUDIT_20260707, Fable_Final5HourPlan_20260707, D4_D5_SHARED_INVENTORY_TEST)
+- 갱신: `AGENTS.md` 상단에 "문서맵 (작업 전 필독)" 섹션 추가
+- 삭제 없음. 기획서 원문 유지.
+
+### 누락표 요약 (Complete 9 / Partial 4 / SpecMismatch 2 / 기획부재 1)
+- **Critical**: 보스 MaxHP 1000 vs 기획 60,000 (RaidBoss.h:116). push 미실행(로컬 유일본).
+- **High**: 코어 기본 배율 no-op — 데이터테이블 AttackModifier(Booster 0.95/Drain 0.85)·MoveSpeedModifier(Drain 0.9) 미적용, CoreAttackModifier 항상 1.0.
+- **Medium**: RaidState Drafting 미사용(Waiting→Battle 직행), BossState enum(Spawn/Battle/Dead/Clear) 부재+입장 차단 게이트 불명시, 맵로드/스폰 실패 ReturnToLobby TODO 미구현, 레이드 잔여시간 클라 미복제.
+- **일치 확인**: 부품 수량 5/6/5/11/10/11, 무기/코어 계산식 전수치, Dodge 4수치, 경계 50m/보스 800cm, 카메라 4수치, Report 점수식/보너스/등급/late join 보정 — 전부 기획서·데이터테이블과 일치.
+- **문서가 낡음(코드 아님)**: CLAUDE.md 보류 목록의 이동 동기화 TODO(해소됨), Booster/Drain/Vector 효과(구현 완료), IsSlotEnabled dead(호출 체인 존재).
+
+### 다음 작업 큐 Top 5 (상세·Codex 프롬프트는 NextWorkQueue 문서)
+0. (오너 수동) push + 잔여 PIE 검증(보스 패턴 실피격) — 코드 작업 선행 게이트
+1. 보스 MaxHP 60,000 정합 (+테스트 기대값)
+2. 코어 기본 배율 적용 (0.95/0.85/이속 0.9)
+3. RaidState Drafting 정식화
+4. BossState enum + 신규 입장 차단 게이트
+5. DataTable 전환 1단계 (스키마+CSV+fallback)
+
+### gitignore 처리
+- `.gitignore` 선택 (`.git/info/exclude` 아님 — 기획서 바이너리 커밋 방지는 저장소 전체 규칙이어야 하고 규칙 자체가 버전 관리되어야 함). 기존 `docs/*` + `!docs/DEVLOG.md` 규칙 유지, `!docs/D4_D5_SHARED_INVENTORY_TEST.md` 예외 제거.
+- `git rm --cached docs/D4_D5_SHARED_INVENTORY_TEST.md` (index에서만 제거, 파일은 docs/Audit/로 이동 보존).
+- tracked 유지: README.md(필수), AGENTS.md(에이전트 규칙, 팀 공유), docs/DEVLOG.md(canonical 기록, 팀 공유). 나머지 docs/ 문서 전부 로컬 전용(ignore).
+
+### 커밋
+- pending commit (이 항목 작성 시점). 커밋 후 해시는 git log 참조.
+- 검증: 빌드/자동화 재실행 없음(문서 전용 변경, C++/Config/에셋/테스트 무변경).
+
+---
+## 2026-07-08 — Post-commit 2 Client PIE 로그 확인: Target Marker Visible, BossStunChanged true/false, StunMultiplier=1.50, BossDead 후 BossPattern Stopped 및 Target Clear 확인. 실제 BossAttackHit/DroneDamaged는 OutOfRange만 발생해 별도 미검증.
+
+---
+## 2026-07-08 — POR-16~19 통합 커밋 봉인 (6f5bfd2)
+
+### 작업
+
+- 미커밋 13파일(+1522/−75)을 커밋 전 안전검산했다. 내용물은 4계열 혼재: POR-16 타겟팅 / POR-17 이동 클램프(보스 최소접근 500→800cm) / POR-18 방어 3종 / POR-19 보스 패턴·스턴.
+- 기존 "2분할 커밋" 계획(07-07 계획 ①방어3종+Destroyed / ②패턴+스턴)은 **폐기**. `ARaidBoss::EndPlay/Destroyed`(POR-18)가 `StopBossPatternForServer`(POR-19)를 같은 hunk에서 호출해 ①만으로는 컴파일 불가. hunk 수동 편집으로 억지 분리하면 64/64가 검증한 코드와 다른 중간 커밋이 생기므로 배제.
+- 검증된 스냅샷 그대로 1커밋 `6f5bfd2`로 봉인. 커밋 메시지에 분할 불가 사유와 SpecDecisionNeeded placeholder를 기록. 워킹 트리 클린.
+
+### 검증
+
+- 커밋 전 검산은 git diff/log 기반 정적 분석(이 세션에서 빌드/자동화 재실행 없음). 64/64(EXIT CODE 0) 근거는 2026-07-07 세션 기록(`docs/Fable_Final5HourPlan_20260707.md` §7).
+- 구 테스트와 신 코드의 교차 회귀 후보 3건을 정적으로 배제: BossDamage 로그 포맷 변경(테스트는 값 검사만), `ResetDroneReportForTest`(구 테스트 미사용), 500cm 기대 테스트(변경이 같은 커밋에 동승).
+
+### 남은 것
+
+- **push 미실행** — 원격 미반영, 로컬 유일본 상태.
+- **2 Client PIE 수동 검증 미실행** — 클라 OnRep 계열(타겟 마커 표시/숨김, 스턴 visual)은 자동화 미커버. 검색어 목록은 `Fable_Final5HourPlan_20260707.md` §7 참조.
+- **README 최신화 필요** — D5 기준으로 낡음, POR-19까지 반영해야 함.
+
+---
 ## 2026-07-06 — POR-14/POR-15 전투 가시화 및 로그 의미 정리
 
 ### 작업
@@ -1458,3 +1520,305 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 - 빌드 트러블슈팅에 시간이 들었으나, 캐시·플러그인·빌드 구성 등
   언리얼 빌드 파이프라인의 동작을 이해하는 계기가 됨
 - 다음: GameManager(GameMode/GameState 분리) → Player → Drone+DronePart 통합 구현
+
+---
+
+## 2026-07-08 - Q1 Boss MaxHP 60,000 alignment
+
+### Scope
+- Applied Q1 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Changed the raid boss default HP to the current spec value: 60,000.
+- Kept the change C++/test-only. No UMG, `.uasset`, `.umap`, timer, boss pattern, or damage-formula logic changes.
+
+### Changes
+- `ARaidBoss::MaxHP` default: `1000.0f` -> `60000.0f`.
+- `ARaidBoss::CurrentHP` default: `1000.0f` -> `60000.0f`; existing `BeginPlay()` still copies `MaxHP` into `CurrentHP` on authority.
+- Added `DroneProto.Q1.RaidBoss.SpecMaxHP` automation coverage.
+- Updated DroneReport formula fixtures from 1,000-based test inputs to 60,000-based inputs while preserving the same intended boss-damage ratios.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q1.RaidBoss.SpecMaxHP; Quit` failed before the production edit on `Q1 boss MaxHP matches current 60000 spec`.
+- GREEN: same Q1 test passed after the HP change and logged `[DR_SUMMARY] BossDamage: OldHP=60000.00 Damage=1000.00 NewHP=59000.00 MaxHP=60000.00`.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 65 tests, 65 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual balance remains unverified: 16-player real DPS and average DPS 330 are planning assumptions, not proven by this code pass.
+
+---
+
+## 2026-07-08 - Q2 Core base modifiers
+
+### Scope
+- Applied Q2 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added core base attack/move modifiers from the Core data-table values.
+- Kept Zenith/Booster/Drain special formulas, Drain heal cap, weapon formulas, RecalculateStats guard, boss HP/pattern/timer, RPC, replication, UMG, and assets unchanged.
+
+### Changes
+- `FDroneCoreCalculationResult` now carries `CoreMoveSpeedModifier`.
+- `CalculateCoreBonus()` returns Zenith 1.0/1.0, Booster 0.95/1.0, and Drain 0.85/0.9.
+- `RefreshMoveSpeedForServer()` now uses `BaseMoveSpeed * CoreMoveSpeedModifier * (1 + MoveSpeedBonus)`.
+- Updated D7/D9/D13 tests and added server-path coverage for Drain 4.05 m/s.
+
+### Verification
+- RED: `Automation RunTests DroneProto.D13.DroneCombat.SpecAlignment; Quit` failed before the production edit on Booster/Drain base modifiers and Drain move speed.
+- GREEN: same D13 test passed after the production edit.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 65 tests, 65 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual movement feel for Drain 0.9 speed remains unverified.
+
+---
+
+## 2026-07-08 - Q3 RaidState Drafting flow
+
+### Scope
+- Applied Q3 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Formalized the global raid state flow as Waiting -> Drafting -> Battle -> End while keeping `PlayerSelectionState` separate.
+- Kept selection timer, AutoReady timer handling, part return/loadout paths, RPC, replication, UMG, assets, and BossState untouched.
+
+### Changes
+- `ARaidGameMode::PostLogin()` moves Waiting raids to Drafting when the first server-side player enters.
+- `ARaidPlayerController::Server_RequestSelectPart_Implementation()` also moves Waiting to Drafting on real selection entry, covering test worlds and selection-stage entry.
+- `ProcessReadyForRaidForServer()` rejects Ready while RaidState is End and only promotes Waiting/Drafting to Battle.
+- `ARaidGameState::SetRaidStateForServer()` now logs named `[DR_SUMMARY] RaidState Previous=... New=...` transitions.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q3.RaidState.DraftingFlow; Quit` failed before the production edit on missing Drafting and End -> Battle re-entry.
+- GREEN: same Q3 test passed after the production edit and logged Waiting -> Drafting -> Battle -> End.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 66 tests, 66 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual UI reaction to the named RaidState log and OnRep path remains unverified.
+
+---
+
+## 2026-07-08 - Q4 BossState and raid join gate
+
+### Scope
+- Applied Q4 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added server-owned BossState Spawn/Battle/Dead/Clear while keeping the existing HP-based `IsDefeated()` check.
+- Added explicit join/Ready rejection for BossDead, BossClear, TimeOver, and invalid RaidState without changing PlayerSelectionState, RaidState, loadout, inventory, return, pattern, or stun formulas.
+
+### Changes
+- `ARaidBoss` now replicates one new `BossState` value with `OnRep_BossState` log and BP visual hook.
+- `SetBossStateForServer()` handles server-authoritative transitions and `[DR_SUMMARY] BossState` logs.
+- Boss pattern start promotes Spawn -> Battle, HP reaching 0 promotes Battle -> Dead, and RaidEnd completion promotes Dead/Battle -> Clear.
+- `ARaidGameMode::CanAcceptRaidJoinForServer()` gates Waiting/Drafting/Battle joins against Dead/Clear/TimeOver.
+- `ProcessReadyForRaidForServer()` uses the new gate before loadout/equipped state changes and logs `[DR_SUMMARY] RaidJoinRejected`.
+
+### Verification
+- RED: Q4 test compile failed before production code because `EBossState`, `GetBossState()`, and `CanAcceptRaidJoinForServer()` did not exist.
+- GREEN: `Automation RunTests DroneProto.Q4.RaidBoss.BossStateJoinGate; Quit` passed after implementation.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 67 tests, 67 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual OnRep_BossState client visual-hook firing remains unverified.
+
+---
+
+## 2026-07-09 - Q5 DataTable schema and part-count fallback
+
+### Scope
+- Applied Q5 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Prepared C++ DataTable row schemas for part counts, cores, weapons, bonuses, and grades.
+- Kept `.uasset` DataTable creation/import, UMG, maps, formulas, RPC, replication, FastArray conversion, inventory return, Ready, Q1 boss HP, Q2 core modifiers, Q3 RaidState, and Q4 BossState behavior unchanged.
+
+### Changes
+- Added `FDronePartCountRow`, `FDroneCoreRow`, `FDroneWeaponRow`, `FDroneBonusRow`, and `FDroneGradeRow` in `Raid/DroneDataTableRows.h`.
+- Added an `EditDefaultsOnly` `PartCountDataTable` candidate to `ADronePartInventory`.
+- `ADronePartInventory` can now load selectable part stock rows from a `UDataTable` during server BeginPlay.
+- DataTable-missing or invalid-table fallback keeps the existing hardcoded stock values: Zenith 5, Booster 6, Drain 5, Pulse 11, Fracture 10, Vector 11.
+- Renamed file-local log helper functions in Q3/Q4 raid files to avoid UE unity-build anonymous-namespace collisions; no state formula or transition behavior changed.
+
+### Verification
+- Baseline before Q5 edits: `Automation RunTests DroneProto; Quit` found 67 tests, 67 succeeded, 0 failed, exit code 0.
+- RED: Build failed after the Q5 tests were added because `Raid/DroneDataTableRows.h` did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q5.DataTable; Quit` found 3 tests, 3 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 70 tests, 70 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- Editor `.uasset` DataTable creation/import remains unperformed by Codex and is still an owner/editor task.
+
+---
+
+## 2026-07-09 - Q6 Raid timer replication and boss HUD parent
+
+### Scope
+- Applied Q6 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Prepared C++ plumbing for boss HP and the 03:00 raid timer without UMG layout, assets, maps, AddToViewport automation, or client-authoritative timer decisions.
+- Kept boss HP/damage/pattern/stun values, RaidState, BossState, Report, Return, Inventory, Loadout, RPC, and existing UI presentation paths unchanged.
+
+### Changes
+- Added one replicated `RaidTimeEndServerTime` value to `ARaidGameState` with `OnRep_RaidTimeEndServerTime` logs and UI refresh marker.
+- `ARaidGameMode::StartRaidTimeLimitTimerForServer()` records the server end time when the 180-second raid timer starts, and timer cleanup clears it.
+- Added `UBossHUDWidget` as a C++ UMG parent with optional `BossHPText`, `RaidTimerText`, and `BossHPProgressBar` bindings.
+- `UBossHUDWidget` exposes `GetBossHPPercent()`, `GetBossHPText()`, `GetRaidRemainingSeconds()`, `GetRaidTimerText()`, and `RefreshBossHUD()`.
+
+### Verification
+- RED: Build failed after Q6 tests were added because `Raid/BossHUDWidget.h` did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q6.RaidHUD; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 72 tests, 72 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual UMG binding and visual placement for the actual boss HUD remains unverified and is still an owner/editor task.
+
+---
+
+## 2026-07-09 - Q7 Raid load failure return-to-lobby hook
+
+### Scope
+- Applied Q7 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added a C++ return-to-lobby hook for explicit raid load/spawn failure paths without UMG layout, assets, maps, ReportWidget success return path, inventory, return, loadout, RaidEnd, or matchmaking-server changes.
+
+### Changes
+- Added one owning-client RPC, `ARaidPlayerController::Client_NotifyRaidLoadFailed(FName Reason, FName TargetMap)`.
+- Added `HandleRaidLoadFailedForClient()` and `BP_OnRaidLoadFailed()` so Blueprint/UI can react to failure without Codex creating popup assets.
+- Client failure handling logs `[DR_SUMMARY] RaidLoadFailed` and uses a guarded `ReturnToLobby` path targeting `LobbyMap`.
+- `ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation()` now notifies the affected raid PlayerController only when required spawn context is missing or all spawn attempts fail.
+- Automation-only test shim mirrors the client handler after the server notification condition because the mock world has no owning client NetConnection to deliver the RPC.
+
+### Verification
+- RED: Q7 build failed after tests were added because the load-failure PC helper and spawn-failure test hook did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q7.RaidLoadFailed; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 74 tests, 74 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual popup Blueprint implementation and real map/spawn failure UX remain unverified and are still owner/editor tasks.
+
+---
+
+## 2026-07-09 - Q8 Server-only boss damage contribution map
+
+### Scope
+- Applied Q8 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added a server-only central boss damage contribution map for future contribution/ranking work.
+- Kept DroneReport calculation inputs, existing `FDroneCombatRecord` recording, Report UI, RPC, replication, boss HP/damage/pattern/stun values, inventory, return, loadout, RaidState, and BossState behavior unchanged.
+
+### Changes
+- Added `FDroneBossDamageContribution` and server-only `PlayerBossDamageMap` storage to `ARaidGameMode`.
+- Added `RecordBossDamageForServer()`, `GetBossDamageForPlayerKeyForServer()`, `GetSortedBossDamageContributionsForServer()`, and `ResetBossDamageContributionsForServer()`.
+- Reused the existing DroneReport PlayerKey policy for contribution keys.
+- `ADrone::HandleAttackBossForServer()` now records actual boss HP damage into the central map after the existing CombatRecord update.
+- RaidEnd resets the central contribution map only after the existing Report/return cleanup loop has run.
+
+### Verification
+- RED: Build failed after Q8 tests were added because the contribution struct and RaidGameMode record/query/reset APIs did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q8.Contribution; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 76 tests, 76 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE/manual contribution log inspection remains unverified.
+- UI/ranking/report-display use of the central map is intentionally not implemented in Q8.
+
+---
+
+## 2026-07-09 - Q9 Boss pattern/stun spec boundary seal
+
+### Scope
+- Applied Q9 as an implementation hold from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Sealed the current boss pattern/stun behavior as placeholder-only until the boss pattern/stun source spec exists.
+- Kept boss pattern/stun runtime behavior, values, RPC, replication, BossState, RaidState, RaidEnd, Return, Report, Inventory, and Loadout paths unchanged.
+
+### Changes
+- Added an `AGENTS.md` boundary section forbidding boss pattern/stun expansion before the source spec exists.
+- Added `RaidBoss.h` comments marking pattern/stun values as placeholders and keeping `bIsStunned` separate from `BossState`.
+- Added a Q9 smoke/spec-boundary automation test that checks the documentation markers and current placeholder values without changing behavior.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q9.BossPatternSpecBoundary; Quit` found 1 test and failed because Q9 boundary markers were absent.
+- GREEN: `Automation RunTests DroneProto.Q9.BossPatternSpecBoundary; Quit` found 1 test, 1 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 77 tests, 77 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- Boss pattern/stun source spec is still required before adding pattern variants, changing placeholder values, adding natural stun triggers, or changing stun-vs-pattern pause/resume policy.
+
+---
+
+## 2026-07-09 - Q10 Tutorial C++ state skeleton
+
+### Scope
+- Applied Q10 from `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md`.
+- Added only the tutorial C++ state-machine skeleton for the first-run tutorial flow.
+- Kept maps, cutscenes, dialogue, debris/enemy behavior, UMG layout/assets, SaveGame/login/DB first-run persistence, RaidState, PlayerSelectionState, Inventory, Return, Loadout, Report, RaidEnd, boss pattern/stun, RPC, and replication unchanged.
+
+### Changes
+- Added `ETutorialStep` with `None`, `MoveLeft`, `Attack`, `Dodge`, and `Complete`.
+- Added `ATutorialGameMode` as a tutorial-map-only GameMode parent that can start/advance/complete a tutorial controller behind authority checks.
+- Added `ATutorialPlayerController` with local input hooks for Left, Z, and C+Up, Blueprint getters/events, completion state, and a guarded `ReturnToLobbyAfterTutorial()` C++ hook targeting `LobbyMap`.
+- Added Q10 automation coverage for step order, complete-state idempotence, return-to-lobby suppression, and isolation from `RaidState`/`PlayerSelectionState`.
+
+### Verification
+- RED: Build failed after Q10 tests were added because `Tutorial/TutorialGameMode.h` did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q10.Tutorial; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 79 tests, 79 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- Tutorial map assignment, UMG layout/text, dialogue/cutscene timing, debris actor behavior, and first-run persistence remain owner/editor or future-system tasks.
+
+---
+
+## 2026-07-11 - Q11 UI C++ binding readiness pass
+
+### Scope
+- Applied Q11 as an editor-work readiness pass before UMG layout/binding.
+- Kept boss HP, timer, damage, pattern, stun, RaidState, BossState, Inventory, Return, Loadout, Report, RaidEnd, RPC, and replication behavior unchanged.
+- Did not create or edit UMG, `.uasset`, `.umap`, DataTable assets, tutorial maps, dialogue, SaveGame, login, or a UI manager.
+
+### Changes
+- Added a local-only Boss HUD bridge to `ARaidPlayerController`: `BossHUDWidgetClass`, `BossHUDWidget`, show/hide/refresh helpers, and a visibility getter.
+- Boss HUD creation is skipped on dedicated server, skipped for non-local controllers, and null-safe when `BossHUDWidgetClass` is not assigned.
+- Ready/InBattle UI flow now shows the Boss HUD; report, RaidEnd, EndPlay, and RaidLoadFailed paths hide it.
+- Kept `UBossHUDWidget` HP/timer getters as read-only UI accessors over existing replicated boss/game-state data.
+- Added a local editor binding checklist at `docs/Audit/Q11_UI_CPP_BINDING_CHECKLIST_20260711.md`.
+- Tutorial UI and RaidLoadFailed popup remain Blueprint/editor responsibilities using the existing C++ events and getters.
+
+### Verification
+- RED: Build failed after Q11 tests were added because the Boss HUD PlayerController hooks did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q11.UI; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 81 tests, 81 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- BossHUDWidget UMG assignment/binding remains owner/editor work.
+- Tutorial guide widget creation/binding remains owner/editor work.
+- RaidLoadFailed popup presentation remains owner/editor work.
+- 2 Client PIE visual/OnRep checks remain unverified.
+
+---
+
+## 2026-07-11 - Q11 BossHUD value refresh fix
+
+### Scope
+- Investigated BossHUD value staleness after `WBP_BossHUD` creation/AddToViewport succeeded in editor.
+- Kept UMG, `.uasset`, `.umap`, boss HP, timer authority, damage, pattern, stun, RaidState, BossState, Inventory, Return, Loadout, Report, RaidEnd, RPC, and replication variables unchanged.
+
+### Root Cause
+- `UBossHUDWidget` wrote to the optional widget fields, but it only observed `ARaidGameState::RaidBoss`.
+- In client/editor timing, the owning `ARaidPlayerController::CurrentTargetBoss` can be available while the GameState boss pointer is unavailable or late.
+- Raid timer display also had no visible-widget periodic refresh, so `RaidTimeEndServerTime` could be correct while `RaidTimerText` stayed at its last rendered value.
+
+### Changes
+- Added BossHUD observed-boss lookup order: owning `ARaidPlayerController::CurrentTargetBoss`, then `ARaidGameState::RaidBoss`, then first valid `ARaidBoss` in the world.
+- Added visible-widget `NativeTick` refresh throttled at 0.20 seconds for client-side display only.
+- Added immediate BossHUD refresh calls from `OnRep_RaidBoss` and `OnRep_RaidTimeEndServerTime`.
+- Updated BossHUD logs to `[DR_SUMMARY] UIRefresh BossHUD Reason=... HPPercent=... Timer=...` plus `BossHUDSkipped` reasons for `NoBoss`/`NoGameState`.
+- Added Q11 automation coverage for owner-target fallback and the tick/log source boundary.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q11.UI; Quit` failed because BossHUD did not fall back to the owning PC target boss and had no throttled native tick/log contract.
+- GREEN: `Automation RunTests DroneProto.Q11.UI; Quit` found 3 tests, 3 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 82 tests, 82 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE verify `WBP_BossHUD` shows `[DR_SUMMARY] UIRefresh BossHUD`, HP text/progress changes after `BossDamage`, and timer text decreases from `03:00`.

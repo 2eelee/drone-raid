@@ -1,4 +1,5 @@
 #include "RaidPlayerController.h"
+#include "BossHUDWidget.h"
 #include "Drone.h"
 #include "DronePartInventory.h"
 #include "DroneReportWidget.h"
@@ -9,10 +10,13 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
 {
+constexpr const TCHAR* RaidLoadFailureLobbyMapName = TEXT("LobbyMap");
+
 const TCHAR* ToSelectionSlotLogString(EPartSlot Slot)
 {
 	switch (Slot)
@@ -33,7 +37,7 @@ const TCHAR* ToPlayerSelectionStateLogString(EPlayerSelectionState State)
 	return ARaidPlayerController::SelectionStateToLogString(State);
 }
 
-const TCHAR* ToRaidStateLogString(ERaidState State)
+const TCHAR* ToRaidStateLogStringForPlayerController(ERaidState State)
 {
 	switch (State)
 	{
@@ -54,7 +58,7 @@ FString GetRaidStateLogString(const APlayerController* PC)
 {
 	const UWorld* World = PC ? PC->GetWorld() : nullptr;
 	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
-	return RaidGameState ? ToRaidStateLogString(RaidGameState->RaidState) : TEXT("None");
+	return RaidGameState ? ToRaidStateLogStringForPlayerController(RaidGameState->RaidState) : TEXT("None");
 }
 
 const TCHAR* ToNetModeLogString(ENetMode NetMode)
@@ -216,6 +220,8 @@ void ARaidPlayerController::BeginPlay()
 
 void ARaidPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	HideBossHUDForLocalPlayer();
+
 	if (HasAuthority())
 	{
 		ClearBossTargetForServer(FName(TEXT("Travel")));
@@ -519,6 +525,16 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 	}
 
 	const FString PlayerLog = BuildControllerLogString(this);
+	if (PlayerSelectionState == EPlayerSelectionState::Selecting)
+	{
+		if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+		{
+			if (RaidGameState->RaidState == ERaidState::Waiting)
+			{
+				RaidGameState->SetRaidStateForServer(ERaidState::Drafting);
+			}
+		}
+	}
 	const FString RaidStateLog = GetRaidStateLogString(this);
 	const auto LogSelectSummary = [this, Slot, &PlayerLog, &RaidStateLog](FName PartID, bool bSuccess, const FString& Reason)
 	{
@@ -973,6 +989,7 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 	RefreshSelectionUI();
 
 	HideDronePartSelectUI();
+	ShowBossHUDForLocalPlayer();
 }
 
 void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDroneReportData& ReportData)
@@ -984,6 +1001,7 @@ void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDron
 
 	if (IsLocalController())
 	{
+		HideBossHUDForLocalPlayer();
 		ShowDroneReportWidget(ReportData);
 	}
 }
@@ -1004,6 +1022,77 @@ void ARaidPlayerController::Client_NotifyRaidEndedForUI_Implementation(FName Rea
 		Reason.IsNone() ? TEXT("RaidEnd") : *Reason.ToString(),
 		ToPlayerSelectionStateLogString(PlayerSelectionState));
 	RefreshSelectionUI();
+	HideBossHUDForLocalPlayer();
+}
+
+void ARaidPlayerController::Client_NotifyRaidLoadFailed_Implementation(FName Reason, FName TargetMap)
+{
+	HandleRaidLoadFailedForClient(Reason, TargetMap);
+}
+
+void ARaidPlayerController::HandleRaidLoadFailedForClient(FName Reason, FName TargetMap)
+{
+	const FName NormalizedReason = Reason.IsNone() ? FName(TEXT("Unknown")) : Reason;
+	const FName LobbyTargetMap = TargetMap.IsNone() ? FName(RaidLoadFailureLobbyMapName) : TargetMap;
+
+	LastRaidLoadFailedReason = NormalizedReason;
+	LastRaidLoadFailedTargetMap = LobbyTargetMap;
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadFailed Player=%s Reason=%s TargetMap=%s"),
+		*BuildControllerLogString(this),
+		*NormalizedReason.ToString(),
+		*LobbyTargetMap.ToString());
+
+	BP_OnRaidLoadFailed(NormalizedReason, LobbyTargetMap);
+	HideBossHUDForLocalPlayer();
+	ReturnToLobbyForRaidLoadFailure(NormalizedReason, LobbyTargetMap);
+}
+
+void ARaidPlayerController::ReturnToLobbyForRaidLoadFailure(FName Reason, FName TargetMap)
+{
+	if (bRaidLoadFailedReturnToLobbyRequested)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobbyIgnored Reason=AlreadyRequested Source=RaidLoadFailed Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	bRaidLoadFailedReturnToLobbyRequested = true;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bSuppressRaidLoadFailedLobbyTravelForTest)
+	{
+		++RaidLoadFailedReturnToLobbyCountForTest;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobby Reason=%s Target=%s Source=RaidLoadFailed Player=%s Mode=SuppressedForAutomation"),
+			Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+			TargetMap.IsNone() ? RaidLoadFailureLobbyMapName : *TargetMap.ToString(),
+			*BuildControllerLogString(this));
+		return;
+	}
+#endif
+
+	UWorld* World = GetWorld();
+	if (!World || World->GetNetMode() == NM_DedicatedServer)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobbyIgnored Reason=InvalidWorldOrDedicatedServer Source=RaidLoadFailed Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	if (!IsLocalController())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobbyIgnored Reason=NotLocalController Source=RaidLoadFailed Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	const FName LobbyTargetMap = TargetMap.IsNone() ? FName(RaidLoadFailureLobbyMapName) : TargetMap;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnToLobby Reason=%s Target=%s Source=RaidLoadFailed Player=%s Method=OpenLevel"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		*LobbyTargetMap.ToString(),
+		*BuildControllerLogString(this));
+
+	UGameplayStatics::OpenLevel(World, LobbyTargetMap);
 }
 
 void ARaidPlayerController::D4SelectPart(FString SlotName, FString PartIDText)
@@ -1548,6 +1637,95 @@ void ARaidPlayerController::HideDroneReportWidget()
 		*BuildControllerLogString(this));
 }
 
+void ARaidPlayerController::ShowBossHUDForLocalPlayer()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (!BossHUDWidgetClass)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDSkipped Reason=MissingClass Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	if (!BossHUDWidget)
+	{
+		BossHUDWidget = CreateWidget<UBossHUDWidget>(this, BossHUDWidgetClass);
+	}
+
+	if (!BossHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ShowBossHUDForLocalPlayer failed: widget could not be created Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	const bool bAlreadyInViewport = BossHUDWidget->IsInViewport();
+	BossHUDWidget->RefreshBossHUD();
+
+	if (!bAlreadyInViewport)
+	{
+		BossHUDWidget->AddToViewport();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDShown Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDRefreshed Player=%s"),
+		*BuildControllerLogString(this));
+}
+
+void ARaidPlayerController::HideBossHUDForLocalPlayer()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (BossHUDWidget && BossHUDWidget->IsInViewport())
+	{
+		BossHUDWidget->RemoveFromParent();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDHidden Player=%s"),
+			*BuildControllerLogString(this));
+	}
+}
+
+void ARaidPlayerController::RefreshBossHUDForLocalPlayer()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (BossHUDWidget)
+	{
+		BossHUDWidget->RefreshBossHUD();
+	}
+}
+
+bool ARaidPlayerController::IsBossHUDVisibleForLocalPlayer() const
+{
+	return BossHUDWidget && BossHUDWidget->IsInViewport();
+}
+
 void ARaidPlayerController::RefreshSelectionUI()
 {
 	const bool bUseEquippedParts = PlayerSelectionState != EPlayerSelectionState::Selecting;
@@ -1855,6 +2033,73 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		*SelectedLeftWeaponPartID.ToString(),
 		*SelectedRightWeaponPartID.ToString());
 
+	if (UWorld* World = GetWorld())
+	{
+		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
+		if (!RaidGameMode)
+		{
+			for (TActorIterator<ARaidGameMode> It(World); It; ++It)
+			{
+				RaidGameMode = *It;
+				break;
+			}
+		}
+
+		if (RaidGameMode)
+		{
+			FName RejectReason;
+			if (!RaidGameMode->CanAcceptRaidJoinForServer(RejectReason))
+			{
+				const FString FailureReason = RejectReason.IsNone() ? TEXT("Raid join rejected") : RejectReason.ToString();
+				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=Ready RaidState=%s"),
+					*PlayerLog,
+					*FailureReason,
+					*RaidStateLog);
+
+				if (bAutoReady)
+				{
+					UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=%s SelectionState=%s"),
+						*PlayerLog,
+						*FailureReason,
+						ToPlayerSelectionStateLogString(PlayerSelectionState));
+				}
+				else
+				{
+					LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+					Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+				}
+				return false;
+			}
+		}
+	}
+
+	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (RaidGameState->RaidState == ERaidState::End)
+		{
+			const FString FailureReason = TEXT("Raid ended");
+			UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s PlayerSelectionState=%s RaidState=%s"),
+				*PlayerLog,
+				bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+				*FailureReason,
+				ToPlayerSelectionStateLogString(PlayerSelectionState),
+				*RaidStateLog);
+
+			if (bAutoReady)
+			{
+				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AutoReady PC=%s Result=Ignored Reason=RaidEnd SelectionState=%s"),
+					*PlayerLog,
+					ToPlayerSelectionStateLogString(PlayerSelectionState));
+			}
+			else
+			{
+				LogReadySummary(false, FailureReason, PlayerSelectionState, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID, nullptr);
+				Client_NotifyRaidReadyResult(false, FailureReason, SelectedCorePartID, SelectedLeftWeaponPartID, SelectedRightWeaponPartID);
+			}
+			return false;
+		}
+	}
+
 	if (PlayerSelectionState != EPlayerSelectionState::Selecting)
 	{
 		const FString FailureReason = TEXT("Selection locked");
@@ -1984,7 +2229,11 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 
 	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
 	{
-		RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+		if (RaidGameState->RaidState == ERaidState::Waiting
+			|| RaidGameState->RaidState == ERaidState::Drafting)
+		{
+			RaidGameState->SetRaidStateForServer(ERaidState::Battle);
+		}
 	}
 	AssignBossTargetForServer();
 	if (UWorld* World = GetWorld())
@@ -2125,7 +2374,7 @@ void ARaidPlayerController::HandleDebugTriggerBossTelegraphAttackForServer(float
 		TelegraphSeconds,
 		ForwardOffsetCm,
 		ToPlayerSelectionStateLogString(PlayerSelectionState),
-		ToRaidStateLogString(RaidGameState->RaidState));
+		ToRaidStateLogStringForPlayerController(RaidGameState->RaidState));
 
 	Boss->StartDebugTelegraphedAreaAttackForServer(AttackCenter, RadiusCm, DamageAmount, TelegraphSeconds);
 }
@@ -2454,6 +2703,15 @@ void ARaidPlayerController::OnRep_PlayerSelectionState()
 		ToPlayerSelectionStateLogString(PlayerSelectionState),
 		*GetRaidStateLogString(this));
 	RefreshSelectionUI();
+
+	if (PlayerSelectionState == EPlayerSelectionState::InBattle)
+	{
+		ShowBossHUDForLocalPlayer();
+	}
+	else
+	{
+		HideBossHUDForLocalPlayer();
+	}
 }
 
 void ARaidPlayerController::OnRep_SelectionEndServerTime()
@@ -2464,4 +2722,5 @@ void ARaidPlayerController::OnRep_SelectionEndServerTime()
 void ARaidPlayerController::OnRep_CurrentTargetBoss()
 {
 	RefreshTargetMarkerUI();
+	RefreshBossHUDForLocalPlayer();
 }

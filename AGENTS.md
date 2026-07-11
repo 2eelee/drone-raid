@@ -1,5 +1,13 @@
 # DroneProto — 드론 MMORPG 프로토타입
 
+## 문서맵 (작업 전 필독)
+- 작업 시작 전 반드시 `docs/AI/DRONERAID_DOC_MAP_20260708.md`를 먼저 읽는다.
+- 기획 판단은 `docs/sources/` 최신 기획서 원문 우선. 오래된 기초플랜/마일스톤과 충돌하면 최신 기획서가 이긴다.
+- 마일스톤은 일정 참고용으로만 사용한다 (명세 근거로 쓰지 않음).
+- 구현 지시는 `docs/Audit/NextWorkQueue_CurrentSpec_20260708.md` 기준. 구현 현황 판정은 `docs/Audit/ImplementationGap_CurrentSpec_20260708.md` 기준.
+- `docs/DEVLOG.md`는 append-only — 기존 항목 수정/덮어쓰기 금지.
+- UMG/`.uasset`/`.umap`/맵 수정은 사용자 담당. Codex/에이전트는 C++ 훅(BindWidgetOptional, getter, OnRep, ClientRPC)까지만.
+
 ## 프로젝트 개요
 - UE 5.7, C++/Blueprint 하이브리드
 - 장르: PvE 보스 레이드 + 드론 조립 MMORPG
@@ -53,26 +61,24 @@
 - DroneReport는 서버가 생성하고 owning client RPC로 표시 요청한다. 클라이언트는 Report UI 표시와 복제값 읽기만 담당한다.
 
 ## 현재 상태 / 다음 단계
-- 현재: D11 기반. D5 선택/Ready/AutoReady, D6 DeathReturn/RaidEndReturn/Dead 차단, D7 전투 효과, D8 서버 권한 이동거리 누적, D9 Vector/Booster 계산, D10/D11 DroneReport 표시 기반까지 연결.
-- TestMap PIE 2 Players 기준 1차 루프 동작: 부품 선택 → Ready → InBattle → Boss 피격 → BossDeath → RaidEnd → DroneReport 표시 → 부품 반환.
-- D7-D9 전투 효과: Pulse Laser는 슬롯별 독립 3타 카운트(8/8/18), Fracture Burst는 11 damage/HitCount 4, Vector Cannon은 이동거리 기반 보너스 후 Vector 누적 reset, Zenith Core는 HP 비율 단계 보너스, Booster Core는 이동거리 기반 공격/속도 보너스 계산, Drain Core는 피해량 기반 최대 3 회복.
-- D8 이동 기반: `ADrone::Move -> Server_SetMoveInput -> ApplyMoveInputForServer -> ApplyPendingServerMoveInputForServer` 경로로 축 입력만 서버에 전달하고, 서버 Tick에서 위치 이동/복제/Vector-Booster 이동거리 누적을 처리.
-- D6 테스트 경로: `D6KillDrone`은 현재 콘솔/owning PlayerController의 Pawn을 사망 처리하고, `D6RaidEndReturn`은 레이드 종료 반환 경로를 실행한다. 에디터/서버 콘솔에서는 서버 쪽 PC가 대상이 될 수 있으므로 `[DR_SUMMARY] D6KillDrone RequestPC=... TargetPC=... TargetDrone=...` 로그로 대상 확인.
-- RaidEnd 이후 Z 입력은 `[DR_SUMMARY] Attack Ignored: Reason=RaidEnd` 또는 `Reason=BossDead`가 떠야 하며, `Attack Accepted` / `BossDamage OldHP=0.00`가 남으면 회귀.
-- RaidEnd 이후 이동 입력은 `[DR_SUMMARY] MoveInput ... Result=Ignored Reason=RaidEnd` 또는 `[DR_SUMMARY] ServerMoveIgnored ... Reason=RaidEnd`가 떠야 하며, `ServerMoveApplied`가 남으면 회귀.
-- 검증: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공, `Automation RunTests DroneProto.D6.RaidGameMode.RaidEndReturnClearsInBattlePlayers` 성공. 전체 자동화 재실행은 앱 사용량 제한으로 추가 확인 필요.
-- 다음: ContributionManager / DataTable 전환 / 보스 패턴 / VFX / Report UI polish를 별도 범위로 진행.
+- 현재 통합 후보: `codex/q10-tutorial-state-skeleton` (`8df38e4`). Q1~Q10이 선형으로 쌓인 stacked branch이며, Q1 직전 문서 정리 커밋 `154d20e`도 함께 포함한다.
+- Q1~Q4: Boss MaxHP 60,000, Core base modifier(Booster 0.95 / Drain 0.85 / Drain 이속 0.9), RaidState Waiting -> Drafting -> Battle -> End, BossState Spawn/Battle/Dead/Clear + join/Ready gate 반영.
+- Q5~Q8: DataTable row schema + PartCountDataTable fallback, RaidTimeEndServerTime 복제 + BossHUDWidget C++ getter, RaidLoadFailed return-to-lobby hook, server-only central boss damage contribution map 반영.
+- Q9: 보스 패턴/스턴은 source spec 전까지 placeholder boundary로 봉인. 동작 변경 없음.
+- Q10: 튜토리얼 C++ 상태 뼈대만 추가. 맵/UMG/SaveGame/로그인/대사/연출은 오너 또는 후속 범위.
+- 반환/재고/Loadout 경로는 Q1~Q10에서 구조 변경 없음. 기존 서버 단일 경로 유지.
+- 추가 RPC: Q7 `Client_NotifyRaidLoadFailed(FName Reason, FName TargetMap)` 1개.
+- 추가 Replicate/OnRep: Q4 `BossState`, Q6 `RaidTimeEndServerTime`.
+- 검증: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공, `Automation RunTests DroneProto; Quit` 기준 79/79 success, 0 fail.
+- 다음: 새 기능 추가보다 Q1~Q10 통합 브랜치 최종 full automation 1회와 main/develop 병합 판단이 우선.
 
-## 보류 (D11)
-- 팝업 위젯 클래스 지정 + `IsSlotEnabled`(현재 dead) 정리
-- `ServerState` 구현 (인스턴스 가용성)
-- 만석/배정/매칭대기/재탐색 예외 경로 (멀티 전제, 현재 stub)
-
-## 보류 (D6 이후)
-- UMG 배치/디자인/아이콘 polish.
-- 보이는 보스 액터/HP UI polish.
-- D8 서버 이동 경로의 2 Clients PIE 체감/복제 추가 튜닝. 코드 기준 서버 이동/owner-only 보정 기반은 마련됐지만, 로컬 체감은 별도 조정 대상.
-- ContributionManager / DataTable 전환 / 보스 패턴 / VFX.
+## 보류 / 오너 작업
+- 2 Client PIE 보스 패턴 실피격 확인: `[DR_SUMMARY] BossAttackHit`, `[DR_SUMMARY] CombatVisual DroneDamaged`.
+- 클라 OnRep/BP visual 확인: BossState, RaidTimer, Tutorial UI hook.
+- UMG 배치/바인딩: `BossHUDWidget`, Tutorial 안내 위젯, RaidLoadFailed 팝업.
+- DataTable `.uasset` 생성/임포트.
+- 튜토리얼 맵/대사/연출/첫 실행 저장.
+- 보스 비주얼, VFX, Report/Contribution 표시 polish.
 
 ## D7 PIE / 로그 검색어
 - `[DR_SUMMARY] PulseAttack PC=`
@@ -164,6 +170,13 @@
 ### 7. Codex 검증 실행 주의
 - `UnrealEditor-Cmd.exe` 자동화는 한 프로세스에 여러 `Automation RunTests`를 넣으면 첫 큐만 실행될 수 있다. 증거가 필요한 테스트 그룹은 한 프로세스당 하나의 `Automation RunTests ...; Quit`로 실행한다.
 - Codex Windows sandbox에서 `codex-windows-sandbox-setup.exe ... program not found`가 나오면 코드/테스트 실패가 아니라 로컬 실행 환경 문제다. 같은 범위의 검증이나 파일 편집은 사용자 승인 후 승인 경로로 재시도하고, 최종 보고에 실제 exit code를 남긴다.
+
+## Q9 Boss Pattern/Stun Spec Boundary
+- Boss pattern and stun behavior are placeholders until the source boss pattern/stun spec exists.
+- Do not extend boss pattern or stun behavior before the source spec exists.
+- Do not change pattern interval/radius/damage/telegraph values, natural stun triggers, or stun-vs-pattern pause/resume policy without the source spec.
+- Do not merge `bIsStunned` into `BossState`; they are separate state concepts.
+- Allowed Q9 work before the source spec exists: logs, tests, documentation, and preparation for applying the future spec.
 
 ## DroneRaid Naming Rules
 - D 번호는 `현현_개발마일스톤`의 원래 Day 번호 기준이다.

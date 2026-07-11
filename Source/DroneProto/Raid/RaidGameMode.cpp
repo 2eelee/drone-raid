@@ -50,6 +50,7 @@ const TCHAR* ToReportTriggerLogString(EDroneReportTrigger Trigger)
 		return TEXT("Unknown");
 	}
 }
+
 }
 
 ARaidGameMode::ARaidGameMode()
@@ -174,10 +175,23 @@ void ARaidGameMode::PostLogin(APlayerController* NewPlayer)
 
 	if (HasAuthority())
 	{
+		FName RejectReason;
+		if (!CanAcceptRaidJoinForServer(RejectReason))
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=PostLogin"),
+				*BuildRaidGameModeControllerLogString(NewPlayer),
+				RejectReason.IsNone() ? TEXT("Unknown") : *RejectReason.ToString());
+			return;
+		}
+
 		if (ARaidGameState* GS = GetGameState<ARaidGameState>())
 		{
 			GS->CurrentPlayers++;
 			UE_LOG(LogTemp, Log, TEXT("[Server] PostLogin: CurrentPlayers = %d"), GS->CurrentPlayers);
+			if (GS->RaidState == ERaidState::Waiting)
+			{
+				GS->SetRaidStateForServer(ERaidState::Drafting);
+			}
 		}
 	}
 }
@@ -210,6 +224,7 @@ APawn* ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* Ne
 			*BuildRaidGameModeControllerLogString(NewPlayer),
 			World ? TEXT("Valid") : TEXT("None"),
 			*GetNameSafe(PawnClass));
+		NotifyRaidSpawnFailedForServer(NewPlayer, FName(TEXT("SpawnFailed")));
 		return nullptr;
 	}
 
@@ -259,7 +274,35 @@ APawn* ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* Ne
 		bUsedFallbackAlwaysSpawn ? TEXT("true") : TEXT("false"),
 		*SpawnTransform.ToHumanReadableString());
 
+	if (!SpawnedPawn)
+	{
+		NotifyRaidSpawnFailedForServer(NewPlayer, FName(TEXT("SpawnFailed")));
+	}
+
 	return SpawnedPawn;
+}
+
+bool ARaidGameMode::NotifyRaidSpawnFailedForServer(AController* Controller, FName Reason) const
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Controller);
+	if (!RaidPC)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] RaidLoadFailed NotifySkipped Reason=InvalidPlayerController PC=%s"),
+			*BuildRaidGameModeControllerLogString(Controller));
+		return false;
+	}
+
+	const FName FailureReason = Reason.IsNone() ? FName(TEXT("SpawnFailed")) : Reason;
+	RaidPC->Client_NotifyRaidLoadFailed(FailureReason, FName(TEXT("LobbyMap")));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadFailed NotifySent Player=%s Reason=%s TargetMap=LobbyMap"),
+		*BuildRaidGameModeControllerLogString(RaidPC),
+		*FailureReason.ToString());
+	return true;
 }
 
 void ARaidGameMode::Logout(AController* Exiting)
@@ -393,6 +436,9 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 		}
 	}
 
+	SetAllBossStatesForServer(EBossState::Clear, Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+	ResetBossDamageContributionsForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd part return completed Reason=%s PlayerCount=%d"),
 		*ReasonText,
 		EligiblePlayerCount);
@@ -446,6 +492,86 @@ void ARaidGameMode::StopBossPatternsForServer(FName Reason)
 	}
 }
 
+bool ARaidGameMode::CanAcceptRaidJoinForServer(FName& OutRejectReason) const
+{
+	OutRejectReason = NAME_None;
+	if (!HasAuthority())
+	{
+		OutRejectReason = FName(TEXT("NotAuthority"));
+		return false;
+	}
+
+	if (bRaidTimeLimitExpiredForServer)
+	{
+		OutRejectReason = FName(TEXT("TimeOver"));
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	const ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!GS)
+	{
+		OutRejectReason = FName(TEXT("NoRaidState"));
+		return false;
+	}
+
+	const ARaidBoss* Boss = GS->GetRaidBoss();
+	if (!Boss)
+	{
+		for (TActorIterator<ARaidBoss> It(World); It; ++It)
+		{
+			Boss = *It;
+			break;
+		}
+	}
+
+	if (Boss)
+	{
+		if (Boss->GetBossState() == EBossState::Clear)
+		{
+			OutRejectReason = FName(TEXT("BossClear"));
+			return false;
+		}
+
+		if (Boss->GetBossState() == EBossState::Dead || Boss->IsDefeated())
+		{
+			OutRejectReason = FName(TEXT("BossDead"));
+			return false;
+		}
+	}
+
+	if (GS->RaidState != ERaidState::Waiting
+		&& GS->RaidState != ERaidState::Drafting
+		&& GS->RaidState != ERaidState::Battle)
+	{
+		OutRejectReason = GS->RaidState == ERaidState::End
+			? FName(TEXT("RaidEnded"))
+			: FName(TEXT("InvalidRaidState"));
+		return false;
+	}
+
+	return true;
+}
+
+void ARaidGameMode::SetAllBossStatesForServer(EBossState NewBossState, FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	for (TActorIterator<ARaidBoss> It(World); It; ++It)
+	{
+		It->SetBossStateForServer(NewBossState, Reason);
+	}
+}
+
 void ARaidGameMode::StartRaidTimeLimitTimerForServer()
 {
 	if (!HasAuthority())
@@ -481,15 +607,18 @@ void ARaidGameMode::StartRaidTimeLimitTimerForServer()
 	}
 
 	const float ClampedTimeLimit = FMath::Max(0.01f, RaidTimeLimitSeconds);
+	GS->SetRaidTimeEndServerTimeForServer(World->GetTimeSeconds() + ClampedTimeLimit);
 	World->GetTimerManager().SetTimer(
 		RaidTimeLimitTimerHandle,
 		this,
 		&ARaidGameMode::HandleRaidTimeLimitExpiredForServer,
 		ClampedTimeLimit,
 		false);
+	bRaidTimeLimitExpiredForServer = false;
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerStart Duration=%.2f"),
-		ClampedTimeLimit);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerStart Duration=%.2f EndServerTime=%.2f"),
+		ClampedTimeLimit,
+		GS->GetRaidTimeEndServerTime());
 }
 
 void ARaidGameMode::ClearRaidTimeLimitTimerForServer(FName Reason)
@@ -503,6 +632,11 @@ void ARaidGameMode::ClearRaidTimeLimitTimerForServer(FName Reason)
 	if (!World)
 	{
 		return;
+	}
+
+	if (ARaidGameState* GS = World->GetGameState<ARaidGameState>())
+	{
+		GS->SetRaidTimeEndServerTimeForServer(0.0f);
 	}
 
 	if (World->GetTimerManager().TimerExists(RaidTimeLimitTimerHandle))
@@ -541,6 +675,7 @@ void ARaidGameMode::HandleRaidTimeLimitExpiredForServer()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimerExpired Result=RaidEnd Reason=RaidTimeLimit"));
+	bRaidTimeLimitExpiredForServer = true;
 	ReturnAllEquippedPartsForRaidEnd(FName(TEXT("RaidTimeLimit")));
 }
 
@@ -555,6 +690,20 @@ void ARaidGameMode::ExpireRaidTimeLimitForTest()
 {
 	HandleRaidTimeLimitExpiredForServer();
 }
+
+bool ARaidGameMode::NotifyRaidSpawnFailedForTest(AController* Controller, FName Reason)
+{
+	const bool bNotified = NotifyRaidSpawnFailedForServer(Controller, Reason);
+	if (bNotified)
+	{
+		const FName FailureReason = Reason.IsNone() ? FName(TEXT("SpawnFailed")) : Reason;
+		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Controller))
+		{
+			RaidPC->HandleRaidLoadFailedForClient(FailureReason, FName(TEXT("LobbyMap")));
+		}
+	}
+	return bNotified;
+}
 #endif
 
 UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const
@@ -562,14 +711,116 @@ UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const
 	return DronePartReturnManager;
 }
 
-FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const ARaidPlayerController* RaidPC)
+bool ARaidGameMode::RecordBossDamageForServer(APlayerController* PlayerController, float DamageAmount)
 {
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=NotAuthority Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(PlayerController),
+			DamageAmount);
+		return false;
+	}
+
+	if (DamageAmount <= KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=NoDamage Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(PlayerController),
+			DamageAmount);
+		return false;
+	}
+
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(PlayerController);
 	if (!RaidPC)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=InvalidPlayer Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(PlayerController),
+			DamageAmount);
+		return false;
+	}
+
+	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	if (PlayerKey.IsEmpty())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=InvalidPlayerKey Player=%s Damage=%.2f"),
+			*BuildRaidGameModeControllerLogString(RaidPC),
+			DamageAmount);
+		return false;
+	}
+
+	float& TotalDamage = PlayerBossDamageMap.FindOrAdd(PlayerKey);
+	TotalDamage += DamageAmount;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionDamage Player=%s Key=%s Added=%.2f Total=%.2f"),
+		*BuildRaidGameModeControllerLogString(RaidPC),
+		*PlayerKey,
+		DamageAmount,
+		TotalDamage);
+	return true;
+}
+
+float ARaidGameMode::GetBossDamageForPlayerKeyForServer(const FString& PlayerKey) const
+{
+	if (!HasAuthority() || PlayerKey.IsEmpty())
+	{
+		return 0.0f;
+	}
+
+	if (const float* Damage = PlayerBossDamageMap.Find(PlayerKey))
+	{
+		return *Damage;
+	}
+	return 0.0f;
+}
+
+TArray<FDroneBossDamageContribution> ARaidGameMode::GetSortedBossDamageContributionsForServer() const
+{
+	TArray<FDroneBossDamageContribution> Contributions;
+	if (!HasAuthority())
+	{
+		return Contributions;
+	}
+
+	Contributions.Reserve(PlayerBossDamageMap.Num());
+	for (const TPair<FString, float>& Pair : PlayerBossDamageMap)
+	{
+		FDroneBossDamageContribution Contribution;
+		Contribution.PlayerKey = Pair.Key;
+		Contribution.Damage = Pair.Value;
+		Contributions.Add(Contribution);
+	}
+
+	Contributions.Sort([](const FDroneBossDamageContribution& Left, const FDroneBossDamageContribution& Right)
+	{
+		if (FMath::IsNearlyEqual(Left.Damage, Right.Damage, 0.001f))
+		{
+			return Left.PlayerKey < Right.PlayerKey;
+		}
+		return Left.Damage > Right.Damage;
+	});
+	return Contributions;
+}
+
+void ARaidGameMode::ResetBossDamageContributionsForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const int32 PreviousCount = PlayerBossDamageMap.Num();
+	PlayerBossDamageMap.Reset();
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionReset Reason=%s PreviousCount=%d"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		PreviousCount);
+}
+
+FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const APlayerController* PlayerController)
+{
+	if (!PlayerController)
 	{
 		return FString();
 	}
 
-	if (const APlayerState* PS = RaidPC->PlayerState)
+	if (const APlayerState* PS = PlayerController->PlayerState)
 	{
 		const FUniqueNetIdRepl& UniqueId = PS->GetUniqueId();
 		if (UniqueId.IsValid())
@@ -579,8 +830,8 @@ FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const ARaidPlayerContr
 		return FString::Printf(TEXT("PID:%d"), PS->GetPlayerId());
 	}
 
-	// 오프라인/테스트 월드에서 PlayerState가 없으면 PC 이름으로 격리한다.
-	return FString::Printf(TEXT("PC:%s"), *RaidPC->GetName());
+	// Offline/test worlds may not provide PlayerState, so isolate by PC name.
+	return FString::Printf(TEXT("PC:%s"), *PlayerController->GetName());
 }
 
 bool ARaidGameMode::TryMarkDroneReportGeneratedForServer(ARaidPlayerController* RaidPC)

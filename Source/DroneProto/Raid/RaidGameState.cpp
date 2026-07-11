@@ -24,6 +24,23 @@ const TCHAR* ToNetRoleLogString(ENetRole Role)
 	}
 }
 
+const TCHAR* ToRaidStateLogStringForGameState(ERaidState State)
+{
+	switch (State)
+	{
+	case ERaidState::Waiting:
+		return TEXT("Waiting");
+	case ERaidState::Drafting:
+		return TEXT("Drafting");
+	case ERaidState::Battle:
+		return TEXT("Battle");
+	case ERaidState::End:
+		return TEXT("End");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
 FString BuildInventoryReplicationDebugString(const ADronePartInventory* Inventory)
 {
 	if (!Inventory)
@@ -58,6 +75,7 @@ void ARaidGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ARaidGameState, CurrentPlayers);
 	DOREPLIFETIME(ARaidGameState, DronePartInventory);
 	DOREPLIFETIME(ARaidGameState, RaidBoss);
+	DOREPLIFETIME(ARaidGameState, RaidTimeEndServerTime);
 }
 
 ADronePartInventory* ARaidGameState::GetDronePartInventory() const
@@ -68,6 +86,22 @@ ADronePartInventory* ARaidGameState::GetDronePartInventory() const
 ARaidBoss* ARaidGameState::GetRaidBoss() const
 {
 	return RaidBoss.Get();
+}
+
+float ARaidGameState::GetRaidTimeEndServerTime() const
+{
+	return RaidTimeEndServerTime;
+}
+
+float ARaidGameState::GetRaidRemainingSeconds() const
+{
+	if (RaidTimeEndServerTime <= 0.0f)
+	{
+		return 0.0f;
+	}
+
+	const float RemainingSeconds = RaidTimeEndServerTime - GetServerWorldTimeSeconds();
+	return FMath::Clamp(RemainingSeconds, 0.0f, 180.0f);
 }
 
 void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
@@ -83,9 +117,28 @@ void ARaidGameState::SetRaidStateForServer(ERaidState NewRaidState)
 		return;
 	}
 
+	const ERaidState PreviousRaidState = RaidState;
 	RaidState = NewRaidState;
 	ForceNetUpdate();
-	UE_LOG(LogTemp, Log, TEXT("[Server] RaidState changed -> %d"), static_cast<int32>(RaidState));
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidState Previous=%s New=%s"),
+		ToRaidStateLogStringForGameState(PreviousRaidState),
+		ToRaidStateLogStringForGameState(RaidState));
+}
+
+void ARaidGameState::SetRaidTimeEndServerTimeForServer(float NewRaidTimeEndServerTime)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetRaidTimeEndServerTimeForServer rejected: GameState has no authority"));
+		return;
+	}
+
+	RaidTimeEndServerTime = FMath::Max(0.0f, NewRaidTimeEndServerTime);
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidTimer EndServerTime=%.2f Remaining=%.2f"),
+		RaidTimeEndServerTime,
+		GetRaidRemainingSeconds());
 }
 
 void ARaidGameState::SetDronePartInventory(ADronePartInventory* InDronePartInventory)
@@ -131,7 +184,7 @@ void ARaidGameState::SetRaidBossForServer(ARaidBoss* InRaidBoss)
 
 void ARaidGameState::OnRep_RaidState()
 {
-	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %d"), static_cast<int32>(RaidState));
+	UE_LOG(LogTemp, Log, TEXT("[Client] RaidState replicated -> %s"), ToRaidStateLogStringForGameState(RaidState));
 }
 
 void ARaidGameState::OnRep_DronePartInventory()
@@ -149,6 +202,42 @@ void ARaidGameState::OnRep_RaidBoss()
 {
 	UE_LOG(LogTemp, Log, TEXT("[Client] OnRep_RaidBoss: %s"),
 		RaidBoss ? *RaidBoss->GetName() : TEXT("None"));
+
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
+			{
+				if (RaidPC->IsLocalController())
+				{
+					RaidPC->RefreshBossHUDForLocalPlayer();
+				}
+			}
+		}
+	}
+}
+
+void ARaidGameState::OnRep_RaidTimeEndServerTime()
+{
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] OnRep_RaidTimeEndServerTime EndServerTime=%.2f Remaining=%.2f"),
+		RaidTimeEndServerTime,
+		GetRaidRemainingSeconds());
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=OnRep_RaidTimeEndServerTime Target=BossHUD"));
+
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
+			{
+				if (RaidPC->IsLocalController())
+				{
+					RaidPC->RefreshBossHUDForLocalPlayer();
+				}
+			}
+		}
+	}
 }
 
 void ARaidGameState::HandleDronePartStocksChanged()

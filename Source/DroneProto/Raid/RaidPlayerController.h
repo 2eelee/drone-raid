@@ -12,6 +12,7 @@
 class ADronePartInventory;
 class ADrone;
 class ARaidBoss;
+class UBossHUDWidget;
 class UDroneReportWidget;
 class UTexture2D;
 class UDronePartReturnManager;
@@ -48,6 +49,9 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UDroneReportWidget> DroneReportWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UBossHUDWidget> BossHUDWidgetClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	bool bAutoShowDronePartSelectUI = true;
@@ -159,7 +163,25 @@ public:
 	void HideDroneReportWidget();
 
 	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ShowBossHUDForLocalPlayer();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void HideBossHUDForLocalPlayer();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void RefreshBossHUDForLocalPlayer();
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	bool IsBossHUDVisibleForLocalPlayer() const;
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
 	void RefreshSelectionUI();
+
+	UFUNCTION(BlueprintCallable, Category = "Raid")
+	void HandleRaidLoadFailedForClient(FName Reason, FName TargetMap);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Raid|UI")
+	void BP_OnRaidLoadFailed(FName Reason, FName TargetMap);
 
 	void SetSelectedPartIDForSlotForServer(EPartSlot Slot, FName PartID);
 	void SetEquippedPartIDForSlotForServer(EPartSlot Slot, FName PartID);
@@ -211,6 +233,10 @@ public:
 	int32 GetTargetMarkerChangedCountForTest() const;
 	bool WasLastTargetMarkerVisibleForTest() const;
 	ARaidBoss* GetLastTargetMarkerBossForTest() const;
+	void SetSuppressRaidLoadFailedLobbyTravelForTest(bool bInSuppressTravel) { bSuppressRaidLoadFailedLobbyTravelForTest = bInSuppressTravel; }
+	int32 GetRaidLoadFailedReturnToLobbyCountForTest() const { return RaidLoadFailedReturnToLobbyCountForTest; }
+	FName GetLastRaidLoadFailedReasonForTest() const { return LastRaidLoadFailedReason; }
+	FName GetLastRaidLoadFailedTargetMapForTest() const { return LastRaidLoadFailedTargetMap; }
 #endif
 
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Drone Parts")
@@ -248,6 +274,9 @@ public:
 
 	UFUNCTION(Client, Reliable, Category = "Raid")
 	void Client_NotifyRaidEndedForUI(FName Reason);
+
+	UFUNCTION(Client, Reliable, Category = "Raid")
+	void Client_NotifyRaidLoadFailed(FName Reason, FName TargetMap);
 
 	UFUNCTION(Exec)
 	void D4SelectPart(FString SlotName, FString PartIDText);
@@ -310,6 +339,9 @@ private:
 	TObjectPtr<UDroneReportWidget> CurrentDroneReportWidget = nullptr;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UBossHUDWidget> BossHUDWidget = nullptr;
+
+	UPROPERTY(Transient)
 	TObjectPtr<ADronePartInventory> BoundDronePartInventory = nullptr;
 
 	UPROPERTY(Transient)
@@ -317,6 +349,15 @@ private:
 
 	UPROPERTY(Transient)
 	FDroneReportData LastDroneReportData;
+
+	UPROPERTY(Transient)
+	bool bRaidLoadFailedReturnToLobbyRequested = false;
+
+	UPROPERTY(Transient)
+	FName LastRaidLoadFailedReason = NAME_None;
+
+	UPROPERTY(Transient)
+	FName LastRaidLoadFailedTargetMap = NAME_None;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Debug", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "cm"))
 	float DebugBossTelegraphRadiusCm = 300.0f;
@@ -334,6 +375,8 @@ private:
 	int32 TargetMarkerChangedCountForTest = 0;
 	bool bLastTargetMarkerVisibleForTest = false;
 	TWeakObjectPtr<ARaidBoss> LastTargetMarkerBossForTest;
+	bool bSuppressRaidLoadFailedLobbyTravelForTest = false;
+	int32 RaidLoadFailedReturnToLobbyCountForTest = 0;
 #endif
 #if WITH_DEV_AUTOMATION_TESTS
 	UDronePartReturnManager* TestDronePartReturnManager = nullptr;
@@ -358,6 +401,7 @@ private:
 	bool ProcessReadyForRaidForServer(bool bAutoReady);
 	void HandleDebugTriggerBossTelegraphAttackForServer(float RadiusCm, int32 DamageAmount, float TelegraphSeconds, float ForwardOffsetCm);
 	void HandleDebugSetBossStunnedForServer(bool bStunned);
+	void ReturnToLobbyForRaidLoadFailure(FName Reason, FName TargetMap);
 	static const TCHAR* ReportGradeToLogString(EDroneReportGrade Grade);
 	static const TCHAR* ReportTriggerToLogString(EDroneReportTrigger Trigger);
 	static bool ReportHasBonus(const FDroneReportData& ReportData, EDroneReportBonusType BonusType);

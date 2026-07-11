@@ -133,6 +133,9 @@ struct DRONEPROTO_API FDroneCoreCalculationResult
 	float CoreBonusAttackModifier = 1.0f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float CoreMoveSpeedModifier = 1.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
 	float HPRatio = 0.0f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
@@ -282,6 +285,8 @@ struct DRONEPROTO_API FDroneCombatRules
 		switch (Input.CoreType)
 		{
 		case EDroneCombatCoreType::Zenith:
+			Result.CoreAttackModifier = 1.0f;
+			Result.CoreMoveSpeedModifier = 1.0f;
 			Result.HPRatio = Input.MaxHP > KINDA_SMALL_NUMBER
 				? FMath::Clamp(Input.CurrentHP / Input.MaxHP, 0.0f, 1.0f)
 				: 0.0f;
@@ -290,11 +295,18 @@ struct DRONEPROTO_API FDroneCombatRules
 
 		case EDroneCombatCoreType::Booster:
 		{
+			Result.CoreAttackModifier = 0.95f;
+			Result.CoreMoveSpeedModifier = 1.0f;
 			const int32 MoveStackCount = FMath::Max(0, FMath::FloorToInt(FMath::Max(0.0f, Input.AccumulatedMoveDistanceMeters) / 20.0f));
 			Result.MoveSpeedBonus = FMath::Min(static_cast<float>(MoveStackCount) * 0.03f, 0.30f);
 			Result.CoreBonusAttackModifier = 1.0f + (Result.MoveSpeedBonus * 0.5f);
 			break;
 		}
+
+		case EDroneCombatCoreType::Drain:
+			Result.CoreAttackModifier = 0.85f;
+			Result.CoreMoveSpeedModifier = 0.9f;
+			break;
 
 		default:
 			break;
