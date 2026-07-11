@@ -202,6 +202,20 @@ void ARaidGameState::OnRep_RaidBoss()
 {
 	UE_LOG(LogTemp, Log, TEXT("[Client] OnRep_RaidBoss: %s"),
 		RaidBoss ? *RaidBoss->GetName() : TEXT("None"));
+
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
+			{
+				if (RaidPC->IsLocalController())
+				{
+					RaidPC->RefreshBossHUDForLocalPlayer();
+				}
+			}
+		}
+	}
 }
 
 void ARaidGameState::OnRep_RaidTimeEndServerTime()
@@ -210,6 +224,20 @@ void ARaidGameState::OnRep_RaidTimeEndServerTime()
 		RaidTimeEndServerTime,
 		GetRaidRemainingSeconds());
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=OnRep_RaidTimeEndServerTime Target=BossHUD"));
+
+	if (UWorld* World = GetWorld())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(It->Get()))
+			{
+				if (RaidPC->IsLocalController())
+				{
+					RaidPC->RefreshBossHUDForLocalPlayer();
+				}
+			}
+		}
+	}
 }
 
 void ARaidGameState::HandleDronePartStocksChanged()

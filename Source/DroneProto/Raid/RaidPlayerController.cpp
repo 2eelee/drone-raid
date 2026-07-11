@@ -1,4 +1,5 @@
 #include "RaidPlayerController.h"
+#include "BossHUDWidget.h"
 #include "Drone.h"
 #include "DronePartInventory.h"
 #include "DroneReportWidget.h"
@@ -219,6 +220,8 @@ void ARaidPlayerController::BeginPlay()
 
 void ARaidPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	HideBossHUDForLocalPlayer();
+
 	if (HasAuthority())
 	{
 		ClearBossTargetForServer(FName(TEXT("Travel")));
@@ -986,6 +989,7 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 	RefreshSelectionUI();
 
 	HideDronePartSelectUI();
+	ShowBossHUDForLocalPlayer();
 }
 
 void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDroneReportData& ReportData)
@@ -997,6 +1001,7 @@ void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDron
 
 	if (IsLocalController())
 	{
+		HideBossHUDForLocalPlayer();
 		ShowDroneReportWidget(ReportData);
 	}
 }
@@ -1017,6 +1022,7 @@ void ARaidPlayerController::Client_NotifyRaidEndedForUI_Implementation(FName Rea
 		Reason.IsNone() ? TEXT("RaidEnd") : *Reason.ToString(),
 		ToPlayerSelectionStateLogString(PlayerSelectionState));
 	RefreshSelectionUI();
+	HideBossHUDForLocalPlayer();
 }
 
 void ARaidPlayerController::Client_NotifyRaidLoadFailed_Implementation(FName Reason, FName TargetMap)
@@ -1038,6 +1044,7 @@ void ARaidPlayerController::HandleRaidLoadFailedForClient(FName Reason, FName Ta
 		*LobbyTargetMap.ToString());
 
 	BP_OnRaidLoadFailed(NormalizedReason, LobbyTargetMap);
+	HideBossHUDForLocalPlayer();
 	ReturnToLobbyForRaidLoadFailure(NormalizedReason, LobbyTargetMap);
 }
 
@@ -1628,6 +1635,95 @@ void ARaidPlayerController::HideDroneReportWidget()
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetHidden Player=%s"),
 		*BuildControllerLogString(this));
+}
+
+void ARaidPlayerController::ShowBossHUDForLocalPlayer()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (!BossHUDWidgetClass)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDSkipped Reason=MissingClass Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	if (!BossHUDWidget)
+	{
+		BossHUDWidget = CreateWidget<UBossHUDWidget>(this, BossHUDWidgetClass);
+	}
+
+	if (!BossHUDWidget)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ShowBossHUDForLocalPlayer failed: widget could not be created Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	const bool bAlreadyInViewport = BossHUDWidget->IsInViewport();
+	BossHUDWidget->RefreshBossHUD();
+
+	if (!bAlreadyInViewport)
+	{
+		BossHUDWidget->AddToViewport();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDShown Player=%s"),
+			*BuildControllerLogString(this));
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDRefreshed Player=%s"),
+		*BuildControllerLogString(this));
+}
+
+void ARaidPlayerController::HideBossHUDForLocalPlayer()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (BossHUDWidget && BossHUDWidget->IsInViewport())
+	{
+		BossHUDWidget->RemoveFromParent();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] UIRefresh Source=BossHUDHidden Player=%s"),
+			*BuildControllerLogString(this));
+	}
+}
+
+void ARaidPlayerController::RefreshBossHUDForLocalPlayer()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	if (BossHUDWidget)
+	{
+		BossHUDWidget->RefreshBossHUD();
+	}
+}
+
+bool ARaidPlayerController::IsBossHUDVisibleForLocalPlayer() const
+{
+	return BossHUDWidget && BossHUDWidget->IsInViewport();
 }
 
 void ARaidPlayerController::RefreshSelectionUI()
@@ -2607,6 +2703,15 @@ void ARaidPlayerController::OnRep_PlayerSelectionState()
 		ToPlayerSelectionStateLogString(PlayerSelectionState),
 		*GetRaidStateLogString(this));
 	RefreshSelectionUI();
+
+	if (PlayerSelectionState == EPlayerSelectionState::InBattle)
+	{
+		ShowBossHUDForLocalPlayer();
+	}
+	else
+	{
+		HideBossHUDForLocalPlayer();
+	}
 }
 
 void ARaidPlayerController::OnRep_SelectionEndServerTime()
@@ -2617,4 +2722,5 @@ void ARaidPlayerController::OnRep_SelectionEndServerTime()
 void ARaidPlayerController::OnRep_CurrentTargetBoss()
 {
 	RefreshTargetMarkerUI();
+	RefreshBossHUDForLocalPlayer();
 }

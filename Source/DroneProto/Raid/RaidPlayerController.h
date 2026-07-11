@@ -12,6 +12,7 @@
 class ADronePartInventory;
 class ADrone;
 class ARaidBoss;
+class UBossHUDWidget;
 class UDroneReportWidget;
 class UTexture2D;
 class UDronePartReturnManager;
@@ -48,6 +49,9 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UDroneReportWidget> DroneReportWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
+	TSubclassOf<UBossHUDWidget> BossHUDWidgetClass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	bool bAutoShowDronePartSelectUI = true;
@@ -157,6 +161,18 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void HideDroneReportWidget();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ShowBossHUDForLocalPlayer();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void HideBossHUDForLocalPlayer();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void RefreshBossHUDForLocalPlayer();
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	bool IsBossHUDVisibleForLocalPlayer() const;
 
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void RefreshSelectionUI();
@@ -321,6 +337,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UDroneReportWidget> CurrentDroneReportWidget = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UBossHUDWidget> BossHUDWidget = nullptr;
 
 	UPROPERTY(Transient)
 	TObjectPtr<ADronePartInventory> BoundDronePartInventory = nullptr;

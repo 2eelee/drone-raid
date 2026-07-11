@@ -1264,6 +1264,166 @@ bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ11BossHUDObservedBossFallbackTest,
+	"DroneProto.Q11.UI.BossHUDObservedBossFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ11BossHUDObservedBossFallbackTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q11BossHUDObservedBossFallbackWorld"));
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossHUDWidget* Widget = Context.PC ? NewObject<UBossHUDWidget>(Context.PC) : nullptr;
+	TestNotNull(TEXT("observed boss fallback world is created"), Context.World);
+	TestNotNull(TEXT("observed boss fallback game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("observed boss fallback PC is spawned"), Context.PC);
+	TestNotNull(TEXT("observed boss fallback drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("observed boss fallback boss is spawned"), Boss);
+	TestNotNull(TEXT("observed boss fallback widget is created"), Widget);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone || !Boss || !Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidBossForServer(Boss);
+	TestTrue(TEXT("PC target assignment succeeds before GameState boss is cleared"),
+		Context.PC->AssignBossTargetForServer());
+	Context.GameState->SetRaidBossForServer(nullptr);
+
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() * 0.50f, Context.PC, Context.Drone);
+	TestTrue(TEXT("boss HUD falls back to owning PC target boss when GameState boss is not available"),
+		FMath::IsNearlyEqual(Widget->GetBossHPPercent(), 0.50f, 0.001f));
+	TestEqual(TEXT("boss HUD fallback builds HP text from owning PC target"),
+		Widget->GetBossHPText().ToString(),
+		FString(TEXT("30000 / 60000")));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ11BossHUDPlayerControllerHookTest,
+	"DroneProto.Q11.UI.BossHUDPlayerControllerHooks",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ11BossHUDPlayerControllerHookTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q11BossHUDPlayerControllerHookWorld"));
+	TestNotNull(TEXT("boss HUD hook world is created"), Context.World);
+	TestNotNull(TEXT("boss HUD hook PC is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestFalse(TEXT("boss HUD starts hidden"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+	Context.PC->ShowBossHUDForLocalPlayer();
+	TestFalse(TEXT("missing BossHUDWidgetClass skips without creating a visible widget"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	Context.PC->RefreshBossHUDForLocalPlayer();
+	Context.PC->HideBossHUDForLocalPlayer();
+	TestFalse(TEXT("hide keeps missing-class boss HUD hidden"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	Context.PC->Client_NotifyRaidReadyResult_Implementation(
+		true,
+		TEXT("Q11 ready"),
+		ADronePartInventory::GetCoreZenithPartID(),
+		ADronePartInventory::GetPulseLaserPartID(),
+		ADronePartInventory::GetFractureBurstPartID());
+	TestFalse(TEXT("ready success show path still skips safely when class is unset"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	FDroneReportData ReportData;
+	ReportData.bIsReportGenerated = true;
+	Context.PC->Client_ReceiveDroneReport_Implementation(ReportData);
+	TestFalse(TEXT("report display path hides boss HUD before report UI"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	Context.PC->SetSuppressRaidLoadFailedLobbyTravelForTest(true);
+	Context.PC->HandleRaidLoadFailedForClient(FName(TEXT("Q11LoadFailed")), FName(TEXT("LobbyMap")));
+	TestFalse(TEXT("load failure path hides boss HUD before lobby return"), Context.PC->IsBossHUDVisibleForLocalPlayer());
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneQ11BossHUDSourceBoundaryTest,
+	"DroneProto.Q11.UI.BossHUDSourceBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneQ11BossHUDSourceBoundaryTest::RunTest(const FString& Parameters)
+{
+	const FString SourceRoot = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid");
+	FString RaidPlayerControllerHeaderSource;
+	FString RaidPlayerControllerSource;
+	FString BossHUDWidgetHeaderSource;
+	FString BossHUDWidgetSource;
+	const bool bHeaderLoaded = FFileHelper::LoadFileToString(
+		RaidPlayerControllerHeaderSource,
+		*(SourceRoot / TEXT("RaidPlayerController.h")));
+	const bool bSourceLoaded = FFileHelper::LoadFileToString(
+		RaidPlayerControllerSource,
+		*(SourceRoot / TEXT("RaidPlayerController.cpp")));
+	const bool bBossHUDHeaderLoaded = FFileHelper::LoadFileToString(
+		BossHUDWidgetHeaderSource,
+		*(SourceRoot / TEXT("BossHUDWidget.h")));
+	const bool bBossHUDSourceLoaded = FFileHelper::LoadFileToString(
+		BossHUDWidgetSource,
+		*(SourceRoot / TEXT("BossHUDWidget.cpp")));
+	TestTrue(TEXT("raid player controller header loads"), bHeaderLoaded);
+	TestTrue(TEXT("raid player controller source loads"), bSourceLoaded);
+	TestTrue(TEXT("boss HUD widget header loads"), bBossHUDHeaderLoaded);
+	TestTrue(TEXT("boss HUD widget source loads"), bBossHUDSourceLoaded);
+	if (!bHeaderLoaded || !bSourceLoaded || !bBossHUDHeaderLoaded || !bBossHUDSourceLoaded)
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("boss HUD widget class is editor-assignable"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("TSubclassOf<UBossHUDWidget> BossHUDWidgetClass")));
+	TestTrue(TEXT("boss HUD widget instance is transient"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("TObjectPtr<UBossHUDWidget> BossHUDWidget")));
+	TestTrue(TEXT("boss HUD show hook exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("ShowBossHUDForLocalPlayer")));
+	TestTrue(TEXT("boss HUD hide hook exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("HideBossHUDForLocalPlayer")));
+	TestTrue(TEXT("boss HUD refresh hook exists"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("RefreshBossHUDForLocalPlayer")));
+	TestTrue(TEXT("boss HUD visibility getter exists for null-safe automation"),
+		RaidPlayerControllerHeaderSource.Contains(TEXT("IsBossHUDVisibleForLocalPlayer")));
+
+	TestTrue(TEXT("boss HUD show implementation is local-player only"),
+		RaidPlayerControllerSource.Contains(TEXT("void ARaidPlayerController::ShowBossHUDForLocalPlayer()"))
+		&& RaidPlayerControllerSource.Contains(TEXT("if (!IsLocalController())")));
+	TestTrue(TEXT("boss HUD show implementation skips dedicated server"),
+		RaidPlayerControllerSource.Contains(TEXT("if (GetNetMode() == NM_DedicatedServer)")));
+	TestTrue(TEXT("boss HUD show implementation adds only the BossHUD widget to viewport"),
+		RaidPlayerControllerSource.Contains(TEXT("BossHUDWidget->AddToViewport()")));
+	TestTrue(TEXT("ready success path shows boss HUD after part select is hidden"),
+		RaidPlayerControllerSource.Contains(TEXT("HideDronePartSelectUI();\r\n\tShowBossHUDForLocalPlayer();"))
+		|| RaidPlayerControllerSource.Contains(TEXT("HideDronePartSelectUI();\n\tShowBossHUDForLocalPlayer();")));
+	TestTrue(TEXT("report path hides boss HUD before report widget display"),
+		RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\r\n\t\tShowDroneReportWidget(ReportData);"))
+		|| RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\n\t\tShowDroneReportWidget(ReportData);")));
+	TestTrue(TEXT("load failure path hides boss HUD before return-to-lobby handling"),
+		RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\r\n\tReturnToLobbyForRaidLoadFailure"))
+		|| RaidPlayerControllerSource.Contains(TEXT("HideBossHUDForLocalPlayer();\n\tReturnToLobbyForRaidLoadFailure")));
+	TestTrue(TEXT("boss HUD has a throttled native tick refresh path"),
+		BossHUDWidgetHeaderSource.Contains(TEXT("NativeTick"))
+		&& BossHUDWidgetSource.Contains(TEXT("BossHUDRefreshIntervalSeconds")));
+	TestTrue(TEXT("boss HUD can fall back to owning raid player controller"),
+		BossHUDWidgetSource.Contains(TEXT("GetOwningRaidPlayerController"))
+		&& BossHUDWidgetSource.Contains(TEXT("GetCurrentTargetBoss")));
+	TestTrue(TEXT("boss HUD logs refresh reasons in DR_SUMMARY format"),
+		BossHUDWidgetSource.Contains(TEXT("[DR_SUMMARY] UIRefresh BossHUD Reason=")));
+	TestTrue(TEXT("boss HUD logs missing observed boss separately from missing game state"),
+		BossHUDWidgetSource.Contains(TEXT("BossHUDSkipped Reason=NoBoss"))
+		&& BossHUDWidgetSource.Contains(TEXT("BossHUDSkipped Reason=NoGameState")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneQ7RaidLoadFailedReturnToLobbyTest,
 	"DroneProto.Q7.RaidLoadFailed.ReturnToLobby",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

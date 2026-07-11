@@ -1764,3 +1764,61 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - Tutorial map assignment, UMG layout/text, dialogue/cutscene timing, debris actor behavior, and first-run persistence remain owner/editor or future-system tasks.
+
+---
+
+## 2026-07-11 - Q11 UI C++ binding readiness pass
+
+### Scope
+- Applied Q11 as an editor-work readiness pass before UMG layout/binding.
+- Kept boss HP, timer, damage, pattern, stun, RaidState, BossState, Inventory, Return, Loadout, Report, RaidEnd, RPC, and replication behavior unchanged.
+- Did not create or edit UMG, `.uasset`, `.umap`, DataTable assets, tutorial maps, dialogue, SaveGame, login, or a UI manager.
+
+### Changes
+- Added a local-only Boss HUD bridge to `ARaidPlayerController`: `BossHUDWidgetClass`, `BossHUDWidget`, show/hide/refresh helpers, and a visibility getter.
+- Boss HUD creation is skipped on dedicated server, skipped for non-local controllers, and null-safe when `BossHUDWidgetClass` is not assigned.
+- Ready/InBattle UI flow now shows the Boss HUD; report, RaidEnd, EndPlay, and RaidLoadFailed paths hide it.
+- Kept `UBossHUDWidget` HP/timer getters as read-only UI accessors over existing replicated boss/game-state data.
+- Added a local editor binding checklist at `docs/Audit/Q11_UI_CPP_BINDING_CHECKLIST_20260711.md`.
+- Tutorial UI and RaidLoadFailed popup remain Blueprint/editor responsibilities using the existing C++ events and getters.
+
+### Verification
+- RED: Build failed after Q11 tests were added because the Boss HUD PlayerController hooks did not exist yet.
+- GREEN: `Automation RunTests DroneProto.Q11.UI; Quit` found 2 tests, 2 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 81 tests, 81 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- BossHUDWidget UMG assignment/binding remains owner/editor work.
+- Tutorial guide widget creation/binding remains owner/editor work.
+- RaidLoadFailed popup presentation remains owner/editor work.
+- 2 Client PIE visual/OnRep checks remain unverified.
+
+---
+
+## 2026-07-11 - Q11 BossHUD value refresh fix
+
+### Scope
+- Investigated BossHUD value staleness after `WBP_BossHUD` creation/AddToViewport succeeded in editor.
+- Kept UMG, `.uasset`, `.umap`, boss HP, timer authority, damage, pattern, stun, RaidState, BossState, Inventory, Return, Loadout, Report, RaidEnd, RPC, and replication variables unchanged.
+
+### Root Cause
+- `UBossHUDWidget` wrote to the optional widget fields, but it only observed `ARaidGameState::RaidBoss`.
+- In client/editor timing, the owning `ARaidPlayerController::CurrentTargetBoss` can be available while the GameState boss pointer is unavailable or late.
+- Raid timer display also had no visible-widget periodic refresh, so `RaidTimeEndServerTime` could be correct while `RaidTimerText` stayed at its last rendered value.
+
+### Changes
+- Added BossHUD observed-boss lookup order: owning `ARaidPlayerController::CurrentTargetBoss`, then `ARaidGameState::RaidBoss`, then first valid `ARaidBoss` in the world.
+- Added visible-widget `NativeTick` refresh throttled at 0.20 seconds for client-side display only.
+- Added immediate BossHUD refresh calls from `OnRep_RaidBoss` and `OnRep_RaidTimeEndServerTime`.
+- Updated BossHUD logs to `[DR_SUMMARY] UIRefresh BossHUD Reason=... HPPercent=... Timer=...` plus `BossHUDSkipped` reasons for `NoBoss`/`NoGameState`.
+- Added Q11 automation coverage for owner-target fallback and the tick/log source boundary.
+
+### Verification
+- RED: `Automation RunTests DroneProto.Q11.UI; Quit` failed because BossHUD did not fall back to the owning PC target boss and had no throttled native tick/log contract.
+- GREEN: `Automation RunTests DroneProto.Q11.UI; Quit` found 3 tests, 3 succeeded, 0 failed, exit code 0.
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Full automation: `Automation RunTests DroneProto; Quit` found 82 tests, 82 succeeded, 0 failed, exit code 0.
+
+### Manual Follow-up
+- PIE verify `WBP_BossHUD` shows `[DR_SUMMARY] UIRefresh BossHUD`, HP text/progress changes after `BossDamage`, and timer text decreases from `03:00`.
