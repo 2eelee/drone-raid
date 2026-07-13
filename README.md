@@ -1,64 +1,43 @@
 # DroneProto
 
-## 프로젝트 요약
+DroneProto는 한정된 부품을 나눠 쓰며 드론을 조립하고 보스를 공략하는 Unreal Engine 멀티플레이 PvE 레이드 프로토타입이다. MMORPG의 전체 규모보다, 여러 플레이어가 같은 자원을 두고 선택하고 협력하는 레이드 전투의 핵심 구조를 먼저 검증하는 데 초점을 두고 있다.
 
-DroneProto는 UE 5.7 기반 멀티플레이 PvE 드론 레이드 프로토타입이다. 플레이어는 서버가 관리하는 공유 부품 풀에서 드론을 조립하고, Ready 후 레이드에 입장해 서버 권한 보스와 전투한 뒤 서버가 생성한 전투 리포트를 받는다.
+## 게임 흐름
 
-현재 README 기준 스냅샷은 Q1~Q10 stacked branch `codex/q10-tutorial-state-skeleton` / 커밋 `8df38e4`다. 이 브랜치는 Q1~Q10을 선형으로 포함하는 통합 후보이며, Q1 직전 문서 정리 커밋 `154d20e`도 함께 포함한다.
+플레이어는 서버가 관리하는 공유 부품 풀에서 코어 1개와 무기 2개를 선택해 드론을 구성한다. 선택이 끝나면 레이드에 진입해 보스를 자동 타겟팅하고, 공격과 직접 회피를 조합해 전투한다. 사망하거나 레이드가 끝나면 사용한 부품은 다시 공유 풀로 돌아가며, 전투 결과는 서버가 리포트로 정리한다.
 
-## 핵심 기능
+- 부품 선택: 한정된 재고를 선착순으로 선택하고 취소하거나 교체한다.
+- 전투: 타겟팅 공격은 확정 명중하며, 보스 패턴은 플레이어가 직접 피한다.
+- 이동: 클라이언트는 입력만 전달하고 서버가 실제 이동과 이동거리를 계산한다.
+- 결과: 피해량과 전투 기록을 서버에서 집계해 DroneReport를 만든다.
 
-- 서버 권한 부품 선택, 취소, 교체, 반환, Ready 흐름.
-- 서버 권한 타겟팅 공격, 보스 피해, 레이드 종료, 리포트 생성 흐름.
-- 서버 소유 이동/회피 처리와 아레나 경계 및 보스 최소 거리 클램프.
-- 공유 부품 재고 기반 중복 선택 및 중복 반환 방지.
-- 보스 HP 60,000, 180초 레이드 타이머, BossState 기반 입장/Ready gate.
-- 코어/무기 전투 계산: Booster/Drain 기본 페널티, Drain 회복 상한, Vector/Booster 이동거리 효과.
-- DataTable 전환 준비: C++ row schema와 PartCountDataTable fallback.
-- BossHUDWidget, RaidLoadFailed, Tutorial 상태머신 등 UMG/에디터 연결용 C++ hook.
-- 서버 전용 중앙 보스 데미지 기여도 map. DroneReport 계산 소스는 기존 CombatRecord 유지.
+## 구현 방향
+
+프로젝트는 UE 5.7과 C++/Blueprint 하이브리드로 구성되어 있다. Dedicated Server 권한 구조를 기준으로 게임 판정은 서버가 담당하고, 클라이언트는 복제된 상태를 화면에 표현한다.
+
+- 공유 부품 재고의 선택·취소·교체·반환을 서버 단일 경로로 처리한다.
+- `RaidState`와 `BossState`를 분리해 레이드 진행과 보스 상태를 각각 관리한다.
+- 공격 피해, 코어·무기 효과, 회복, 이동거리 보너스를 서버에서 계산한다.
+- BossHUD와 전투 비주얼은 복제값, OnRep, ClientRPC, Blueprint hook을 통해 갱신한다.
+- DataTable이 없거나 잘못된 경우에도 C++ 기본값으로 실행할 수 있도록 fallback을 둔다.
+
+현재는 4인 Dedicated Server 환경을 우선 검증하고 있으며, 이후 16인 레이드 확장을 목표로 한다.
 
 ## 현재 상태
 
-- Q1: Boss MaxHP/CurrentHP 기본값을 60,000으로 정합.
-- Q2: Core base modifier 적용. Booster AttackModifier 0.95, Drain AttackModifier 0.85, Drain MoveSpeedModifier 0.9.
-- Q3: 전역 RaidState를 Waiting -> Drafting -> Battle -> End로 정식화.
-- Q4: BossState Spawn/Battle/Dead/Clear 추가 및 Dead/Clear/TimeOver join gate 추가.
-- Q5: DataTable row schema와 PartCountDataTable fallback 준비. `.uasset` DataTable 생성/임포트는 미수행.
-- Q6: RaidTimeEndServerTime 복제와 BossHUDWidget C++ getter 준비.
-- Q7: raid load/spawn failure 시 owning client 통지와 ReturnToLobby C++ hook 추가.
-- Q8: server-only central boss damage contribution map 추가. Report UI/점수식은 미변경.
-- Q9: 보스 패턴/스턴은 source spec 전까지 placeholder boundary로 봉인. 동작 변경 없음.
-- Q10: 튜토리얼 C++ 상태 뼈대만 추가. 맵, UMG, SaveGame, 로그인, 대사/연출은 미구현.
+공유 부품 선택부터 레이드 전투, 보스 처치 또는 시간 종료, 부품 반환, 전투 리포트 생성까지의 기본 흐름이 구현되어 있다. 보스 HP 60,000과 180초 제한시간, 드론 이동·회피, 세 종류의 코어와 무기 효과, BossHUD, 서버 전용 피해 기여도 집계가 포함된다.
 
-## 서버/클라 책임 요약
-
-- 서버: `RaidGameMode`, `RaidGameState`, `RaidBoss`, `DronePartInventory`, `ADrone`의 공격/반환/리포트/타이머/기여도 계산.
-- 클라: UMG C++ 부모 getter, OnRep/ClientRPC 수신, BP hook, 로비 복귀 표현.
-- 추가 RPC: Q7 `Client_NotifyRaidLoadFailed(FName Reason, FName TargetMap)` 1개.
-- 추가 Replicate/OnRep: Q4 `BossState`, Q6 `RaidTimeEndServerTime`.
-- 반환/재고/Loadout 경로: Q1~Q10에서 구조 변경 없음. 기존 서버 단일 경로 유지.
+현재 보스의 임시 원형 공격은 `Corrupted Actino`와 `Stellar Remnant` 패턴으로 교체할 예정이다. 패턴 수치와 동작 명세는 확보됐으며, 최종 비주얼과 VFX, 일부 UMG, 튜토리얼 연출과 저장 흐름은 후속 작업 범위다.
 
 ## 검증
 
-- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` 성공.
-- 자동화: `Automation RunTests DroneProto; Quit` 기준 `79/79 success`, `0 fail`, `EXIT CODE 0`.
-- 자동화 검증 범위: 서버 권한 로직, 선택/반환/Ready, 전투 계산, RaidState/BossState gate, DataTable fallback, RaidTimer/BossHUD getter, RaidLoadFailed hook, Contribution map, Q9 boundary, Tutorial state skeleton.
+- Unreal Editor Development Build 성공
+- `Automation RunTests DroneProto; Quit` 기준 82개 테스트 성공, 실패 0개
+- BossHUD의 HP·타이머 갱신과 prototype 3D label 숨김을 PIE에서 확인
+- 보스 패턴 완성 후 Dedicated Server + 2 Client PIE 수용 검증 예정
 
-## 남은 수동 PIE 검증
+마지막 코드 검증 기준은 2026-07-13이다. 상세 구현 이력과 트러블슈팅은 `docs/DEVLOG.md`에 기록한다.
 
-- 2 Client PIE 보스 패턴 실피격:
-  - `[DR_SUMMARY] BossAttackHit`
-  - `[DR_SUMMARY] CombatVisual DroneDamaged`
-- 클라 OnRep/BP visual:
-  - `[DR_SUMMARY] BossState`
-  - `[DR_SUMMARY] RaidTimer`
-  - `[DR_SUMMARY] Tutorial Step=`
-- UMG 배치/바인딩:
-  - `BossHUDWidget`
-  - Tutorial 안내 위젯
-  - RaidLoadFailed 팝업
-- 에디터/오너 작업:
-  - DataTable `.uasset` 생성/임포트
-  - 튜토리얼 맵/대사/연출/첫 실행 저장
-  - 보스 비주얼, VFX, Report/Contribution 표시 polish
+## 프로젝트 성격
+
+이 저장소는 완성된 게임 배포본이 아니라 서버 권한 레이드 구조와 드론 조립 전투를 검증하는 진행 중인 프로토타입이다. C++은 게임 규칙과 네트워크 책임을 담당하고, Blueprint와 에디터 작업은 UI와 시각 표현을 연결하는 방식으로 역할을 나눈다.
