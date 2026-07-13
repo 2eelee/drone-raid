@@ -7,6 +7,7 @@
 #include "Raid/RaidGameState.h"
 
 #include "Components/PrimitiveComponent.h"
+#include "Components/TextRenderComponent.h"
 #include "Engine/World.h"
 
 namespace
@@ -60,6 +61,25 @@ void SetBossPrimitiveComponentsVisible(ARaidBoss* Boss, bool bVisible)
 		}
 	}
 }
+
+UTextRenderComponent* FindPrototypeVisualLabel(ARaidBoss* Boss)
+{
+	if (!Boss)
+	{
+		return nullptr;
+	}
+
+	TArray<UTextRenderComponent*> TextRenderComponents;
+	Boss->GetComponents<UTextRenderComponent>(TextRenderComponents);
+	for (UTextRenderComponent* TextRenderComponent : TextRenderComponents)
+	{
+		if (TextRenderComponent && TextRenderComponent->GetFName() == FName(TEXT("PrototypeVisualLabel")))
+		{
+			return TextRenderComponent;
+		}
+	}
+	return nullptr;
+}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -85,6 +105,13 @@ bool FRaidBossPrototypeVisualReadyTest::RunTest(const FString& Parameters)
 	}
 
 	TestTrue(TEXT("default C++ raid boss exposes a camera-visible prototype visual"),
+		Boss->IsVisualReadyForCamera());
+	UTextRenderComponent* PrototypeVisualLabel = FindPrototypeVisualLabel(Boss);
+	TestNotNull(TEXT("default C++ raid boss keeps the legacy text label component for compatibility"),
+		PrototypeVisualLabel);
+	TestFalse(TEXT("default C++ raid boss hides the legacy 3D text label"),
+		PrototypeVisualLabel && PrototypeVisualLabel->IsVisible());
+	TestTrue(TEXT("hidden legacy label does not make the boss camera visual invalid"),
 		Boss->IsVisualReadyForCamera());
 
 	FName InvalidReason;

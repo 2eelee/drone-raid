@@ -56,6 +56,9 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|Boss|Telegraph", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UTextRenderComponent> DebugText = nullptr;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Telegraph", meta = (AllowPrivateAccess = "true"))
+	bool bShowDebugText = false;
+
 	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, Category = "Raid|Boss|Telegraph", meta = (AllowPrivateAccess = "true"))
 	FVector Center = FVector::ZeroVector;
 
@@ -71,4 +74,6 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 CombatVisualTelegraphStartCountForTest = 0;
 #endif
+
+	void ApplyDebugTextVisibility();
 };

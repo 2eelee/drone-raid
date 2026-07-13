@@ -1822,3 +1822,29 @@ GameMode → GameState 경유, HasAuthority() 가드 유지.
 
 ### Manual Follow-up
 - PIE verify `WBP_BossHUD` shows `[DR_SUMMARY] UIRefresh BossHUD`, HP text/progress changes after `BossDamage`, and timer text decreases from `03:00`.
+
+---
+
+## 2026-07-13 - Q11 PIE visual label cleanup and selection UI follow-up
+
+### Scope
+- Closed the remaining Q11 PIE visual-label cleanup in C++ only.
+- Kept UMG layout, `.uasset`, `.umap`, boss HP, timer, damage, pattern, stun, RaidState, BossState, Inventory, Return, Loadout, Report, RaidEnd, RPC, and replication variables unchanged.
+- Noted the part-selection screen layout issue as a follow-up instead of changing editor widgets in this pass.
+
+### Changes
+- Hid the prototype boss 3D HP/name label by default while keeping the boss mesh visible and camera-valid.
+- Hid the `ARaidBossAttackTelegraph` prototype debug text (`BOSS ATTACK` / radius text) by default while keeping the attack telegraph mesh and timing behavior intact.
+- Added automation expectations that the legacy boss label and telegraph debug text components can exist but are not visible by default.
+
+### Verification
+- Build: `Build.bat DroneProtoEditor Win64 Development -Project="D:\Documents\Unreal Projects\DroneProto\DroneProto.uproject" -NoLiveCoding -WaitMutex` succeeded.
+- Targeted automation: `Automation RunTests DroneProto.D15.RaidBoss.TelegraphedAreaAttack; Quit` succeeded, exit code 0.
+- Targeted automation: `Automation RunTests DroneProto.D18.Drone.RaidBossPrototypeVisualReady; Quit` succeeded, exit code 0.
+- Full automation: `Automation RunTests DroneProto; Quit` found 82 tests, 82 succeeded, 0 failed, exit code 0.
+- PIE manual check: `Boss VisualReady` now reports `MeshVisible=True LabelVisible=False`; WBP BossHUD remains visible and refreshes HP/timer; boss attack telegraph no longer shows prototype 3D text.
+
+### Manual Follow-up
+- `WBP_DronePartSelect` currently has overlapping text and too many on-screen debug-like fields during the selection phase.
+- Follow-up UMG layout should match the planned three-slot selection composition: Core / Right Weapon / Left Weapon image rows, short stock badges, separate description panels, fixed top-left controls, bottom-left timer, and bottom-center combat start.
+- Hide internal IDs/state text from the player-facing selection screen unless needed behind an explicit debug mode.

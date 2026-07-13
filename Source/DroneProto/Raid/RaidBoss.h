@@ -116,6 +116,9 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|Boss|Visual", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UTextRenderComponent> PrototypeVisualLabel = nullptr;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Visual", meta = (AllowPrivateAccess = "true"))
+	bool bShowPrototypeVisualLabel = false;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Raid|Boss|Visual", meta = (AllowPrivateAccess = "true", ClampMin = "50.0", UIMin = "50.0"))
 	float PrototypeVisualRadiusCm = 220.0f;
 
@@ -186,6 +189,7 @@ private:
 
 	void ClearThisBossFromAllTargetsForServer(FName Reason);
 	void ApplyPrototypeVisualSettings();
+	void ApplyPrototypeVisualLabelVisibility();
 	void RefreshPrototypeVisualHPText();
 	void PlayBossDamagedVisualLocally(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
 	void ExecuteDebugTelegraphedAreaAttackForServer(FVector AttackCenter, float RadiusCm, int32 DamageAmount, ARaidBossAttackTelegraph* TelegraphActor);

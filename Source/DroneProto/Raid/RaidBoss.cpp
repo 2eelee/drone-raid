@@ -93,8 +93,8 @@ ARaidBoss::ARaidBoss()
 	PrototypeVisualLabel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PrototypeVisualLabel->SetGenerateOverlapEvents(false);
 	PrototypeVisualLabel->SetCanEverAffectNavigation(false);
-	PrototypeVisualLabel->SetVisibility(true, true);
-	PrototypeVisualLabel->SetHiddenInGame(false, true);
+	PrototypeVisualLabel->SetVisibility(false, true);
+	PrototypeVisualLabel->SetHiddenInGame(true, true);
 	PrototypeVisualLabel->SetCastShadow(false);
 	PrototypeVisualLabel->SetText(FText::FromString(TEXT("RAID BOSS")));
 	PrototypeVisualLabel->SetHorizontalAlignment(EHTA_Center);
@@ -117,6 +117,7 @@ void ARaidBoss::BeginPlay()
 		ForceNetUpdate();
 	}
 	RefreshPrototypeVisualHPText();
+	ApplyPrototypeVisualLabelVisibility();
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Boss VisualReady: Boss=%s VisualReady=%s Mesh=%s MeshVisible=%s LabelVisible=%s Collision=%s Location=%s"),
 		*GetName(),
@@ -950,6 +951,18 @@ void ARaidBoss::ApplyPrototypeVisualSettings()
 		PrototypeVisualLabel->SetGenerateOverlapEvents(false);
 		PrototypeVisualLabel->SetWorldSize(FMath::Clamp(SafeRadiusCm * 0.55f, 80.0f, 180.0f));
 	}
+	ApplyPrototypeVisualLabelVisibility();
+}
+
+void ARaidBoss::ApplyPrototypeVisualLabelVisibility()
+{
+	if (!PrototypeVisualLabel)
+	{
+		return;
+	}
+
+	PrototypeVisualLabel->SetVisibility(bShowPrototypeVisualLabel, true);
+	PrototypeVisualLabel->SetHiddenInGame(!bShowPrototypeVisualLabel, true);
 }
 
 void ARaidBoss::RefreshPrototypeVisualHPText()

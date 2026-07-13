@@ -37,7 +37,8 @@ ARaidBossAttackTelegraph::ARaidBossAttackTelegraph()
 
 	DebugText = CreateDefaultSubobject<UTextRenderComponent>(TEXT("DebugText"));
 	DebugText->SetupAttachment(SceneRoot);
-	DebugText->SetHiddenInGame(false);
+	DebugText->SetVisibility(false, true);
+	DebugText->SetHiddenInGame(true, true);
 	DebugText->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	DebugText->SetGenerateOverlapEvents(false);
 	DebugText->SetCanEverAffectNavigation(false);
@@ -46,6 +47,7 @@ ARaidBossAttackTelegraph::ARaidBossAttackTelegraph()
 	DebugText->SetWorldSize(32.0f);
 	DebugText->SetTextRenderColor(FColor::Red);
 	DebugText->SetText(FText::FromString(TEXT("BOSS ATTACK")));
+	ApplyDebugTextVisibility();
 }
 
 void ARaidBossAttackTelegraph::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -76,9 +78,21 @@ void ARaidBossAttackTelegraph::InitializeForServer(FVector InCenter, float InRad
 	{
 		DebugText->SetText(FText::FromString(FString::Printf(TEXT("BOSS ATTACK\n%.0fcm"), RadiusCm)));
 	}
+	ApplyDebugTextVisibility();
 	SetLifeSpan(TelegraphSeconds + 1.0f);
 	BP_OnTelegraphStartedVisual(Center, RadiusCm, TelegraphSeconds);
 	ForceNetUpdate();
+}
+
+void ARaidBossAttackTelegraph::ApplyDebugTextVisibility()
+{
+	if (!DebugText)
+	{
+		return;
+	}
+
+	DebugText->SetVisibility(bShowDebugText, true);
+	DebugText->SetHiddenInGame(!bShowDebugText, true);
 }
 
 void ARaidBossAttackTelegraph::MarkExpiredForServer()

@@ -3267,8 +3267,11 @@ bool FRaidBossTelegraphedAreaAttackTest::RunTest(const FString& Parameters)
 		DelayedTelegraph ? DelayedTelegraph->GetRootComponent() : nullptr);
 	TestNotNull(TEXT("telegraphed boss attack marker has an optional mesh component for BP children"),
 		DelayedTelegraph ? DelayedTelegraph->FindComponentByClass<UStaticMeshComponent>() : nullptr);
-	TestNotNull(TEXT("telegraphed boss attack marker has a visible C++ text marker"),
-		DelayedTelegraph ? DelayedTelegraph->FindComponentByClass<UTextRenderComponent>() : nullptr);
+	UTextRenderComponent* DelayedTelegraphText = DelayedTelegraph ? DelayedTelegraph->FindComponentByClass<UTextRenderComponent>() : nullptr;
+	TestNotNull(TEXT("telegraphed boss attack marker keeps an optional C++ text marker for BP children"),
+		DelayedTelegraphText);
+	TestFalse(TEXT("telegraphed boss attack marker hides the prototype 3D text label by default"),
+		DelayedTelegraphText && DelayedTelegraphText->IsVisible());
 	TestTrue(TEXT("telegraphed boss attack marker is replicated"),
 		DelayedTelegraph && DelayedTelegraph->GetIsReplicated());
 	TestTrue(TEXT("telegraphed boss attack marker scales from radius"),
