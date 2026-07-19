@@ -28,6 +28,11 @@ public:
 
 protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	void DrawDashedDebugLine(
+		const FVector& Start,
+		const FVector& End,
+		const FColor& Color,
+		float Thickness) const;
 
 private:
 	UPROPERTY(ReplicatedUsing = OnRep_PatternState)

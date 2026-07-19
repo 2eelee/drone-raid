@@ -608,6 +608,8 @@ bool FDroneCorruptedActinoDebugVisualizationContractTest::RunTest(const FString&
 	TestTrue(TEXT("active centerline is red"), ActorSource.Contains(TEXT("FColor::Red")));
 	TestTrue(TEXT("collision edges are cyan"), ActorSource.Contains(TEXT("FColor::Cyan")));
 	TestTrue(TEXT("visual edges are magenta"), ActorSource.Contains(TEXT("FColor::Magenta")));
+	TestTrue(TEXT("Corrupted prototype lines are dashed"), ActorSource.Contains(TEXT("DrawDashedDebugLine(")));
+	TestFalse(TEXT("Corrupted actor has no direct solid debug lines"), ActorSource.Contains(TEXT("DrawDebugLine(")));
 	return true;
 }
 
@@ -793,6 +795,8 @@ bool FDroneStellarRemnantDebugVisualizationContractTest::RunTest(const FString& 
 	TestTrue(TEXT("telegraph rays are yellow"), ActorSource.Contains(TEXT("FColor::Yellow")));
 	TestTrue(TEXT("damage samples are red"), ActorSource.Contains(TEXT("FColor::Red")));
 	TestTrue(TEXT("visual-only samples are purple"), ActorSource.Contains(TEXT("FColor::Purple")));
+	TestTrue(TEXT("Stellar telegraph rays are dashed"), ActorSource.Contains(TEXT("DrawDashedDebugLine(")));
+	TestFalse(TEXT("Stellar actor has no direct solid debug lines"), ActorSource.Contains(TEXT("DrawDebugLine(")));
 	TestFalse(TEXT("Stellar actor does not spawn projectile actors"), ActorSource.Contains(TEXT("SpawnActor")));
 	return true;
 }

@@ -194,7 +194,7 @@ void AStellarRemnantPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 			const FVector StartWorld = GetActorTransform().TransformPosition(EvaluateLocalPosition(Sample, Sample.StartTimeSeconds));
 			const FVector EndWorld = GetActorTransform().TransformPosition(
 				EvaluateLocalPosition(Sample, Sample.StartTimeSeconds + Config.TravelSeconds));
-			DrawDebugLine(GetWorld(), StartWorld, EndWorld, FColor::Yellow, false, 0.0f, 0, 1.5f);
+			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 1.5f);
 		}
 		return;
 	}

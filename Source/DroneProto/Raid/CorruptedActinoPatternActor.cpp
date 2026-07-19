@@ -3,7 +3,6 @@
 #include "BossPatternComponent.h"
 #include "Components/SceneComponent.h"
 #include "Drone.h"
-#include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
@@ -139,7 +138,7 @@ void ACorruptedActinoPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 
 		if (bTelegraphing)
 		{
-			DrawDebugLine(GetWorld(), StartWorld, EndWorld, FColor::Yellow, false, 0.0f, 0, 3.0f);
+			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 3.0f);
 			DrawTrapezoid(
 				StartWorld,
 				EndWorld,
@@ -150,7 +149,7 @@ void ACorruptedActinoPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 			continue;
 		}
 
-		DrawDebugLine(GetWorld(), StartWorld, EndWorld, FColor::Red, false, 0.0f, 0, 3.0f);
+		DrawDashedDebugLine(StartWorld, EndWorld, FColor::Red, 3.0f);
 		DrawTrapezoid(
 			StartWorld,
 			EndWorld,
@@ -180,10 +179,10 @@ void ACorruptedActinoPatternActor::DrawTrapezoid(
 	const FVector StartRight = StartCenter + RightWorld * InnerHalfWidthCm;
 	const FVector EndLeft = EndCenter - RightWorld * OuterHalfWidthCm;
 	const FVector EndRight = EndCenter + RightWorld * OuterHalfWidthCm;
-	DrawDebugLine(GetWorld(), StartLeft, EndLeft, Color, false, 0.0f, 0, 2.0f);
-	DrawDebugLine(GetWorld(), StartRight, EndRight, Color, false, 0.0f, 0, 2.0f);
-	DrawDebugLine(GetWorld(), StartLeft, StartRight, Color, false, 0.0f, 0, 2.0f);
-	DrawDebugLine(GetWorld(), EndLeft, EndRight, Color, false, 0.0f, 0, 2.0f);
+	DrawDashedDebugLine(StartLeft, EndLeft, Color, 2.0f);
+	DrawDashedDebugLine(StartRight, EndRight, Color, 2.0f);
+	DrawDashedDebugLine(StartLeft, StartRight, Color, 2.0f);
+	DrawDashedDebugLine(EndLeft, EndRight, Color, 2.0f);
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
