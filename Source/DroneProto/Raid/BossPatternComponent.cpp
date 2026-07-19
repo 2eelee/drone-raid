@@ -102,9 +102,11 @@ bool UBossPatternComponent::IsRunning() const
 bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32 DamageAmount)
 {
 	AActor* Owner = GetOwner();
+	const ARaidBoss* Boss = Cast<ARaidBoss>(Owner);
 	const ARaidPlayerController* PlayerController = Target ? Cast<ARaidPlayerController>(Target->GetController()) : nullptr;
 	const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr;
-	if (!Owner || !Owner->HasAuthority() || !Target || !Target->HasAuthority() || DamageAmount <= 0
+	if (!Owner || !Owner->HasAuthority() || !bRunning || ServerState != EBossPatternServerState::Active
+		|| !Boss || Boss->IsDefeated() || !Target || !Target->HasAuthority() || DamageAmount <= 0
 		|| Target->IsDead() || !PlayerController || PlayerController->GetPawn() != Target
 		|| PlayerController->GetPlayerSelectionState() != EPlayerSelectionState::InBattle
 		|| !RaidGameState || RaidGameState->RaidState != ERaidState::Battle)

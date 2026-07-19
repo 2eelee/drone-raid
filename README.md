@@ -27,14 +27,14 @@ DroneProto는 한정된 부품을 나눠 쓰며 드론을 조립하고 보스를
 
 공유 부품 선택부터 레이드 전투, 보스 처치 또는 시간 종료, 부품 반환, 전투 리포트 생성까지의 기본 흐름이 구현되어 있다. 보스 HP 60,000과 180초 제한시간, 드론 이동·회피, 세 종류의 코어와 무기 효과, BossHUD, 서버 전용 피해 기여도 집계가 포함된다.
 
-현재 보스 production 스케줄러는 임시 원형 공격과 분리되어 `Corrupted Actino -> Stellar Remnant` 전이 순서와 복제 lifecycle Actor를 운용한다. 패턴별 충돌·피해·prototype 시각화와 최종 VFX, 일부 UMG, 튜토리얼 연출과 저장 흐름은 후속 작업 범위다.
+현재 보스 production 스케줄러는 임시 원형 공격과 분리되어 `Corrupted Actino -> Stellar Remnant`를 반복한다. 서버는 Corrupted의 4개 analytic 레이저와 Stellar의 두 wave·48개 logical sample을 판정하고, 실제 HP 감소 뒤 플레이어별 공용 HitLock을 적용한다. 클라이언트는 복제된 lifecycle과 서버 시간으로 prototype 시각화를 재구성한다. 최종 VFX, 일부 UMG, 튜토리얼 연출과 저장 흐름은 후속 작업 범위다.
 
 ## 검증
 
 - Unreal Editor Development Build 성공
-- `Automation RunTests DroneProto; Quit` 기준 86개 테스트 성공, 실패 0개
+- `Automation RunTests DroneProto; Quit` 기준 98개 테스트 성공, 실패 0개
 - BossHUD의 HP·타이머 갱신과 prototype 3D label 숨김을 PIE에서 확인
-- 보스 패턴 완성 후 Dedicated Server + 2 Client PIE 수용 검증 예정
+- 보스 패턴의 Dedicated Server + 2 Client PIE 수용 검증 예정
 
 마지막 코드 검증 기준은 2026-07-19이다.
 

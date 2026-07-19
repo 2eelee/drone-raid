@@ -10,6 +10,7 @@
 #include "Raid/BossPatternComponent.h"
 #include "Raid/BossPatternTypes.h"
 #include "Raid/CorruptedActinoPatternActor.h"
+#include "Raid/DronePartInventory.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
@@ -793,6 +794,178 @@ bool FDroneStellarRemnantDebugVisualizationContractTest::RunTest(const FString& 
 	TestTrue(TEXT("damage samples are red"), ActorSource.Contains(TEXT("FColor::Red")));
 	TestTrue(TEXT("visual-only samples are purple"), ActorSource.Contains(TEXT("FColor::Purple")));
 	TestFalse(TEXT("Stellar actor does not spawn projectile actors"), ActorSource.Contains(TEXT("SpawnActor")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternIntegrationLoopPopulationTest,
+	"DroneProto.BossPattern.Integration.LoopPopulationAndPreservation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternIntegrationLoopPopulationTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternIntegrationLoopWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	if (!Context.World || !Context.GameState || !Context.Boss || !Context.Component
+		|| !Context.PlayerController || !Context.Drone || !GameMode)
+	{
+		TestTrue(TEXT("integration loop setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidTimeEndServerTimeForServer(123.0f);
+	const FString ContributionKey = ARaidGameMode::BuildStablePlayerKeyForServer(Context.PlayerController);
+	TestTrue(TEXT("contribution setup succeeds"), GameMode->RecordBossDamageForServer(Context.PlayerController, 12.5f));
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("C starts"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* CorruptedActor = Context.Component->GetActivePatternActorForTest();
+	TestNotNull(TEXT("C owns an actor"), Cast<ACorruptedActinoPatternActor>(CorruptedActor));
+	TestEqual(TEXT("C owns exactly one actor"), CountPatternActors(Context.World), 1);
+	TestTrue(TEXT("C completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("S telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* StellarActor = Context.Component->GetActivePatternActorForTest();
+	TestNotNull(TEXT("S owns a Stellar actor"), Cast<AStellarRemnantPatternActor>(StellarActor));
+	TestTrue(TEXT("S becomes active"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("S reuses its telegraph actor"), Context.Component->GetActivePatternActorForTest(), StellarActor);
+	TestTrue(TEXT("S completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("C telegraph starts again"), Context.Component->FireScheduledTransitionForTest());
+	TestNotNull(TEXT("loop returns to Corrupted actor"),
+		Cast<ACorruptedActinoPatternActor>(Context.Component->GetActivePatternActorForTest()));
+
+	const FBossPatternTestPlayer SecondPlayer = SpawnBossPatternTestPlayer(Context.World, true);
+	TestNotNull(TEXT("second player enters Battle"), SecondPlayer.Drone);
+	TestTrue(TEXT("looped C becomes active"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* ActiveActorBeforeDeath = Context.Component->GetActivePatternActorForTest();
+	const float BossHealthBefore = Context.Boss->GetCurrentHP();
+	const EBossState BossStateBefore = Context.Boss->GetBossState();
+	const float RaidEndTimeBefore = Context.GameState->GetRaidTimeEndServerTime();
+	const float ContributionBefore = GameMode->GetBossDamageForPlayerKeyForServer(ContributionKey);
+
+	Context.Drone->ApplyDamageForServer(Context.Drone->GetMaxHealth() + 1, FName(TEXT("IntegrationFirstDeath")));
+	TickBossPatternTimers(Context.World, KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("one of two deaths keeps active state"), Context.Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	TestEqual(TEXT("one of two deaths keeps current actor"), Context.Component->GetActivePatternActorForTest(), ActiveActorBeforeDeath);
+	TestEqual(TEXT("one of two deaths keeps one actor"), CountPatternActors(Context.World), 1);
+
+	const int32 StaleSerial = Context.Component->GetTransitionSerialForTest();
+	if (SecondPlayer.Drone)
+	{
+		SecondPlayer.Drone->ApplyDamageForServer(SecondPlayer.Drone->GetMaxHealth() + 1, FName(TEXT("IntegrationLastDeath")));
+	}
+	TickBossPatternTimers(Context.World, KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("last death pauses"), Context.Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+	TestEqual(TEXT("last death clears actor"), CountPatternActors(Context.World), 0);
+	TestFalse(TEXT("last death clears timer"), Context.Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("pause preserves Boss HP"), Context.Boss->GetCurrentHP(), BossHealthBefore);
+	TestEqual(TEXT("pause preserves Boss state"), Context.Boss->GetBossState(), BossStateBefore);
+	TestEqual(TEXT("pause preserves raid end time"), Context.GameState->GetRaidTimeEndServerTime(), RaidEndTimeBefore);
+	TestEqual(TEXT("pause preserves contribution"), GameMode->GetBossDamageForPlayerKeyForServer(ContributionKey), ContributionBefore);
+
+	const FBossPatternTestPlayer RejoinedPlayer = SpawnBossPatternTestPlayer(Context.World, true);
+	TestNotNull(TEXT("new InBattle player exists"), RejoinedPlayer.Drone);
+	TestEqual(TEXT("rejoin schedules first delay"), Context.Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestFalse(TEXT("pre-pause callback remains stale"), Context.Component->FireTransitionForTest(StaleSerial));
+	TestEqual(TEXT("stale callback cannot skip restart delay"), Context.Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestTrue(TEXT("current callback restarts Corrupted"), Context.Component->FireScheduledTransitionForTest());
+	TestNotNull(TEXT("restart uses Corrupted actor"),
+		Cast<ACorruptedActinoPatternActor>(Context.Component->GetActivePatternActorForTest()));
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternIntegrationTerminalCleanupTest,
+	"DroneProto.BossPattern.Integration.TerminalCleanup",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternIntegrationTerminalCleanupTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext BossDead = CreateBossPatternPlayerTestContext(TEXT("BossPatternIntegrationBossDeadWorld"));
+	if (!BossDead.World || !BossDead.Boss || !BossDead.Component || !BossDead.Drone)
+	{
+		TestTrue(TEXT("BossDead setup"), false);
+		DestroyBossPatternPlayerTestContext(BossDead);
+		return false;
+	}
+	TestTrue(TEXT("BossDead pattern starts"), BossDead.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("BossDead active pattern starts"), BossDead.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("BossDead creates a HitLock before cleanup"), BossDead.Component->TryApplyPatternDamageForServer(BossDead.Drone, 1));
+	const int32 BossDeadStaleSerial = BossDead.Component->GetTransitionSerialForTest();
+	BossDead.Boss->ApplyDamageForServer(BossDead.Boss->GetMaxHP() + 1.0f, BossDead.PlayerController, BossDead.Drone);
+	TestEqual(TEXT("BossDead stops component"), BossDead.Component->GetServerStateForTest(), EBossPatternServerState::Stopped);
+	TestEqual(TEXT("BossDead clears actor"), CountPatternActors(BossDead.World), 0);
+	TestFalse(TEXT("BossDead clears timer"), BossDead.Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("BossDead clears HitLock"), BossDead.Component->GetHitLockCountForTest(), 0);
+	TestFalse(TEXT("BossDead rejects stale callback"), BossDead.Component->FireTransitionForTest(BossDeadStaleSerial));
+	TestFalse(TEXT("BossDead rejects direct pattern damage"), BossDead.Component->TryApplyPatternDamageForServer(BossDead.Drone, 20));
+	DestroyBossPatternPlayerTestContext(BossDead);
+
+	FBossPatternPlayerTestContext TimeOver = CreateBossPatternPlayerTestContext(TEXT("BossPatternIntegrationTimeOverWorld"));
+	ARaidGameMode* TimeOverGameMode = TimeOver.World ? TimeOver.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ADronePartInventory* Inventory = TimeOver.World ? TimeOver.World->SpawnActor<ADronePartInventory>() : nullptr;
+	if (!TimeOver.World || !TimeOver.GameState || !TimeOver.Boss || !TimeOver.Component
+		|| !TimeOverGameMode || !Inventory)
+	{
+		TestTrue(TEXT("TimeOver setup"), false);
+		DestroyBossPatternPlayerTestContext(TimeOver);
+		return false;
+	}
+	TimeOver.GameState->SetDronePartInventory(Inventory);
+	TimeOver.World->AddController(TimeOver.PlayerController);
+	TestTrue(TEXT("TimeOver pattern starts"), TimeOver.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("TimeOver active pattern starts"), TimeOver.Component->FireScheduledTransitionForTest());
+	TimeOverGameMode->ExpireRaidTimeLimitForTest();
+	TestEqual(TEXT("TimeOver enters RaidEnd"), TimeOver.GameState->RaidState, ERaidState::End);
+	TestEqual(TEXT("TimeOver stops component"), TimeOver.Component->GetServerStateForTest(), EBossPatternServerState::Stopped);
+	TestEqual(TEXT("TimeOver clears actor"), CountPatternActors(TimeOver.World), 0);
+	TestFalse(TEXT("TimeOver rejects pattern damage"), TimeOver.Component->TryApplyPatternDamageForServer(TimeOver.Drone, 20));
+	DestroyBossPatternPlayerTestContext(TimeOver);
+
+	FBossPatternPlayerTestContext DestroyedBoss = CreateBossPatternPlayerTestContext(TEXT("BossPatternIntegrationDestroyedWorld"));
+	if (!DestroyedBoss.World || !DestroyedBoss.Boss || !DestroyedBoss.Component)
+	{
+		TestTrue(TEXT("Destroyed setup"), false);
+		DestroyBossPatternPlayerTestContext(DestroyedBoss);
+		return false;
+	}
+	TestTrue(TEXT("Destroyed pattern starts"), DestroyedBoss.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("Destroyed active pattern starts"), DestroyedBoss.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("Destroyed setup owns actor"), CountPatternActors(DestroyedBoss.World), 1);
+	DestroyedBoss.Boss->Destroy();
+	TestEqual(TEXT("Boss Destroyed clears pattern actor"), CountPatternActors(DestroyedBoss.World), 0);
+	TestFalse(TEXT("Boss Destroyed clears transition timer"), DestroyedBoss.Component->IsTransitionTimerActiveForTest());
+	DestroyBossPatternPlayerTestContext(DestroyedBoss);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternIntegrationMarkerContractTest,
+	"DroneProto.BossPattern.Integration.RequiredMarkers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternIntegrationMarkerContractTest::RunTest(const FString& Parameters)
+{
+	const FString ComponentPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/BossPatternComponent.cpp");
+	FString ComponentSource;
+	TestTrue(TEXT("component source loads"), FFileHelper::LoadFileToString(ComponentSource, *ComponentPath));
+	const TCHAR* RequiredMarkers[] =
+	{
+		TEXT("BossPattern State="),
+		TEXT("Spawn Pattern="),
+		TEXT("BossPattern Hit Pattern="),
+		TEXT("HitIgnored Reason=DodgeInvincible"),
+		TEXT("HitIgnored Reason=PatternHitLock"),
+		TEXT("Pause Reason=NoAlivePlayers"),
+		TEXT("Restart Reason=AlivePlayerJoined"),
+		TEXT("Cleanup Reason=")
+	};
+	for (const TCHAR* Marker : RequiredMarkers)
+	{
+		TestTrue(*FString::Printf(TEXT("required marker exists: %s"), Marker), ComponentSource.Contains(Marker));
+	}
 	return true;
 }
 
