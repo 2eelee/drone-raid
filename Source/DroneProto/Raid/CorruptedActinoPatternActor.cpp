@@ -3,6 +3,7 @@
 #include "BossPatternComponent.h"
 #include "Components/SceneComponent.h"
 #include "Drone.h"
+#include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
@@ -136,38 +137,20 @@ void ACorruptedActinoPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 		const FVector EndWorld = BossStartTransform.TransformPosition(LocalEnd);
 		const FVector RightWorld = BossStartTransform.TransformVectorNoScale(LocalRight).GetSafeNormal();
 
-		if (bTelegraphing)
-		{
-			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 10.0f);
-			DrawTrapezoid(
-				StartWorld,
-				EndWorld,
-				RightWorld,
-				Config.InnerVisualFullWidthCm * 0.5f,
-				Config.OuterVisualFullWidthCm * 0.5f,
-				FColor::Yellow);
-			continue;
-		}
-
-		DrawDashedDebugLine(StartWorld, EndWorld, FColor::Red, 12.0f);
-		DrawTrapezoid(
-			StartWorld,
-			EndWorld,
-			RightWorld,
-			Config.InnerCollisionFullWidthCm * 0.5f,
-			Config.OuterCollisionFullWidthCm * 0.5f,
-			FColor::Cyan);
-		DrawTrapezoid(
+		const FColor SectorColor = bTelegraphing
+			? FColor(255, 196, 0, 96)
+			: FColor(255, 32, 32, 112);
+		DrawFilledTrapezoid(
 			StartWorld,
 			EndWorld,
 			RightWorld,
 			Config.InnerVisualFullWidthCm * 0.5f,
 			Config.OuterVisualFullWidthCm * 0.5f,
-			FColor::Magenta);
+			SectorColor);
 	}
 }
 
-void ACorruptedActinoPatternActor::DrawTrapezoid(
+void ACorruptedActinoPatternActor::DrawFilledTrapezoid(
 	const FVector& StartCenter,
 	const FVector& EndCenter,
 	const FVector& RightWorld,
@@ -175,14 +158,23 @@ void ACorruptedActinoPatternActor::DrawTrapezoid(
 	float OuterHalfWidthCm,
 	const FColor& Color) const
 {
-	const FVector StartLeft = StartCenter - RightWorld * InnerHalfWidthCm;
-	const FVector StartRight = StartCenter + RightWorld * InnerHalfWidthCm;
-	const FVector EndLeft = EndCenter - RightWorld * OuterHalfWidthCm;
-	const FVector EndRight = EndCenter + RightWorld * OuterHalfWidthCm;
-	DrawDashedDebugLine(StartLeft, EndLeft, Color, 8.0f);
-	DrawDashedDebugLine(StartRight, EndRight, Color, 8.0f);
-	DrawDashedDebugLine(StartLeft, StartRight, Color, 8.0f);
-	DrawDashedDebugLine(EndLeft, EndRight, Color, 8.0f);
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const TArray<FVector> Vertices = {
+		StartCenter - RightWorld * InnerHalfWidthCm,
+		EndCenter - RightWorld * OuterHalfWidthCm,
+		EndCenter + RightWorld * OuterHalfWidthCm,
+		StartCenter + RightWorld * InnerHalfWidthCm,
+	};
+	const TArray<int32> Indices = {
+		0, 1, 2, 0, 2, 3,
+		0, 2, 1, 0, 3, 2,
+	};
+	DrawDebugMesh(World, Vertices, Indices, Color, false, 0.0f, 1);
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

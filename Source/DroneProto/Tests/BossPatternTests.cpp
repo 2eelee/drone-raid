@@ -611,16 +611,17 @@ bool FDroneCorruptedActinoDebugVisualizationContractTest::RunTest(const FString&
 	TestTrue(TEXT("Corrupted actor source loads"), FFileHelper::LoadFileToString(ActorSource, *ActorPath));
 	TestTrue(TEXT("visual timing uses server world time"), ActorSource.Contains(TEXT("GetServerWorldTimeSeconds")));
 	TestTrue(TEXT("dedicated server skips debug drawing"), ActorSource.Contains(TEXT("NM_DedicatedServer")));
-	TestTrue(TEXT("telegraph is yellow"), ActorSource.Contains(TEXT("FColor::Yellow")));
-	TestTrue(TEXT("active centerline is red"), ActorSource.Contains(TEXT("FColor::Red")));
-	TestTrue(TEXT("collision edges are cyan"), ActorSource.Contains(TEXT("FColor::Cyan")));
-	TestTrue(TEXT("visual edges are magenta"), ActorSource.Contains(TEXT("FColor::Magenta")));
-	TestTrue(TEXT("Corrupted prototype lines are dashed"), ActorSource.Contains(TEXT("DrawDashedDebugLine(")));
-	TestFalse(TEXT("Corrupted actor has no direct solid debug lines"), ActorSource.Contains(TEXT("DrawDebugLine(")));
-	TestTrue(TEXT("Corrupted active centerline is highly visible"),
-		ActorSource.Contains(TEXT("FColor::Red, 12.0f")));
-	TestTrue(TEXT("Corrupted boundary lines are highly visible"),
-		ActorSource.Contains(TEXT("Color, 8.0f")));
+	TestTrue(TEXT("telegraph is a translucent yellow sector"),
+		ActorSource.Contains(TEXT("FColor(255, 196, 0, 96)")));
+	TestTrue(TEXT("active attack is a translucent red sector"),
+		ActorSource.Contains(TEXT("FColor(255, 32, 32, 112)")));
+	TestTrue(TEXT("Corrupted uses one filled trapezoid helper"),
+		ActorSource.Contains(TEXT("DrawFilledTrapezoid(")));
+	TestTrue(TEXT("Corrupted uses native debug mesh"), ActorSource.Contains(TEXT("DrawDebugMesh(")));
+	TestFalse(TEXT("collision debug boundary is removed"), ActorSource.Contains(TEXT("FColor::Cyan")));
+	TestFalse(TEXT("visual debug boundary is removed"), ActorSource.Contains(TEXT("FColor::Magenta")));
+	TestFalse(TEXT("Corrupted no longer draws dashed line bundles"),
+		ActorSource.Contains(TEXT("DrawDashedDebugLine(")));
 	return true;
 }
 

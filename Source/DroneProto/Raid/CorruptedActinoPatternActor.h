@@ -34,7 +34,7 @@ private:
 	float GetServerWorldTimeSeconds() const;
 	void ApplyDamageForServer(float ElapsedSeconds);
 	void DrawDebugPattern(float ElapsedSeconds) const;
-	void DrawTrapezoid(
+	void DrawFilledTrapezoid(
 		const FVector& StartCenter,
 		const FVector& EndCenter,
 		const FVector& RightWorld,
