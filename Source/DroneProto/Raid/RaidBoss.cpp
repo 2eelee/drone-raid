@@ -1,5 +1,6 @@
 #include "RaidBoss.h"
 
+#include "BossPatternComponent.h"
 #include "Drone.h"
 #include "RaidGameState.h"
 #include "RaidBossAttackTelegraph.h"
@@ -72,6 +73,7 @@ ARaidBoss::ARaidBoss()
 	BossDisplayName = FText::FromString(TEXT("Raid Boss"));
 	bIsTargetable = true;
 	TargetMarkerSocketName = FName(TEXT("TargetMarker"));
+	BossPatternComponent = CreateDefaultSubobject<UBossPatternComponent>(TEXT("BossPatternComponent"));
 
 	PrototypeVisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PrototypeVisualMesh"));
 	SetRootComponent(PrototypeVisualMesh);
@@ -180,27 +182,13 @@ bool ARaidBoss::StartBossPatternForServer()
 		return false;
 	}
 
-	if (World->GetTimerManager().IsTimerActive(BossPatternTimerHandle))
+	if (!BossPatternComponent || !BossPatternComponent->StartForServer())
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern StartIgnored: Reason=AlreadyActive Boss=%s"), *GetName());
 		return false;
 	}
 
 	SetBossStateForServer(EBossState::Battle, FName(TEXT("BossPatternStart")));
-
-	const float ClampedInterval = FMath::Max(0.5f, BossPatternIntervalSeconds);
-	World->GetTimerManager().SetTimer(
-		BossPatternTimerHandle,
-		this,
-		&ARaidBoss::HandleBossPatternTimerFiredForServer,
-		ClampedInterval,
-		true);
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Started: Boss=%s Interval=%.2f Radius=%.2f Damage=%d Telegraph=%.2f"),
-		*GetName(),
-		ClampedInterval,
-		BossPatternRadiusCm,
-		BossPatternDamage,
-		BossPatternTelegraphSeconds);
 	return true;
 }
 
@@ -211,19 +199,9 @@ void ARaidBoss::StopBossPatternForServer(FName Reason)
 		return;
 	}
 
-	UWorld* World = GetWorld();
-	if (!World)
+	if (BossPatternComponent)
 	{
-		return;
-	}
-
-	if (World->GetTimerManager().TimerExists(BossPatternTimerHandle))
-	{
-		World->GetTimerManager().ClearTimer(BossPatternTimerHandle);
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Stopped: Boss=%s Reason=%s LastSeq=%d"),
-			*GetName(),
-			Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
-			BossPatternFireSequence);
+		BossPatternComponent->StopForServer(Reason);
 	}
 }
 
@@ -314,40 +292,6 @@ void ARaidBoss::SetBossStateForServer(EBossState NewBossState, FName Reason)
 	{
 		BP_OnBossStateChangedVisual(BossState);
 	}
-}
-
-void ARaidBoss::HandleBossPatternTimerFiredForServer()
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-
-	// 정지 호출이 누락된 경로가 있어도 죽은 보스/종료된 레이드에서 패턴이 지속되지 않게 자체 정지한다.
-	if (IsDefeated())
-	{
-		StopBossPatternForServer(FName(TEXT("BossDead")));
-		return;
-	}
-
-	UWorld* World = GetWorld();
-	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
-	if (RaidGameState && RaidGameState->RaidState == ERaidState::End)
-	{
-		StopBossPatternForServer(FName(TEXT("RaidEnd")));
-		return;
-	}
-
-	BossPatternFireSequence++;
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Fired: Seq=%d Boss=%s Center=%s"),
-		BossPatternFireSequence,
-		*GetName(),
-		*GetActorLocation().ToString());
-	StartDebugTelegraphedAreaAttackForServer(
-		GetActorLocation(),
-		BossPatternRadiusCm,
-		BossPatternDamage,
-		BossPatternTelegraphSeconds);
 }
 
 void ARaidBoss::ClearThisBossFromAllTargetsForServer(FName Reason)
@@ -915,18 +859,15 @@ FString ARaidBoss::GetPrototypeVisualLabelTextForTest() const
 
 bool ARaidBoss::IsBossPatternTimerActiveForTest() const
 {
-	const UWorld* World = GetWorld();
-	return World && World->GetTimerManager().IsTimerActive(BossPatternTimerHandle);
-}
-
-int32 ARaidBoss::GetBossPatternFireSequenceForTest() const
-{
-	return BossPatternFireSequence;
+	return BossPatternComponent && BossPatternComponent->IsTransitionTimerActiveForTest();
 }
 
 void ARaidBoss::FireBossPatternOnceForTest()
 {
-	HandleBossPatternTimerFiredForServer();
+	if (BossPatternComponent)
+	{
+		BossPatternComponent->FireScheduledTransitionForTest();
+	}
 }
 #endif
 
