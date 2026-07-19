@@ -7,6 +7,7 @@
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
 #include "RaidPlayerController.h"
+#include "StellarRemnantPatternActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
@@ -289,9 +290,15 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = Owner;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	UClass* PatternActorClass = CurrentPattern == EBossPatternKind::CorruptedActino
-		? ACorruptedActinoPatternActor::StaticClass()
-		: ABossPatternActorBase::StaticClass();
+	UClass* PatternActorClass = ABossPatternActorBase::StaticClass();
+	if (CurrentPattern == EBossPatternKind::CorruptedActino)
+	{
+		PatternActorClass = ACorruptedActinoPatternActor::StaticClass();
+	}
+	else if (CurrentPattern == EBossPatternKind::StellarRemnant)
+	{
+		PatternActorClass = AStellarRemnantPatternActor::StaticClass();
+	}
 	ActivePatternActor = World->SpawnActor<ABossPatternActorBase>(
 		PatternActorClass,
 		Owner->GetActorTransform(),

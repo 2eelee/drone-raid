@@ -111,9 +111,13 @@ struct FStellarRemnantConfig
 	int32 DamageProjectilesPerWave = 16;
 	int32 VisualProjectilesPerWave = 8;
 	float WaveIntervalSeconds = 0.5f;
+	float StartRadiusCm = 800.0f;
+	float EndRadiusCm = 5000.0f;
+	float LengthCm = 4200.0f;
 	float TravelSeconds = 2.5f;
 	float SpeedCmPerSecond = 1680.0f;
 	float CollisionRadiusCm = 70.0f;
+	float DamageAngleStepDegrees = 22.5f;
 	float SecondWaveOffsetDegrees = 11.25f;
 	float VisualZOffsetCm = 300.0f;
 	int32 VisualDamage = 0;

@@ -14,6 +14,7 @@
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
+#include "Raid/StellarRemnantPatternActor.h"
 #include "TimerManager.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -195,9 +196,13 @@ bool FDroneBossPatternCanonicalFallbackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stellar damage per wave"), Stellar.DamageProjectilesPerWave, 16);
 	TestEqual(TEXT("Stellar visual-only per wave"), Stellar.VisualProjectilesPerWave, 8);
 	TestEqual(TEXT("Stellar wave interval"), Stellar.WaveIntervalSeconds, 0.5f);
+	TestEqual(TEXT("Stellar start radius"), Stellar.StartRadiusCm, 800.0f);
+	TestEqual(TEXT("Stellar end radius"), Stellar.EndRadiusCm, 5000.0f);
+	TestEqual(TEXT("Stellar length"), Stellar.LengthCm, 4200.0f);
 	TestEqual(TEXT("Stellar travel time"), Stellar.TravelSeconds, 2.5f);
 	TestEqual(TEXT("Stellar speed"), Stellar.SpeedCmPerSecond, 1680.0f);
 	TestEqual(TEXT("Stellar collision radius"), Stellar.CollisionRadiusCm, 70.0f);
+	TestEqual(TEXT("Stellar damage angle step"), Stellar.DamageAngleStepDegrees, 22.5f);
 	TestEqual(TEXT("Stellar second-wave offset"), Stellar.SecondWaveOffsetDegrees, 11.25f);
 	TestEqual(TEXT("Stellar visual Z offset"), Stellar.VisualZOffsetCm, 300.0f);
 	TestEqual(TEXT("visual-only damage"), Stellar.VisualDamage, 0);
@@ -602,6 +607,192 @@ bool FDroneCorruptedActinoDebugVisualizationContractTest::RunTest(const FString&
 	TestTrue(TEXT("active centerline is red"), ActorSource.Contains(TEXT("FColor::Red")));
 	TestTrue(TEXT("collision edges are cyan"), ActorSource.Contains(TEXT("FColor::Cyan")));
 	TestTrue(TEXT("visual edges are magenta"), ActorSource.Contains(TEXT("FColor::Magenta")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneStellarRemnantLogicalSamplesTest,
+	"DroneProto.BossPattern.StellarRemnant.LogicalSamples",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneStellarRemnantLogicalSamplesTest::RunTest(const FString& Parameters)
+{
+	const FStellarRemnantConfig Config;
+	const TArray<FStellarRemnantSample> Samples = AStellarRemnantPatternActor::BuildLogicalSamples();
+	TestEqual(TEXT("total logical samples"), Samples.Num(), 48);
+
+	int32 DamageCount = 0;
+	int32 VisualOnlyCount = 0;
+	int32 DamageIndexByWave[2] = {0, 0};
+	int32 VisualIndexByWave[2] = {0, 0};
+	for (const FStellarRemnantSample& Sample : Samples)
+	{
+		TestTrue(TEXT("sample wave is valid"), Sample.WaveIndex == 0 || Sample.WaveIndex == 1);
+		const float ExpectedStartTime = Sample.WaveIndex == 0 ? 0.0f : 0.5f;
+		TestEqual(TEXT("sample uses canonical wave start"), Sample.StartTimeSeconds, ExpectedStartTime);
+		if (Sample.bVisualOnly)
+		{
+			++VisualOnlyCount;
+			++VisualIndexByWave[Sample.WaveIndex];
+			TestEqual(TEXT("visual-only damage is zero"), Sample.Damage, 0);
+		}
+		else
+		{
+			const int32 DamageIndex = DamageIndexByWave[Sample.WaveIndex]++;
+			const float ExpectedAngle = DamageIndex * 22.5f + (Sample.WaveIndex == 0 ? 0.0f : 11.25f);
+			TestEqual(TEXT("damage sample angle"), Sample.AngleDegrees, ExpectedAngle);
+			TestEqual(TEXT("damage sample uses canonical damage"), Sample.Damage, 25);
+			++DamageCount;
+		}
+	}
+	TestEqual(TEXT("damage sample count"), DamageCount, Config.DamageProjectileCount);
+	TestEqual(TEXT("visual-only sample count"), VisualOnlyCount, Config.VisualProjectileCount);
+	TestEqual(TEXT("wave one damage count"), DamageIndexByWave[0], Config.DamageProjectilesPerWave);
+	TestEqual(TEXT("wave two damage count"), DamageIndexByWave[1], Config.DamageProjectilesPerWave);
+	TestEqual(TEXT("wave one visual-only count"), VisualIndexByWave[0], Config.VisualProjectilesPerWave);
+	TestEqual(TEXT("wave two visual-only count"), VisualIndexByWave[1], Config.VisualProjectilesPerWave);
+
+	const FStellarRemnantSample& FirstDamageSample = Samples[0];
+	TestTrue(TEXT("wave one is active at t0"), AStellarRemnantPatternActor::IsSampleActive(FirstDamageSample, 0.0f));
+	TestTrue(TEXT("wave one is active through 2.5 seconds"), AStellarRemnantPatternActor::IsSampleActive(FirstDamageSample, 2.5f));
+	TestFalse(TEXT("wave one ends after 2.5 seconds"), AStellarRemnantPatternActor::IsSampleActive(FirstDamageSample, 2.501f));
+	TestTrue(TEXT("start position is 800cm"),
+		AStellarRemnantPatternActor::EvaluateLocalPosition(FirstDamageSample, 0.0f).Equals(FVector(800.0f, 0.0f, 0.0f), 0.01f));
+	TestTrue(TEXT("one-second position uses 1680cm per second"),
+		AStellarRemnantPatternActor::EvaluateLocalPosition(FirstDamageSample, 1.0f).Equals(FVector(2480.0f, 0.0f, 0.0f), 0.01f));
+	TestTrue(TEXT("flight ends at 5000cm"),
+		AStellarRemnantPatternActor::EvaluateLocalPosition(FirstDamageSample, 2.5f).Equals(FVector(5000.0f, 0.0f, 0.0f), 0.01f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneStellarRemnantSweptCollisionTest,
+	"DroneProto.BossPattern.StellarRemnant.SweptCollision",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneStellarRemnantSweptCollisionTest::RunTest(const FString& Parameters)
+{
+	const TArray<FStellarRemnantSample> Samples = AStellarRemnantPatternActor::BuildLogicalSamples();
+	const FStellarRemnantSample& WaveOneSample = Samples[0];
+	const FTransform BossTransform(FRotator(0.0f, 37.0f, 0.0f), FVector(900.0f, -350.0f, 125.0f));
+	auto WorldPoint = [&BossTransform](float RadialCm, float LateralCm)
+	{
+		return BossTransform.TransformPosition(FVector(RadialCm, LateralCm, 0.0f));
+	};
+
+	TestTrue(TEXT("sweep hits between frame endpoints"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+		WorldPoint(1640.0f, 0.0f), BossTransform, WaveOneSample, 0.0f, 1.0f));
+	TestTrue(TEXT("collision radius 70cm is inclusive"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+		WorldPoint(1640.0f, 70.0f), BossTransform, WaveOneSample, 0.0f, 1.0f));
+	TestFalse(TEXT("outside collision radius is excluded"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+		WorldPoint(1640.0f, 70.1f), BossTransform, WaveOneSample, 0.0f, 1.0f));
+
+	const FStellarRemnantSample* WaveTwoSample = Samples.FindByPredicate([](const FStellarRemnantSample& Sample)
+	{
+		return !Sample.bVisualOnly && Sample.WaveIndex == 1;
+	});
+	TestNotNull(TEXT("wave two damage sample exists"), WaveTwoSample);
+	if (WaveTwoSample)
+	{
+		TestFalse(TEXT("wave two cannot collide before 0.5 seconds"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+			BossTransform.TransformPosition(AStellarRemnantPatternActor::EvaluateLocalPosition(*WaveTwoSample, 0.5f)),
+			BossTransform,
+			*WaveTwoSample,
+			0.0f,
+			0.49f));
+	}
+	const FStellarRemnantSample* VisualOnlySample = Samples.FindByPredicate([](const FStellarRemnantSample& Sample)
+	{
+		return Sample.bVisualOnly;
+	});
+	TestNotNull(TEXT("visual-only sample exists"), VisualOnlySample);
+	if (VisualOnlySample)
+	{
+		TestFalse(TEXT("visual-only sample never collides"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+			BossTransform.TransformPosition(AStellarRemnantPatternActor::EvaluateLocalPosition(*VisualOnlySample, 1.0f)),
+			BossTransform,
+			*VisualOnlySample,
+			0.0f,
+			1.0f));
+	}
+	TestFalse(TEXT("finished sample no longer collides"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+		WorldPoint(5000.0f, 0.0f), BossTransform, WaveOneSample, 2.501f, 3.0f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneStellarRemnantRuntimeDamageTest,
+	"DroneProto.BossPattern.StellarRemnant.RuntimeDamageAndPiercing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneStellarRemnantRuntimeDamageTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("StellarRemnantRuntimeWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component || !Context.Drone)
+	{
+		TestTrue(TEXT("runtime test setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted starts"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("first Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	AStellarRemnantPatternActor* StellarActor = Cast<AStellarRemnantPatternActor>(Context.Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("Stellar uses dedicated actor"), StellarActor);
+	TestEqual(TEXT("Stellar telegraph is 0.8 seconds"), Context.Component->GetPendingDelayForTest(), 0.8f);
+	if (!StellarActor)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	Context.Drone->SetActorLocation(StellarActor->GetActorTransform().TransformPosition(FVector(800.0f, 0.0f, 0.0f)));
+	const int32 TelegraphHealth = Context.Drone->GetHealth();
+	StellarActor->Tick(0.0f);
+	TestEqual(TEXT("telegraph deals no damage"), Context.Drone->GetHealth(), TelegraphHealth);
+	TestTrue(TEXT("Stellar becomes active"), Context.Component->FireScheduledTransitionForTest());
+
+	const FBossPatternTestPlayer SecondPlayer = SpawnBossPatternTestPlayer(Context.World, true);
+	TestNotNull(TEXT("second piercing target exists"), SecondPlayer.Drone);
+	const FVector SweptHitPoint = StellarActor->GetActorTransform().TransformPosition(FVector(1640.0f, 0.0f, 0.0f));
+	Context.Drone->SetActorLocation(SweptHitPoint);
+	if (SecondPlayer.Drone)
+	{
+		SecondPlayer.Drone->SetActorLocation(SweptHitPoint);
+	}
+	const int32 FirstHealthBefore = Context.Drone->GetHealth();
+	const int32 SecondHealthBefore = SecondPlayer.Drone ? SecondPlayer.Drone->GetHealth() : 0;
+	StellarActor->ApplyDamageForServerForTest(0.0f, 1.0f);
+	TestEqual(TEXT("first target receives canonical damage"), Context.Drone->GetHealth(), FirstHealthBefore - 25);
+	if (SecondPlayer.Drone)
+	{
+		TestEqual(TEXT("same sample pierces second target"), SecondPlayer.Drone->GetHealth(), SecondHealthBefore - 25);
+	}
+	TestEqual(TEXT("hits do not consume logical samples"), StellarActor->GetLogicalSampleCountForTest(), 48);
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneStellarRemnantDebugVisualizationContractTest,
+	"DroneProto.BossPattern.StellarRemnant.DebugVisualizationContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneStellarRemnantDebugVisualizationContractTest::RunTest(const FString& Parameters)
+{
+	const FString ActorPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/StellarRemnantPatternActor.cpp");
+	FString ActorSource;
+	TestTrue(TEXT("Stellar actor source loads"), FFileHelper::LoadFileToString(ActorSource, *ActorPath));
+	TestTrue(TEXT("visual timing uses server world time"), ActorSource.Contains(TEXT("GetServerWorldTimeSeconds")));
+	TestTrue(TEXT("dedicated server skips debug drawing"), ActorSource.Contains(TEXT("NM_DedicatedServer")));
+	TestTrue(TEXT("telegraph rays are yellow"), ActorSource.Contains(TEXT("FColor::Yellow")));
+	TestTrue(TEXT("damage samples are red"), ActorSource.Contains(TEXT("FColor::Red")));
+	TestTrue(TEXT("visual-only samples are purple"), ActorSource.Contains(TEXT("FColor::Purple")));
+	TestFalse(TEXT("Stellar actor does not spawn projectile actors"), ActorSource.Contains(TEXT("SpawnActor")));
 	return true;
 }
 
