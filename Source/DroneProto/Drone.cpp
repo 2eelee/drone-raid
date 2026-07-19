@@ -928,6 +928,11 @@ bool ADrone::IsDead() const
 	return bIsDead;
 }
 
+bool ADrone::IsInvincibleForDamage() const
+{
+	return bIsInvincible;
+}
+
 float ADrone::GetAccumulatedMoveDistance() const
 {
 	return AccumulatedMoveDistanceMeters;
@@ -1656,9 +1661,29 @@ void ADrone::HandleDeath()
 	}
 
 	ClearEquippedLoadoutForServer(FName(TEXT("Death")));
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimerForNextTick(
+			FTimerDelegate::CreateUObject(this, &ADrone::NotifyPatternPopulationDeathForServer));
+	}
 
 	// TODO(D5 UI): show drone death state when the combat death UI flow exists.
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone death handled: equipped parts returned"));
+}
+
+void ADrone::NotifyPatternPopulationDeathForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (ARaidGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (ARaidBoss* Boss = GameState->GetRaidBoss())
+		{
+			Boss->NotifyPatternPopulationChangedForServer(FName(TEXT("DroneDeath")));
+		}
+	}
 }
 
 void ADrone::RecordAttackIgnoredForServer(FName Reason)

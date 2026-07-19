@@ -205,6 +205,14 @@ void ARaidBoss::StopBossPatternForServer(FName Reason)
 	}
 }
 
+void ARaidBoss::NotifyPatternPopulationChangedForServer(FName Reason)
+{
+	if (HasAuthority() && BossPatternComponent)
+	{
+		BossPatternComponent->NotifyPopulationChangedForServer(Reason);
+	}
+}
+
 void ARaidBoss::SetStunnedForServer(bool bInStunned, FName Reason)
 {
 	if (!HasAuthority())

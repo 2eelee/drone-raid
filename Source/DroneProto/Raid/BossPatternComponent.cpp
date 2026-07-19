@@ -1,9 +1,13 @@
 #include "BossPatternComponent.h"
 
 #include "BossPatternActorBase.h"
+#include "Drone.h"
 #include "RaidBoss.h"
+#include "RaidGameMode.h"
 #include "RaidGameState.h"
+#include "RaidPlayerController.h"
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "TimerManager.h"
 
@@ -38,6 +42,13 @@ bool UBossPatternComponent::StartForServer()
 	}
 
 	bRunning = true;
+	ActivePlayerCount = CountActivePlayersForServer();
+	if (ActivePlayerCount <= 0)
+	{
+		PauseForNoPlayersForServer(FName(TEXT("InitialStart")));
+		return true;
+	}
+
 	ServerState = EBossPatternServerState::FirstDelay;
 	CurrentPattern = EBossPatternKind::None;
 	NextPattern = EBossPatternKind::CorruptedActino;
@@ -64,11 +75,13 @@ void UBossPatternComponent::StopForServer(FName Reason)
 		World->GetTimerManager().ClearTimer(TransitionTimerHandle);
 	}
 	DestroyActivePatternActorForServer();
+	ClearAllHitLocksForServer();
 	bRunning = false;
 	ServerState = EBossPatternServerState::Stopped;
 	CurrentPattern = EBossPatternKind::None;
 	NextPattern = EBossPatternKind::CorruptedActino;
 	PendingDelaySeconds = 0.0f;
+	ActivePlayerCount = -1;
 
 	if (bWasRunning)
 	{
@@ -82,6 +95,82 @@ void UBossPatternComponent::StopForServer(FName Reason)
 bool UBossPatternComponent::IsRunning() const
 {
 	return bRunning;
+}
+
+bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32 DamageAmount)
+{
+	AActor* Owner = GetOwner();
+	const ARaidPlayerController* PlayerController = Target ? Cast<ARaidPlayerController>(Target->GetController()) : nullptr;
+	const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr;
+	if (!Owner || !Owner->HasAuthority() || !Target || !Target->HasAuthority() || DamageAmount <= 0
+		|| Target->IsDead() || !PlayerController || PlayerController->GetPawn() != Target
+		|| PlayerController->GetPlayerSelectionState() != EPlayerSelectionState::InBattle
+		|| !RaidGameState || RaidGameState->RaidState != ERaidState::Battle)
+	{
+		return false;
+	}
+
+	if (Target->IsInvincibleForDamage())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=DodgeInvincible Pattern=%s Player=%s"),
+			ToPatternName(CurrentPattern),
+			*PlayerController->GetName());
+		return false;
+	}
+
+	const FString PlayerKey = ARaidGameMode::BuildStablePlayerKeyForServer(PlayerController);
+	if (PlayerKey.IsEmpty())
+	{
+		return false;
+	}
+	if (HitLockTimerHandles.Contains(PlayerKey))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=PatternHitLock Pattern=%s Player=%s Key=%s"),
+			ToPatternName(CurrentPattern),
+			*PlayerController->GetName(),
+			*PlayerKey);
+		return false;
+	}
+
+	const int32 HealthBefore = Target->GetHealth();
+	Target->ApplyDamageForServer(DamageAmount, FName(TEXT("BossPattern")));
+	const int32 HealthAfter = Target->GetHealth();
+	if (HealthAfter >= HealthBefore)
+	{
+		return false;
+	}
+
+	FTimerHandle& HitLockTimer = HitLockTimerHandles.FindOrAdd(PlayerKey);
+	FTimerDelegate Delegate = FTimerDelegate::CreateUObject(this, &UBossPatternComponent::ClearHitLockForServer, PlayerKey);
+	GetWorld()->GetTimerManager().SetTimer(HitLockTimer, Delegate, Config.GlobalHitLockSeconds, false);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Hit Pattern=%s Player=%s Key=%s Damage=%d HPBefore=%d HPAfter=%d"),
+		ToPatternName(CurrentPattern),
+		*PlayerController->GetName(),
+		*PlayerKey,
+		HealthBefore - HealthAfter,
+		HealthBefore,
+		HealthAfter);
+	return true;
+}
+
+void UBossPatternComponent::NotifyPopulationChangedForServer(FName Reason)
+{
+	AActor* Owner = GetOwner();
+	if (!Owner || !Owner->HasAuthority() || !bRunning)
+	{
+		return;
+	}
+
+	const int32 PreviousCount = ActivePlayerCount;
+	ActivePlayerCount = CountActivePlayersForServer();
+	if (ActivePlayerCount <= 0 && PreviousCount > 0)
+	{
+		PauseForNoPlayersForServer(Reason);
+	}
+	else if (ActivePlayerCount > 0 && PreviousCount <= 0 && ServerState == EBossPatternServerState::PausedNoPlayers)
+	{
+		RestartAfterNoPlayersForServer(Reason);
+	}
 }
 
 void UBossPatternComponent::ScheduleTransition(float DelaySeconds)
@@ -225,6 +314,79 @@ void UBossPatternComponent::DestroyActivePatternActorForServer()
 	ActivePatternActor = nullptr;
 }
 
+void UBossPatternComponent::ClearHitLockForServer(FString PlayerKey)
+{
+	HitLockTimerHandles.Remove(PlayerKey);
+}
+
+void UBossPatternComponent::ClearAllHitLocksForServer()
+{
+	if (UWorld* World = GetWorld())
+	{
+		for (TPair<FString, FTimerHandle>& Pair : HitLockTimerHandles)
+		{
+			World->GetTimerManager().ClearTimer(Pair.Value);
+		}
+	}
+	HitLockTimerHandles.Reset();
+}
+
+int32 UBossPatternComponent::CountActivePlayersForServer() const
+{
+	const UWorld* World = GetWorld();
+	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!World || !RaidGameState || RaidGameState->RaidState != ERaidState::Battle)
+	{
+		return 0;
+	}
+
+	int32 Count = 0;
+	for (TActorIterator<ARaidPlayerController> It(World); It; ++It)
+	{
+		const ARaidPlayerController* PlayerController = *It;
+		const ADrone* Drone = PlayerController ? Cast<ADrone>(PlayerController->GetPawn()) : nullptr;
+		if (PlayerController && !PlayerController->IsActorBeingDestroyed()
+			&& PlayerController->GetPlayerSelectionState() == EPlayerSelectionState::InBattle
+			&& Drone && !Drone->IsDead())
+		{
+			++Count;
+		}
+	}
+	return Count;
+}
+
+void UBossPatternComponent::PauseForNoPlayersForServer(FName Reason)
+{
+	++TransitionSerial;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(TransitionTimerHandle);
+	}
+	DestroyActivePatternActorForServer();
+	ClearAllHitLocksForServer();
+	ServerState = EBossPatternServerState::PausedNoPlayers;
+	CurrentPattern = EBossPatternKind::None;
+	NextPattern = EBossPatternKind::CorruptedActino;
+	PendingDelaySeconds = 0.0f;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Pause Reason=NoAlivePlayers Source=%s Boss=%s InstanceID=%d"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		*GetNameSafe(GetOwner()),
+		TransitionSerial);
+}
+
+void UBossPatternComponent::RestartAfterNoPlayersForServer(FName Reason)
+{
+	ServerState = EBossPatternServerState::FirstDelay;
+	CurrentPattern = EBossPatternKind::None;
+	NextPattern = EBossPatternKind::CorruptedActino;
+	ScheduleTransition(Config.FirstDelaySeconds);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Restart Reason=AlivePlayerJoined Source=%s Boss=%s Delay=%.2f InstanceID=%d"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		*GetNameSafe(GetOwner()),
+		PendingDelaySeconds,
+		TransitionSerial);
+}
+
 float UBossPatternComponent::GetServerWorldTimeSeconds() const
 {
 	const UWorld* World = GetWorld();
@@ -243,9 +405,24 @@ EBossPatternKind UBossPatternComponent::GetCurrentPatternForTest() const
 	return CurrentPattern;
 }
 
+EBossPatternKind UBossPatternComponent::GetNextPatternForTest() const
+{
+	return NextPattern;
+}
+
 float UBossPatternComponent::GetPendingDelayForTest() const
 {
 	return PendingDelaySeconds;
+}
+
+int32 UBossPatternComponent::GetActivePlayerCountForTest() const
+{
+	return ActivePlayerCount;
+}
+
+int32 UBossPatternComponent::GetHitLockCountForTest() const
+{
+	return HitLockTimerHandles.Num();
 }
 
 int32 UBossPatternComponent::GetTransitionSerialForTest() const

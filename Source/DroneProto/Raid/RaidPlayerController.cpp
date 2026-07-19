@@ -1872,6 +1872,14 @@ void ARaidPlayerController::SetPlayerSelectionStateForServer(EPlayerSelectionSta
 		ToPlayerSelectionStateLogString(PreviousState),
 		ToPlayerSelectionStateLogString(PlayerSelectionState),
 		*GetRaidStateLogString(this));
+
+	if (ARaidGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	{
+		if (ARaidBoss* Boss = GameState->GetRaidBoss())
+		{
+			Boss->NotifyPatternPopulationChangedForServer(FName(TEXT("SelectionStateChanged")));
+		}
+	}
 }
 
 float ARaidPlayerController::GetSelectionServerTimeSeconds() const

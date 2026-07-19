@@ -46,6 +46,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss|Pattern")
 	void StopBossPatternForServer(FName Reason);
+	void NotifyPatternPopulationChangedForServer(FName Reason);
 
 	// 스턴 상태 변경은 서버 전용. 스턴 중 받는 데미지에 StunDamageMultiplier가 적용된다.
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss|Stun")

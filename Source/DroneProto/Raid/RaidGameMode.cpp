@@ -340,6 +340,30 @@ void ARaidGameMode::Logout(AController* Exiting)
 	}
 
 	Super::Logout(Exiting);
+
+	if (HasAuthority())
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimerForNextTick(
+				FTimerDelegate::CreateUObject(this, &ARaidGameMode::NotifyBossPatternPopulationAfterLogoutForServer));
+		}
+	}
+}
+
+void ARaidGameMode::NotifyBossPatternPopulationAfterLogoutForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<ARaidBoss> It(World); It; ++It)
+		{
+			It->NotifyPatternPopulationChangedForServer(FName(TEXT("Logout")));
+		}
+	}
 }
 
 void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
@@ -738,7 +762,7 @@ bool ARaidGameMode::RecordBossDamageForServer(APlayerController* PlayerControlle
 		return false;
 	}
 
-	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	const FString PlayerKey = BuildStablePlayerKeyForServer(RaidPC);
 	if (PlayerKey.IsEmpty())
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ContributionIgnored Reason=InvalidPlayerKey Player=%s Damage=%.2f"),
@@ -813,7 +837,7 @@ void ARaidGameMode::ResetBossDamageContributionsForServer(FName Reason)
 		PreviousCount);
 }
 
-FString ARaidGameMode::BuildDroneReportPlayerKeyForServer(const APlayerController* PlayerController)
+FString ARaidGameMode::BuildStablePlayerKeyForServer(const APlayerController* PlayerController)
 {
 	if (!PlayerController)
 	{
@@ -841,7 +865,7 @@ bool ARaidGameMode::TryMarkDroneReportGeneratedForServer(ARaidPlayerController* 
 		return false;
 	}
 
-	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	const FString PlayerKey = BuildStablePlayerKeyForServer(RaidPC);
 	if (PlayerKey.IsEmpty())
 	{
 		return false;
@@ -866,7 +890,7 @@ void ARaidGameMode::ClearDroneReportKeyForServer(ARaidPlayerController* RaidPC, 
 		return;
 	}
 
-	const FString PlayerKey = BuildDroneReportPlayerKeyForServer(RaidPC);
+	const FString PlayerKey = BuildStablePlayerKeyForServer(RaidPC);
 	if (!PlayerKey.IsEmpty() && GeneratedDroneReportPlayerKeys.Remove(PlayerKey) > 0)
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneReport KeyCleared: Player=%s Key=%s Reason=%s"),

@@ -114,6 +114,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Stats")
 	bool IsDead() const;
+	bool IsInvincibleForDamage() const;
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Movement")
 	float GetAccumulatedMoveDistance() const;
@@ -596,6 +597,7 @@ private:
 	void ServerEquipPart(TSubclassOf<UDronePart> PartClass);
 	void RecalculateStats();
 	void HandleDeath();
+	void NotifyPatternPopulationDeathForServer();
 	void HandleAttackBossForServer();
 	void RecordAttackIgnoredForServer(FName Reason);
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;

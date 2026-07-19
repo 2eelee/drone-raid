@@ -48,6 +48,7 @@ public:
 	float GetBossDamageForPlayerKeyForServer(const FString& PlayerKey) const;
 	TArray<FDroneBossDamageContribution> GetSortedBossDamageContributionsForServer() const;
 	void ResetBossDamageContributionsForServer(FName Reason);
+	static FString BuildStablePlayerKeyForServer(const APlayerController* PlayerController);
 
 	UDronePartReturnManager* GetDronePartReturnManager() const;
 
@@ -70,10 +71,10 @@ private:
 	TSet<FString> GeneratedDroneReportPlayerKeys;
 	TMap<FString, float> PlayerBossDamageMap;
 
-	static FString BuildDroneReportPlayerKeyForServer(const APlayerController* PlayerController);
 	bool EnsureDronePartReturnManagerForServer();
 	void ClearRaidTimeLimitTimerForServer(FName Reason);
 	void HandleRaidTimeLimitExpiredForServer();
+	void NotifyBossPatternPopulationAfterLogoutForServer();
 	void SetAllBossStatesForServer(EBossState NewBossState, FName Reason);
 	bool NotifyRaidSpawnFailedForServer(AController* Controller, FName Reason) const;
 };

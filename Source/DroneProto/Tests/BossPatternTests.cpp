@@ -1,4 +1,6 @@
 #include "CoreMinimal.h"
+#include "CoreGlobals.h"
+#include "Drone.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Misc/AutomationTest.h"
@@ -8,6 +10,10 @@
 #include "Raid/BossPatternComponent.h"
 #include "Raid/BossPatternTypes.h"
 #include "Raid/RaidBoss.h"
+#include "Raid/RaidGameMode.h"
+#include "Raid/RaidGameState.h"
+#include "Raid/RaidPlayerController.h"
+#include "TimerManager.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -24,6 +30,86 @@ int32 CountPatternActors(UWorld* World)
 		}
 	}
 	return Count;
+}
+
+struct FBossPatternPlayerTestContext
+{
+	UWorld* World = nullptr;
+	ARaidGameState* GameState = nullptr;
+	ARaidBoss* Boss = nullptr;
+	UBossPatternComponent* Component = nullptr;
+	ARaidPlayerController* PlayerController = nullptr;
+	ADrone* Drone = nullptr;
+};
+
+struct FBossPatternTestPlayer
+{
+	ARaidPlayerController* PlayerController = nullptr;
+	ADrone* Drone = nullptr;
+};
+
+FBossPatternTestPlayer SpawnBossPatternTestPlayer(UWorld* World, bool bEnterBattle)
+{
+	FBossPatternTestPlayer Player;
+	if (!World)
+	{
+		return Player;
+	}
+	Player.PlayerController = World->SpawnActor<ARaidPlayerController>();
+	Player.Drone = World->SpawnActor<ADrone>();
+	if (Player.PlayerController && Player.Drone)
+	{
+		Player.PlayerController->Possess(Player.Drone);
+		if (bEnterBattle)
+		{
+			Player.PlayerController->Server_RequestReadyForRaid_Implementation();
+		}
+	}
+	return Player;
+}
+
+FBossPatternPlayerTestContext CreateBossPatternPlayerTestContext(const TCHAR* WorldName)
+{
+	FBossPatternPlayerTestContext Context;
+	Context.World = UWorld::CreateWorld(EWorldType::Game, false, FName(WorldName));
+	if (!Context.World)
+	{
+		return Context;
+	}
+
+	Context.GameState = Context.World->SpawnActor<ARaidGameState>();
+	Context.Boss = Context.World->SpawnActor<ARaidBoss>();
+	Context.Component = Context.Boss ? Context.Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Context.GameState)
+	{
+		Context.World->SetGameState(Context.GameState);
+		Context.GameState->SetRaidBossForServer(Context.Boss);
+		Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	}
+	const FBossPatternTestPlayer Player = SpawnBossPatternTestPlayer(Context.World, true);
+	Context.PlayerController = Player.PlayerController;
+	Context.Drone = Player.Drone;
+	return Context;
+}
+
+void DestroyBossPatternPlayerTestContext(FBossPatternPlayerTestContext& Context)
+{
+	if (Context.World)
+	{
+		Context.World->DestroyWorld(false);
+	}
+	Context = FBossPatternPlayerTestContext();
+}
+
+void TickBossPatternTimers(UWorld* World, float DeltaSeconds)
+{
+	if (World)
+	{
+		++GFrameCounter;
+		World->GetTimerManager().Tick(KINDA_SMALL_NUMBER);
+		++GFrameCounter;
+		World->GetTimerManager().Tick(DeltaSeconds);
+	}
 }
 }
 
@@ -106,18 +192,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FDroneBossPatternLifecycleSequenceTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternLifecycleSequenceWorld")));
-	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
-	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternLifecycleSequenceWorld"));
+	UWorld* World = Context.World;
+	ARaidBoss* Boss = Context.Boss;
+	UBossPatternComponent* Component = Context.Component;
 	TestNotNull(TEXT("world is created"), World);
 	TestNotNull(TEXT("boss is spawned"), Boss);
 	TestNotNull(TEXT("pattern component exists"), Component);
 	if (!World || !Boss || !Component)
 	{
-		if (World)
-		{
-			World->DestroyWorld(false);
-		}
+		DestroyBossPatternPlayerTestContext(Context);
 		return false;
 	}
 
@@ -160,7 +244,7 @@ bool FDroneBossPatternLifecycleSequenceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("loop still owns one actor"), CountPatternActors(World), 1);
 
 	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
-	World->DestroyWorld(false);
+	DestroyBossPatternPlayerTestContext(Context);
 	return true;
 }
 
@@ -171,16 +255,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FDroneBossPatternLifecycleGuardsTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternLifecycleGuardsWorld")));
-	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
-	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternLifecycleGuardsWorld"));
+	UWorld* World = Context.World;
+	ARaidBoss* Boss = Context.Boss;
+	UBossPatternComponent* Component = Context.Component;
 	if (!World || !Boss || !Component)
 	{
 		TestTrue(TEXT("guard test setup"), false);
-		if (World)
-		{
-			World->DestroyWorld(false);
-		}
+		DestroyBossPatternPlayerTestContext(Context);
 		return false;
 	}
 
@@ -199,7 +281,7 @@ bool FDroneBossPatternLifecycleGuardsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("stale transition cannot spawn actor"), CountPatternActors(World), 0);
 
 	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
-	World->DestroyWorld(false);
+	DestroyBossPatternPlayerTestContext(Context);
 	return true;
 }
 
@@ -221,6 +303,164 @@ bool FDroneBossPatternProductionIsolationTest::RunTest(const FString& Parameters
 	TestFalse(TEXT("production scheduler excludes direct circular attack"), ComponentSource.Contains(TEXT("PerformDebugAreaAttackForServer")));
 	TestFalse(TEXT("production scheduler excludes circular telegraph API"), ComponentSource.Contains(TEXT("StartDebugTelegraphedAreaAttackForServer")));
 	TestFalse(TEXT("production scheduler excludes circular telegraph actor"), ComponentSource.Contains(TEXT("ARaidBossAttackTelegraph")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternStableKeyDamageGateTest,
+	"DroneProto.BossPattern.DamageGate.StableKeyAndActualDamage",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternStableKeyDamageGateTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternDamageGateWorld"));
+	TestNotNull(TEXT("damage gate world is created"), Context.World);
+	TestNotNull(TEXT("damage gate component exists"), Context.Component);
+	TestNotNull(TEXT("damage gate player exists"), Context.PlayerController);
+	TestNotNull(TEXT("damage gate drone exists"), Context.Drone);
+	if (!Context.World || !Context.GameState || !Context.Boss || !Context.Component || !Context.PlayerController || !Context.Drone)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	const FString StableKey = ARaidGameMode::BuildStablePlayerKeyForServer(Context.PlayerController);
+	TestFalse(TEXT("stable player key is not empty"), StableKey.IsEmpty());
+	TestEqual(TEXT("stable player key is repeatable"), ARaidGameMode::BuildStablePlayerKeyForServer(Context.PlayerController), StableKey);
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted transition fires"), Context.Component->FireScheduledTransitionForTest());
+	TestFalse(TEXT("null target is rejected"), Context.Component->TryApplyPatternDamageForServer(nullptr, 20));
+
+	ARaidPlayerController* SelectingPlayer = Context.World->SpawnActor<ARaidPlayerController>();
+	ADrone* SelectingDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("Selecting player is spawned"), SelectingPlayer);
+	TestNotNull(TEXT("Selecting drone is spawned"), SelectingDrone);
+	if (SelectingPlayer && SelectingDrone)
+	{
+		SelectingPlayer->Possess(SelectingDrone);
+		TestFalse(TEXT("non-InBattle target is rejected"), Context.Component->TryApplyPatternDamageForServer(SelectingDrone, 20));
+	}
+	Context.GameState->SetRaidStateForServer(ERaidState::Waiting);
+	TestFalse(TEXT("non-Battle raid is rejected"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+
+	TestTrue(TEXT("dodge starts"), Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("dodge invincibility is active"), Context.Drone->IsInvincibleForDamage());
+	TestFalse(TEXT("dodge-invincible target is rejected"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	Context.Drone->CancelDodgeForServer(FName(TEXT("Automation")));
+
+	const int32 HealthBeforeFirstHit = Context.Drone->GetHealth();
+	TestTrue(TEXT("first valid hit succeeds"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	TestEqual(TEXT("first valid hit lowers HP"), Context.Drone->GetHealth(), HealthBeforeFirstHit - 20);
+	TestFalse(TEXT("immediate repeated hit is locked"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+
+	TestTrue(TEXT("Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar becomes active"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("pattern changed while lock remains"), Context.Component->GetCurrentPatternForTest(), EBossPatternKind::StellarRemnant);
+	TestFalse(TEXT("cross-pattern repeated hit is locked"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 25));
+
+	TickBossPatternTimers(Context.World, 0.701f);
+	const int32 HealthBeforeExpiredHit = Context.Drone->GetHealth();
+	TestTrue(TEXT("hit succeeds after 0.7 seconds"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 25));
+	TestEqual(TEXT("expired lock hit lowers HP"), Context.Drone->GetHealth(), HealthBeforeExpiredHit - 25);
+
+	TickBossPatternTimers(Context.World, 0.701f);
+	TestFalse(TEXT("zero damage is rejected"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 0));
+	TestTrue(TEXT("zero damage creates no lock"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 1));
+
+	TickBossPatternTimers(Context.World, 0.701f);
+	Context.Drone->ApplyDamageForServer(Context.Drone->GetMaxHealth() + 1, FName(TEXT("AutomationDeath")));
+	TestFalse(TEXT("dead target is rejected"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternPopulationPauseRestartTest,
+	"DroneProto.BossPattern.Population.PauseAndRestart",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternPopulationPauseRestartTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternPopulationWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidGameMode* GameMode = World ? World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	TestNotNull(TEXT("population world is created"), World);
+	TestNotNull(TEXT("population game state exists"), GameState);
+	TestNotNull(TEXT("population game mode exists"), GameMode);
+	TestNotNull(TEXT("population boss exists"), Boss);
+	TestNotNull(TEXT("population component exists"), Component);
+	if (!World || !GameState || !GameMode || !Boss || !Component)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetRaidBossForServer(Boss);
+	GameState->SetRaidStateForServer(ERaidState::Battle);
+	GameState->SetRaidTimeEndServerTimeForServer(123.0f);
+	TestTrue(TEXT("zero-player pattern start is accepted"), Boss->StartBossPatternForServer());
+	TestEqual(TEXT("zero-player start pauses"), Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+	TestEqual(TEXT("zero-player active count"), Component->GetActivePlayerCountForTest(), 0);
+	TestFalse(TEXT("zero-player pause clears transition timer"), Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("zero-player pause has no actor"), CountPatternActors(World), 0);
+
+	const FBossPatternTestPlayer FirstPlayer = SpawnBossPatternTestPlayer(World, true);
+	TestNotNull(TEXT("first active player exists"), FirstPlayer.PlayerController);
+	TestNotNull(TEXT("first active drone exists"), FirstPlayer.Drone);
+	TestEqual(TEXT("0 to 1 restarts first delay"), Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestEqual(TEXT("restart recounts one player"), Component->GetActivePlayerCountForTest(), 1);
+	TestEqual(TEXT("restart delay is canonical"), Component->GetPendingDelayForTest(), 0.5f);
+	TestTrue(TEXT("restart schedules transition"), Component->IsTransitionTimerActiveForTest());
+	TestTrue(TEXT("restart enters first Corrupted"), Component->FireScheduledTransitionForTest());
+
+	const FBossPatternTestPlayer SecondPlayer = SpawnBossPatternTestPlayer(World, true);
+	TestNotNull(TEXT("second active player exists"), SecondPlayer.PlayerController);
+	TestNotNull(TEXT("second active drone exists"), SecondPlayer.Drone);
+	TestEqual(TEXT("second player recounts two"), Component->GetActivePlayerCountForTest(), 2);
+	TestTrue(TEXT("second player receives pattern damage"), Component->TryApplyPatternDamageForServer(SecondPlayer.Drone, 20));
+	TestEqual(TEXT("successful hit creates one lock"), Component->GetHitLockCountForTest(), 1);
+
+	const float BossHealthBeforeDeaths = Boss->GetCurrentHP();
+	const EBossState BossStateBeforeDeaths = Boss->GetBossState();
+	const float RaidEndTimeBeforeDeaths = GameState->GetRaidTimeEndServerTime();
+	FirstPlayer.Drone->ApplyDamageForServer(FirstPlayer.Drone->GetMaxHealth() + 1, FName(TEXT("PopulationDeathOne")));
+	TickBossPatternTimers(World, KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("one of two deaths leaves one active"), Component->GetActivePlayerCountForTest(), 1);
+	TestEqual(TEXT("one of two deaths keeps pattern active"), Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	TestTrue(TEXT("one of two deaths keeps transition timer"), Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("one of two deaths keeps shared lock"), Component->GetHitLockCountForTest(), 1);
+
+	SecondPlayer.Drone->ApplyDamageForServer(SecondPlayer.Drone->GetMaxHealth() + 1, FName(TEXT("PopulationDeathLast")));
+	TickBossPatternTimers(World, KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("last death pauses pattern"), Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+	TestEqual(TEXT("last death clears active count"), Component->GetActivePlayerCountForTest(), 0);
+	TestFalse(TEXT("last death clears transition timer"), Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("last death clears pattern actor"), CountPatternActors(World), 0);
+	TestEqual(TEXT("last death clears all HitLocks"), Component->GetHitLockCountForTest(), 0);
+	TestEqual(TEXT("pause resets next pattern to Corrupted"), Component->GetNextPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("pause preserves boss HP"), Boss->GetCurrentHP(), BossHealthBeforeDeaths);
+	TestEqual(TEXT("pause preserves boss state"), Boss->GetBossState(), BossStateBeforeDeaths);
+	TestEqual(TEXT("pause preserves raid timer"), GameState->GetRaidTimeEndServerTime(), RaidEndTimeBeforeDeaths);
+
+	const FBossPatternTestPlayer LogoutPlayer = SpawnBossPatternTestPlayer(World, true);
+	TestEqual(TEXT("new active player restarts after death pause"), Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	GameMode->Logout(LogoutPlayer.PlayerController);
+	LogoutPlayer.PlayerController->Destroy();
+	TickBossPatternTimers(World, KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("logout of last active player pauses"), Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+	TestEqual(TEXT("logout recounts zero"), Component->GetActivePlayerCountForTest(), 0);
+
+	World->DestroyWorld(false);
 	return true;
 }
 
