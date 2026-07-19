@@ -804,6 +804,36 @@ bool FDroneStellarRemnantRuntimeDamageTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("hits do not consume logical samples"), StellarActor->GetLogicalSampleCountForTest(), 48);
 
+	const TArray<FStellarRemnantSample> HitLockSamples = AStellarRemnantPatternActor::BuildLogicalSamples();
+	const FStellarRemnantSample* WaveTwoDamageSample = HitLockSamples.FindByPredicate(
+		[](const FStellarRemnantSample& Sample)
+		{
+			return !Sample.bVisualOnly && Sample.WaveIndex == 1;
+		});
+	TestNotNull(TEXT("wave two damage sample exists for HitLock regression"), WaveTwoDamageSample);
+	if (WaveTwoDamageSample)
+	{
+		if (SecondPlayer.Drone)
+		{
+			SecondPlayer.Drone->SetActorLocation(FVector(100000.0f, 100000.0f, 100000.0f));
+		}
+
+		TickBossPatternTimers(Context.World, 0.5f);
+		Context.Drone->SetActorLocation(StellarActor->GetActorTransform().TransformPosition(
+			AStellarRemnantPatternActor::EvaluateLocalPosition(*WaveTwoDamageSample, 1.5f)));
+		const int32 HealthDuringHitLock = Context.Drone->GetHealth();
+		StellarActor->ApplyDamageForServerForTest(1.0f, 1.5f);
+		TestEqual(TEXT("wave two collision inside 0.7 seconds is blocked"),
+			Context.Drone->GetHealth(), HealthDuringHitLock);
+
+		TickBossPatternTimers(Context.World, 0.201f);
+		Context.Drone->SetActorLocation(StellarActor->GetActorTransform().TransformPosition(
+			AStellarRemnantPatternActor::EvaluateLocalPosition(*WaveTwoDamageSample, 1.701f)));
+		StellarActor->ApplyDamageForServerForTest(1.5f, 1.701f);
+		TestEqual(TEXT("collision after 0.7 seconds can damage again"),
+			Context.Drone->GetHealth(), HealthDuringHitLock - 25);
+	}
+
 	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
 	DestroyBossPatternPlayerTestContext(Context);
 	return true;
