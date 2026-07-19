@@ -114,25 +114,35 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 		return false;
 	}
 
-	if (Target->IsInvincibleForDamage())
-	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=DodgeInvincible Pattern=%s Player=%s"),
-			ToPatternName(CurrentPattern),
-			*PlayerController->GetName());
-		return false;
-	}
-
 	const FString PlayerKey = ARaidGameMode::BuildStablePlayerKeyForServer(PlayerController);
 	if (PlayerKey.IsEmpty())
 	{
 		return false;
 	}
+
+	if (Target->IsInvincibleForDamage())
+	{
+		if (!DodgeIgnoredLoggedPlayerKeys.Contains(PlayerKey))
+		{
+			DodgeIgnoredLoggedPlayerKeys.Add(PlayerKey);
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=DodgeInvincible Pattern=%s Player=%s"),
+				ToPatternName(CurrentPattern),
+				*PlayerController->GetName());
+		}
+		return false;
+	}
+	DodgeIgnoredLoggedPlayerKeys.Remove(PlayerKey);
+
 	if (HitLockTimerHandles.Contains(PlayerKey))
 	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=PatternHitLock Pattern=%s Player=%s Key=%s"),
-			ToPatternName(CurrentPattern),
-			*PlayerController->GetName(),
-			*PlayerKey);
+		if (!HitLockIgnoredLoggedPlayerKeys.Contains(PlayerKey))
+		{
+			HitLockIgnoredLoggedPlayerKeys.Add(PlayerKey);
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=PatternHitLock Pattern=%s Player=%s Key=%s"),
+				ToPatternName(CurrentPattern),
+				*PlayerController->GetName(),
+				*PlayerKey);
+		}
 		return false;
 	}
 
@@ -330,6 +340,7 @@ void UBossPatternComponent::DestroyActivePatternActorForServer()
 void UBossPatternComponent::ClearHitLockForServer(FString PlayerKey)
 {
 	HitLockTimerHandles.Remove(PlayerKey);
+	HitLockIgnoredLoggedPlayerKeys.Remove(PlayerKey);
 }
 
 void UBossPatternComponent::ClearAllHitLocksForServer()
@@ -342,6 +353,8 @@ void UBossPatternComponent::ClearAllHitLocksForServer()
 		}
 	}
 	HitLockTimerHandles.Reset();
+	DodgeIgnoredLoggedPlayerKeys.Reset();
+	HitLockIgnoredLoggedPlayerKeys.Reset();
 }
 
 int32 UBossPatternComponent::CountActivePlayersForServer() const
@@ -436,6 +449,16 @@ int32 UBossPatternComponent::GetActivePlayerCountForTest() const
 int32 UBossPatternComponent::GetHitLockCountForTest() const
 {
 	return HitLockTimerHandles.Num();
+}
+
+int32 UBossPatternComponent::GetDodgeIgnoredLogKeyCountForTest() const
+{
+	return DodgeIgnoredLoggedPlayerKeys.Num();
+}
+
+int32 UBossPatternComponent::GetHitLockIgnoredLogKeyCountForTest() const
+{
+	return HitLockIgnoredLoggedPlayerKeys.Num();
 }
 
 int32 UBossPatternComponent::GetTransitionSerialForTest() const

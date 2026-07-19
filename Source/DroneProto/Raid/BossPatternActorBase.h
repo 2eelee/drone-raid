@@ -33,6 +33,12 @@ protected:
 		const FVector& End,
 		const FColor& Color,
 		float Thickness) const;
+	void DrawForegroundDebugSphere(
+		const FVector& Center,
+		float Radius,
+		int32 Segments,
+		const FColor& Color,
+		float Thickness) const;
 
 private:
 	UPROPERTY(ReplicatedUsing = OnRep_PatternState)

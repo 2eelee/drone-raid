@@ -374,6 +374,9 @@ bool FDroneBossPatternStableKeyDamageGateTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("dodge starts"), Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
 	TestTrue(TEXT("dodge invincibility is active"), Context.Drone->IsInvincibleForDamage());
 	TestFalse(TEXT("dodge-invincible target is rejected"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	TestFalse(TEXT("repeated dodge-invincible target is rejected"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	TestEqual(TEXT("dodge ignore log is tracked once per invincibility window"),
+		Context.Component->GetDodgeIgnoredLogKeyCountForTest(), 1);
 	Context.Drone->CancelDodgeForServer(FName(TEXT("Automation")));
 
 	const int32 HealthBeforeFirstHit = Context.Drone->GetHealth();
@@ -386,8 +389,12 @@ bool FDroneBossPatternStableKeyDamageGateTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("Stellar becomes active"), Context.Component->FireScheduledTransitionForTest());
 	TestEqual(TEXT("pattern changed while lock remains"), Context.Component->GetCurrentPatternForTest(), EBossPatternKind::StellarRemnant);
 	TestFalse(TEXT("cross-pattern repeated hit is locked"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 25));
+	TestEqual(TEXT("HitLock ignore log is tracked once per lock window"),
+		Context.Component->GetHitLockIgnoredLogKeyCountForTest(), 1);
 
 	TickBossPatternTimers(Context.World, 0.701f);
+	TestEqual(TEXT("expired HitLock clears its log suppression"),
+		Context.Component->GetHitLockIgnoredLogKeyCountForTest(), 0);
 	const int32 HealthBeforeExpiredHit = Context.Drone->GetHealth();
 	TestTrue(TEXT("hit succeeds after 0.7 seconds"), Context.Component->TryApplyPatternDamageForServer(Context.Drone, 25));
 	TestEqual(TEXT("expired lock hit lowers HP"), Context.Drone->GetHealth(), HealthBeforeExpiredHit - 25);
@@ -610,6 +617,27 @@ bool FDroneCorruptedActinoDebugVisualizationContractTest::RunTest(const FString&
 	TestTrue(TEXT("visual edges are magenta"), ActorSource.Contains(TEXT("FColor::Magenta")));
 	TestTrue(TEXT("Corrupted prototype lines are dashed"), ActorSource.Contains(TEXT("DrawDashedDebugLine(")));
 	TestFalse(TEXT("Corrupted actor has no direct solid debug lines"), ActorSource.Contains(TEXT("DrawDebugLine(")));
+	TestTrue(TEXT("Corrupted active centerline is highly visible"),
+		ActorSource.Contains(TEXT("FColor::Red, 12.0f")));
+	TestTrue(TEXT("Corrupted boundary lines are highly visible"),
+		ActorSource.Contains(TEXT("Color, 8.0f")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternForegroundVisibilityContractTest,
+	"DroneProto.BossPattern.Visual.ForegroundVisibilityContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternForegroundVisibilityContractTest::RunTest(const FString& Parameters)
+{
+	const FString BasePath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/BossPatternActorBase.cpp");
+	FString BaseSource;
+	TestTrue(TEXT("pattern actor base source loads"), FFileHelper::LoadFileToString(BaseSource, *BasePath));
+	TestTrue(TEXT("dashes are visually separated"), BaseSource.Contains(TEXT("DebugDashLengthCm = 100.0f")));
+	TestTrue(TEXT("dash gaps stay visible from raid camera"), BaseSource.Contains(TEXT("DebugDashGapCm = 300.0f")));
+	TestTrue(TEXT("debug primitives keep a short trail"), BaseSource.Contains(TEXT("DebugPrimitiveLifetimeSeconds = 0.12f")));
+	TestTrue(TEXT("debug primitives draw in foreground"), BaseSource.Contains(TEXT("DebugForegroundDepthPriority = 1")));
 	return true;
 }
 
@@ -797,6 +825,12 @@ bool FDroneStellarRemnantDebugVisualizationContractTest::RunTest(const FString& 
 	TestTrue(TEXT("visual-only samples are purple"), ActorSource.Contains(TEXT("FColor::Purple")));
 	TestTrue(TEXT("Stellar telegraph rays are dashed"), ActorSource.Contains(TEXT("DrawDashedDebugLine(")));
 	TestFalse(TEXT("Stellar actor has no direct solid debug lines"), ActorSource.Contains(TEXT("DrawDebugLine(")));
+	TestTrue(TEXT("Stellar telegraph rays are highly visible"),
+		ActorSource.Contains(TEXT("FColor::Yellow, 8.0f")));
+	TestTrue(TEXT("Stellar active samples use foreground spheres"),
+		ActorSource.Contains(TEXT("DrawForegroundDebugSphere(")));
+	TestFalse(TEXT("Stellar actor has no world-depth debug spheres"),
+		ActorSource.Contains(TEXT("DrawDebugSphere(")));
 	TestFalse(TEXT("Stellar actor does not spawn projectile actors"), ActorSource.Contains(TEXT("SpawnActor")));
 	return true;
 }

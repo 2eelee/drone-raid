@@ -3,7 +3,6 @@
 #include "BossPatternComponent.h"
 #include "Components/SceneComponent.h"
 #include "Drone.h"
-#include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
@@ -194,7 +193,7 @@ void AStellarRemnantPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 			const FVector StartWorld = GetActorTransform().TransformPosition(EvaluateLocalPosition(Sample, Sample.StartTimeSeconds));
 			const FVector EndWorld = GetActorTransform().TransformPosition(
 				EvaluateLocalPosition(Sample, Sample.StartTimeSeconds + Config.TravelSeconds));
-			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 1.5f);
+			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 8.0f);
 		}
 		return;
 	}
@@ -207,16 +206,12 @@ void AStellarRemnantPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 		}
 		const FVector PositionWorld = GetActorTransform().TransformPosition(
 			EvaluateLocalPosition(Sample, ElapsedSeconds));
-		DrawDebugSphere(
-			GetWorld(),
+		DrawForegroundDebugSphere(
 			PositionWorld,
 			Sample.bVisualOnly ? 50.0f : Config.CollisionRadiusCm,
-			8,
+			12,
 			Sample.bVisualOnly ? FColor::Purple : FColor::Red,
-			false,
-			0.0f,
-			0,
-			1.5f);
+			6.0f);
 	}
 }
 

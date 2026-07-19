@@ -5,8 +5,10 @@
 
 namespace
 {
-constexpr float DebugDashLengthCm = 150.0f;
-constexpr float DebugDashGapCm = 100.0f;
+constexpr float DebugDashLengthCm = 100.0f;
+constexpr float DebugDashGapCm = 300.0f;
+constexpr float DebugPrimitiveLifetimeSeconds = 0.12f;
+constexpr uint8 DebugForegroundDepthPriority = 1;
 }
 
 ABossPatternActorBase::ABossPatternActorBase()
@@ -87,7 +89,37 @@ void ABossPatternActorBase::DrawDashedDebugLine(
 	{
 		const FVector DashStart = Start + Direction * Offset;
 		const FVector DashEnd = Start + Direction * FMath::Min(Offset + DebugDashLengthCm, Length);
-		DrawDebugLine(World, DashStart, DashEnd, Color, false, 0.0f, 0, Thickness);
+		DrawDebugLine(
+			World,
+			DashStart,
+			DashEnd,
+			Color,
+			false,
+			DebugPrimitiveLifetimeSeconds,
+			DebugForegroundDepthPriority,
+			Thickness);
+	}
+}
+
+void ABossPatternActorBase::DrawForegroundDebugSphere(
+	const FVector& Center,
+	float Radius,
+	int32 Segments,
+	const FColor& Color,
+	float Thickness) const
+{
+	if (UWorld* World = GetWorld())
+	{
+		DrawDebugSphere(
+			World,
+			Center,
+			Radius,
+			Segments,
+			Color,
+			false,
+			DebugPrimitiveLifetimeSeconds,
+			DebugForegroundDepthPriority,
+			Thickness);
 	}
 }
 

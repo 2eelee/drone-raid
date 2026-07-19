@@ -138,7 +138,7 @@ void ACorruptedActinoPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 
 		if (bTelegraphing)
 		{
-			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 3.0f);
+			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 10.0f);
 			DrawTrapezoid(
 				StartWorld,
 				EndWorld,
@@ -149,7 +149,7 @@ void ACorruptedActinoPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 			continue;
 		}
 
-		DrawDashedDebugLine(StartWorld, EndWorld, FColor::Red, 3.0f);
+		DrawDashedDebugLine(StartWorld, EndWorld, FColor::Red, 12.0f);
 		DrawTrapezoid(
 			StartWorld,
 			EndWorld,
@@ -179,10 +179,10 @@ void ACorruptedActinoPatternActor::DrawTrapezoid(
 	const FVector StartRight = StartCenter + RightWorld * InnerHalfWidthCm;
 	const FVector EndLeft = EndCenter - RightWorld * OuterHalfWidthCm;
 	const FVector EndRight = EndCenter + RightWorld * OuterHalfWidthCm;
-	DrawDashedDebugLine(StartLeft, EndLeft, Color, 2.0f);
-	DrawDashedDebugLine(StartRight, EndRight, Color, 2.0f);
-	DrawDashedDebugLine(StartLeft, StartRight, Color, 2.0f);
-	DrawDashedDebugLine(EndLeft, EndRight, Color, 2.0f);
+	DrawDashedDebugLine(StartLeft, EndLeft, Color, 8.0f);
+	DrawDashedDebugLine(StartRight, EndRight, Color, 8.0f);
+	DrawDashedDebugLine(StartLeft, StartRight, Color, 8.0f);
+	DrawDashedDebugLine(EndLeft, EndRight, Color, 8.0f);
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

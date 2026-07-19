@@ -29,6 +29,8 @@ public:
 	float GetPendingDelayForTest() const;
 	int32 GetActivePlayerCountForTest() const;
 	int32 GetHitLockCountForTest() const;
+	int32 GetDodgeIgnoredLogKeyCountForTest() const;
+	int32 GetHitLockIgnoredLogKeyCountForTest() const;
 	int32 GetTransitionSerialForTest() const;
 	bool IsTransitionTimerActiveForTest() const;
 	bool FireScheduledTransitionForTest();
@@ -40,6 +42,8 @@ private:
 	FBossPatternConfig Config;
 	FTimerHandle TransitionTimerHandle;
 	TMap<FString, FTimerHandle> HitLockTimerHandles;
+	TSet<FString> DodgeIgnoredLoggedPlayerKeys;
+	TSet<FString> HitLockIgnoredLoggedPlayerKeys;
 
 	UPROPERTY(Transient)
 	TObjectPtr<ABossPatternActorBase> ActivePatternActor = nullptr;
