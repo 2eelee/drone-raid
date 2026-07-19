@@ -9,6 +9,7 @@
 #include "Raid/BossPatternActorBase.h"
 #include "Raid/BossPatternComponent.h"
 #include "Raid/BossPatternTypes.h"
+#include "Raid/CorruptedActinoPatternActor.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
@@ -110,6 +111,25 @@ void TickBossPatternTimers(UWorld* World, float DeltaSeconds)
 		++GFrameCounter;
 		World->GetTimerManager().Tick(DeltaSeconds);
 	}
+}
+
+FVector MakeCorruptedLaserPoint(
+	const FTransform& BossTransform,
+	const FCorruptedActinoLaserPreset& Preset,
+	float ElapsedSeconds,
+	float LongitudinalCm,
+	float LateralCm,
+	float VerticalOffsetCm)
+{
+	const float AngleRadians = FMath::DegreesToRadians(
+		ACorruptedActinoPatternActor::EvaluateAngleDegrees(Preset, ElapsedSeconds));
+	const FVector LocalDirection(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
+	const FVector LocalRight(-LocalDirection.Y, LocalDirection.X, 0.0f);
+	const FCorruptedActinoConfig Config;
+	const FVector LocalPoint = LocalDirection * (Config.StartRadiusCm + LongitudinalCm)
+		+ LocalRight * LateralCm
+		+ FVector::UpVector * (ACorruptedActinoPatternActor::EvaluateZCm(Preset, ElapsedSeconds) + VerticalOffsetCm);
+	return BossTransform.TransformPosition(LocalPoint);
 }
 }
 
@@ -461,6 +481,127 @@ bool FDroneBossPatternPopulationPauseRestartTest::RunTest(const FString& Paramet
 	TestEqual(TEXT("logout recounts zero"), Component->GetActivePlayerCountForTest(), 0);
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoAnalyticGeometryTest,
+	"DroneProto.BossPattern.CorruptedActino.AnalyticGeometry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoAnalyticGeometryTest::RunTest(const FString& Parameters)
+{
+	const FCorruptedActinoConfig Config;
+	const float ExpectedAnglesAtStart[4] = {-25.0f, 115.0f, 155.0f, 295.0f};
+	const float ExpectedAnglesAtQuarterXY[4] = {0.0f, 90.0f, 180.0f, 270.0f};
+	const float ExpectedZAtStart[4] = {300.0f, 0.0f, -300.0f, 0.0f};
+	const float ExpectedZAtQuarterZ[4] = {0.0f, 300.0f, 0.0f, -300.0f};
+	for (int32 Index = 0; Index < Config.LaserCount; ++Index)
+	{
+		TestTrue(*FString::Printf(TEXT("laser %d start angle"), Index),
+			FMath::IsNearlyEqual(ACorruptedActinoPatternActor::EvaluateAngleDegrees(Config.Presets[Index], 0.0f), ExpectedAnglesAtStart[Index]));
+		TestTrue(*FString::Printf(TEXT("laser %d representative angle"), Index),
+			FMath::IsNearlyEqual(ACorruptedActinoPatternActor::EvaluateAngleDegrees(Config.Presets[Index], 1.25f), ExpectedAnglesAtQuarterXY[Index]));
+		TestTrue(*FString::Printf(TEXT("laser %d start Z"), Index),
+			FMath::IsNearlyEqual(ACorruptedActinoPatternActor::EvaluateZCm(Config.Presets[Index], 0.0f), ExpectedZAtStart[Index], 0.01f));
+		TestTrue(*FString::Printf(TEXT("laser %d representative Z"), Index),
+			FMath::IsNearlyEqual(ACorruptedActinoPatternActor::EvaluateZCm(Config.Presets[Index], 0.5f), ExpectedZAtQuarterZ[Index], 0.01f));
+	}
+
+	const FTransform BossTransform(FRotator(0.0f, 37.0f, 0.0f), FVector(1200.0f, -700.0f, 250.0f));
+	const FCorruptedActinoLaserPreset& Preset = Config.Presets[0];
+	auto IsInside = [&BossTransform, &Preset](float LongitudinalCm, float LateralCm, float VerticalOffsetCm)
+	{
+		return ACorruptedActinoPatternActor::IsPointInsideLaser(
+			MakeCorruptedLaserPoint(BossTransform, Preset, 0.0f, LongitudinalCm, LateralCm, VerticalOffsetCm),
+			BossTransform,
+			Preset,
+			0.0f);
+	};
+
+	TestTrue(TEXT("inner longitudinal boundary is inclusive"), IsInside(0.0f, 0.0f, 0.0f));
+	TestTrue(TEXT("outer longitudinal boundary is inclusive"), IsInside(4200.0f, 0.0f, 0.0f));
+	TestFalse(TEXT("before inner boundary is excluded"), IsInside(-0.1f, 0.0f, 0.0f));
+	TestFalse(TEXT("after outer boundary is excluded"), IsInside(4200.1f, 0.0f, 0.0f));
+	TestTrue(TEXT("inner collision half-width is inclusive"), IsInside(0.0f, 200.0f, 0.0f));
+	TestFalse(TEXT("inner visual-only width does not damage"), IsInside(0.0f, 200.1f, 0.0f));
+	TestTrue(TEXT("outer collision half-width is inclusive"), IsInside(4200.0f, 400.0f, 0.0f));
+	TestFalse(TEXT("outside outer collision width is excluded"), IsInside(4200.0f, 400.1f, 0.0f));
+	TestTrue(TEXT("collision half-height is inclusive"), IsInside(2100.0f, 0.0f, 75.0f));
+	TestFalse(TEXT("outside collision height is excluded"), IsInside(2100.0f, 0.0f, 75.1f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoRuntimeDamageTest,
+	"DroneProto.BossPattern.CorruptedActino.RuntimeDamageAndLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoRuntimeDamageTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("CorruptedActinoRuntimeWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component || !Context.Drone)
+	{
+		TestTrue(TEXT("runtime test setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	const FVector BossStartLocation(900.0f, -450.0f, 125.0f);
+	const FRotator BossStartRotation(0.0f, 31.0f, 0.0f);
+	Context.Boss->SetActorLocationAndRotation(BossStartLocation, BossStartRotation);
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted starts"), Context.Component->FireScheduledTransitionForTest());
+	ACorruptedActinoPatternActor* CorruptedActor = Cast<ACorruptedActinoPatternActor>(Context.Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("Corrupted uses dedicated actor"), CorruptedActor);
+	TestEqual(TEXT("first use skips telegraph"), Context.Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	if (!CorruptedActor)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+	TestTrue(TEXT("actor snapshots Boss start location"), CorruptedActor->GetActorLocation().Equals(BossStartLocation, 0.01f));
+	TestTrue(TEXT("actor snapshots Boss start rotation"), CorruptedActor->GetActorRotation().Equals(BossStartRotation, 0.01f));
+
+	const FCorruptedActinoConfig Config;
+	Context.Boss->SetActorLocation(BossStartLocation + FVector(2000.0f, 1000.0f, 0.0f));
+	Context.Drone->SetActorLocation(MakeCorruptedLaserPoint(
+		CorruptedActor->GetActorTransform(), Config.Presets[0], 0.0f, 1000.0f, 0.0f, 0.0f));
+	const int32 HealthBefore = Context.Drone->GetHealth();
+	CorruptedActor->Tick(0.0f);
+	TestEqual(TEXT("active laser deals canonical damage"), Context.Drone->GetHealth(), HealthBefore - 20);
+	TestEqual(TEXT("each Drone receives at most one damage attempt per tick"), CorruptedActor->GetDamageAttemptCountForTest(), 1);
+
+	TestTrue(TEXT("first Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar starts"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("later Corrupted telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("later Corrupted telegraph is one second"), Context.Component->GetPendingDelayForTest(), 1.0f);
+	TestNotNull(TEXT("later Corrupted also uses dedicated actor"),
+		Cast<ACorruptedActinoPatternActor>(Context.Component->GetActivePatternActorForTest()));
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoDebugVisualizationContractTest,
+	"DroneProto.BossPattern.CorruptedActino.DebugVisualizationContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoDebugVisualizationContractTest::RunTest(const FString& Parameters)
+{
+	const FString ActorPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/CorruptedActinoPatternActor.cpp");
+	FString ActorSource;
+	TestTrue(TEXT("Corrupted actor source loads"), FFileHelper::LoadFileToString(ActorSource, *ActorPath));
+	TestTrue(TEXT("visual timing uses server world time"), ActorSource.Contains(TEXT("GetServerWorldTimeSeconds")));
+	TestTrue(TEXT("dedicated server skips debug drawing"), ActorSource.Contains(TEXT("NM_DedicatedServer")));
+	TestTrue(TEXT("telegraph is yellow"), ActorSource.Contains(TEXT("FColor::Yellow")));
+	TestTrue(TEXT("active centerline is red"), ActorSource.Contains(TEXT("FColor::Red")));
+	TestTrue(TEXT("collision edges are cyan"), ActorSource.Contains(TEXT("FColor::Cyan")));
+	TestTrue(TEXT("visual edges are magenta"), ActorSource.Contains(TEXT("FColor::Magenta")));
 	return true;
 }
 

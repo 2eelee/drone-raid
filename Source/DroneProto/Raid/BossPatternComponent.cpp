@@ -1,6 +1,7 @@
 #include "BossPatternComponent.h"
 
 #include "BossPatternActorBase.h"
+#include "CorruptedActinoPatternActor.h"
 #include "Drone.h"
 #include "RaidBoss.h"
 #include "RaidGameMode.h"
@@ -288,8 +289,11 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = Owner;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	UClass* PatternActorClass = CurrentPattern == EBossPatternKind::CorruptedActino
+		? ACorruptedActinoPatternActor::StaticClass()
+		: ABossPatternActorBase::StaticClass();
 	ActivePatternActor = World->SpawnActor<ABossPatternActorBase>(
-		ABossPatternActorBase::StaticClass(),
+		PatternActorClass,
 		Owner->GetActorTransform(),
 		SpawnParameters);
 	if (ActivePatternActor)
