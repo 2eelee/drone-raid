@@ -1,0 +1,5 @@
+---,LaserIndex,BaseAngle,SweepDirection,XYPhase,ZPhase,ZStartState
+ACTINO_LASER_01,1,0,Clockwise,0,0,Upper
+ACTINO_LASER_02,2,90,CounterClockwise,0.25,0.25,CenterUp
+ACTINO_LASER_03,3,180,Clockwise,0.5,0.5,Lower
+ACTINO_LASER_04,4,270,CounterClockwise,0.75,0.75,CenterDown

@@ -17,6 +17,9 @@ public:
 
 	void InitializeForServer(EBossPatternKind PatternKind, EBossPatternLifecycleState LifecycleState, int32 InstanceID, float StartServerTime);
 	void SetLifecycleForServer(EBossPatternLifecycleState LifecycleState, float StartServerTime);
+	void SnapshotResolvedConfig(const FBossPatternResolvedConfig& Config);
+	bool HasResolvedConfigSnapshot() const;
+	bool CopyResolvedConfigSnapshot(FBossPatternResolvedConfig& OutConfig) const;
 
 	const FBossPatternRepState& GetPatternState() const;
 
@@ -27,7 +30,10 @@ public:
 	void BP_OnPatternVisualEnded();
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	const FBossPatternResolvedConfig& GetResolvedConfigSnapshot() const;
+	virtual void OnResolvedConfigSnapshot();
 	void DrawDashedDebugLine(
 		const FVector& Start,
 		const FVector& End,
@@ -43,6 +49,8 @@ protected:
 private:
 	UPROPERTY(ReplicatedUsing = OnRep_PatternState)
 	FBossPatternRepState PatternState;
+	FBossPatternResolvedConfig ResolvedConfigSnapshot;
+	bool bHasResolvedConfigSnapshot = false;
 
 	UFUNCTION()
 	void OnRep_PatternState();

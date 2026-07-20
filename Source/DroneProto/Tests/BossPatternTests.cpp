@@ -10,6 +10,8 @@
 #include "Misc/Paths.h"
 #include "Raid/BossPatternActorBase.h"
 #include "Raid/BossPatternComponent.h"
+#include "Raid/BossPatternDataTableRows.h"
+#include "Raid/BossPatternDataTableResolver.h"
 #include "Raid/BossPatternTypes.h"
 #include "Raid/CorruptedActinoPatternActor.h"
 #include "Raid/DronePartInventory.h"
@@ -24,6 +26,114 @@
 
 namespace
 {
+FBossPatternDataTableSet MakeEmptyBossPatternDataTableSet()
+{
+	return FBossPatternDataTableSet();
+}
+
+template <typename RowType>
+UDataTable* MakeBossPatternTable()
+{
+	UDataTable* Table = NewObject<UDataTable>();
+	Table->RowStruct = RowType::StaticStruct();
+	return Table;
+}
+
+struct FCanonicalBossPatternTables
+{
+	UDataTable* Boss = MakeBossPatternTable<FBossPatternSystemRow>();
+	UDataTable* Corrupted = MakeBossPatternTable<FCorruptedActinoRow>();
+	UDataTable* Presets = MakeBossPatternTable<FCorruptedActinoPresetRow>();
+	UDataTable* Stellar = MakeBossPatternTable<FStellarRemnantRow>();
+
+	FCanonicalBossPatternTables()
+	{
+		FBossPatternSystemRow BossRow;
+		BossRow.PatternSystemID = 10001;
+		BossRow.PatternOrder = TEXT("1\u21922 Repeat");
+		BossRow.PatternInterval = 2.0f;
+		BossRow.FirstPatternDelay = 0.5f;
+		BossRow.HitInvincibleDuration = 0.7f;
+		BossRow.PlayerMaxHPReference = 100;
+		Boss->AddRow(TEXT("BOSS_PATTERN_SYSTEM_001"), BossRow);
+
+		FCorruptedActinoRow CorruptedRow;
+		CorruptedRow.PatternID = 11001;
+		CorruptedRow.PatternName = TEXT("Corrupted Actino");
+		CorruptedRow.Difficulty = TEXT("Middle");
+		CorruptedRow.Damage = 20;
+		CorruptedRow.Duration = 5.0f;
+		CorruptedRow.Telegraph = 1.0f;
+		CorruptedRow.LaserCount = 4;
+		CorruptedRow.StartDistance = 8.0f;
+		CorruptedRow.EndDistance = 50.0f;
+		CorruptedRow.Length = 42.0f;
+		CorruptedRow.InnerHitWidth = 4.0f;
+		CorruptedRow.OuterHitWidth = 8.0f;
+		CorruptedRow.InnerVisualWidth = 5.0f;
+		CorruptedRow.OuterVisualWidth = 12.0f;
+		CorruptedRow.CollisionHeight = 1.5f;
+		CorruptedRow.ZAmplitude = 3.0f;
+		CorruptedRow.ZOscillationPeriod = 2.0f;
+		CorruptedRow.AngleSweepRange = 25.0f;
+		CorruptedRow.FirstUseTelegraph = false;
+		Corrupted->AddRow(TEXT("PATTERN_001"), CorruptedRow);
+
+		static const float BaseAngles[4] = {0.0f, 90.0f, 180.0f, 270.0f};
+		static const float Phases[4] = {0.0f, 0.25f, 0.5f, 0.75f};
+		static const TCHAR* Directions[4] =
+		{
+			TEXT("Clockwise"), TEXT("CounterClockwise"), TEXT("Clockwise"), TEXT("CounterClockwise")
+		};
+		static const TCHAR* ZStates[4] =
+		{
+			TEXT("Upper"), TEXT("CenterUp"), TEXT("Lower"), TEXT("CenterDown")
+		};
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			FCorruptedActinoPresetRow Preset;
+			Preset.LaserIndex = Index + 1;
+			Preset.BaseAngle = BaseAngles[Index];
+			Preset.SweepDirection = Directions[Index];
+			Preset.XYPhase = Phases[Index];
+			Preset.ZPhase = Phases[Index];
+			Preset.ZStartState = ZStates[Index];
+			Presets->AddRow(FName(*FString::Printf(TEXT("ACTINO_LASER_%02d"), Index + 1)), Preset);
+		}
+
+		FStellarRemnantRow StellarRow;
+		StellarRow.PatternID = 11002;
+		StellarRow.PatternName = TEXT("Stellar Remnant");
+		StellarRow.Difficulty = TEXT("MiddleHigh");
+		StellarRow.Damage = 25;
+		StellarRow.Duration = 3.0f;
+		StellarRow.Telegraph = 0.8f;
+		StellarRow.WaveCount = 2;
+		StellarRow.DamageCount = 32;
+		StellarRow.VisualCount = 16;
+		StellarRow.DamagePerWave = 16;
+		StellarRow.VisualPerWave = 8;
+		StellarRow.WaveInterval = 0.5f;
+		StellarRow.StartDistance = 8.0f;
+		StellarRow.EndDistance = 50.0f;
+		StellarRow.Length = 42.0f;
+		StellarRow.MoveDuration = 2.5f;
+		StellarRow.MoveSpeed = 16.8f;
+		StellarRow.HitRadius = 0.7f;
+		StellarRow.VisualSizeMin = 1.0f;
+		StellarRow.VisualSizeMax = 1.2f;
+		StellarRow.SecondWaveOffset = 11.25f;
+		StellarRow.VisualZOffset = 3.0f;
+		StellarRow.VisualDamage = 0;
+		Stellar->AddRow(TEXT("PATTERN_002"), StellarRow);
+	}
+
+	FBossPatternDataTableSet AsSet() const
+	{
+		return {Boss, Corrupted, Presets, Stellar};
+	}
+};
+
 int32 CountPatternActors(UWorld* World)
 {
 	int32 Count = 0;
@@ -85,6 +195,10 @@ FBossPatternPlayerTestContext CreateBossPatternPlayerTestContext(const TCHAR* Wo
 	Context.GameState = Context.World->SpawnActor<ARaidGameState>();
 	Context.Boss = Context.World->SpawnActor<ARaidBoss>();
 	Context.Component = Context.Boss ? Context.Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Context.Component)
+	{
+		Context.Component->ResolvePatternDataForTest();
+	}
 	if (Context.GameState)
 	{
 		Context.World->SetGameState(Context.GameState);
@@ -135,6 +249,307 @@ FVector MakeCorruptedLaserPoint(
 		+ FVector::UpVector * (ACorruptedActinoPatternActor::EvaluateZCm(Preset, ElapsedSeconds) + VerticalOffsetCm);
 	return BossTransform.TransformPosition(LocalPoint);
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDataMissingTableReasonTest,
+	"DroneProto.BossPattern.DataTable.MissingTableReason",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDataMissingTableReasonTest::RunTest(const FString& Parameters)
+{
+	FBossPatternResolvedConfig Resolved;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::None;
+	TestFalse(TEXT("an empty table set cannot resolve"), BossPatternData::TryResolve(
+		MakeEmptyBossPatternDataTableSet(), Resolved, Reason));
+	TestEqual(TEXT("the first deterministic reason is the common table"), Reason,
+		EBossPatternDataFallbackReason::MissingBossPatternTable);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDataCanonicalResolveTest,
+	"DroneProto.BossPattern.DataTable.CanonicalResolveAndStellarIndependence",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDataCanonicalResolveTest::RunTest(const FString& Parameters)
+{
+	FCanonicalBossPatternTables Tables;
+	FStellarRemnantRow* StellarRow = Tables.Stellar->FindRow<FStellarRemnantRow>(
+		TEXT("PATTERN_002"), TEXT("Automation"));
+	StellarRow->StartDistance = 9.0f;
+	StellarRow->EndDistance = 51.0f;
+
+	FBossPatternResolvedConfig Resolved;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::MissingBossPatternTable;
+	TestTrue(TEXT("canonical tables resolve"), BossPatternData::TryResolve(Tables.AsSet(), Resolved, Reason));
+	TestEqual(TEXT("success clears reason"), Reason, EBossPatternDataFallbackReason::None);
+	TestEqual(TEXT("common conversion"), Resolved.Common.GlobalHitLockSeconds, 0.7f);
+	TestEqual(TEXT("Corrupted distance comes from Corrupted"), Resolved.Corrupted.StartRadiusCm, 800.0f);
+	TestEqual(TEXT("Stellar start distance is independent"), Resolved.Stellar.StartRadiusCm, 900.0f);
+	TestEqual(TEXT("Stellar end distance is independent"), Resolved.Stellar.EndRadiusCm, 5100.0f);
+	TestTrue(TEXT("SweepDirection is runtime authority"),
+		FMath::IsNearlyEqual(Resolved.Corrupted.Presets[0].XYPhaseRadians, -HALF_PI));
+	TestTrue(TEXT("ZStartState is runtime authority"),
+		FMath::IsNearlyEqual(Resolved.Corrupted.Presets[3].ZPhaseRadians, PI));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDataPresetAtomicFallbackTest,
+	"DroneProto.BossPattern.DataTable.PresetContractAtomicFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDataPresetAtomicFallbackTest::RunTest(const FString& Parameters)
+{
+	FCanonicalBossPatternTables Tables;
+	FCorruptedActinoPresetRow* Preset = Tables.Presets->FindRow<FCorruptedActinoPresetRow>(
+		TEXT("ACTINO_LASER_03"), TEXT("Automation"));
+	Preset->ZPhase = 0.75f;
+
+	FBossPatternResolvedConfig Resolved;
+	Resolved.Common.FirstDelaySeconds = 123.0f;
+	Resolved.Stellar.StartRadiusCm = 456.0f;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::None;
+	TestFalse(TEXT("phase and state conflict fails all tables"),
+		BossPatternData::TryResolve(Tables.AsSet(), Resolved, Reason));
+	TestEqual(TEXT("preset failure reason is deterministic"), Reason,
+		EBossPatternDataFallbackReason::InvalidCorruptedPresetContract);
+	TestEqual(TEXT("failed resolve leaves common output untouched"), Resolved.Common.FirstDelaySeconds, 123.0f);
+	TestEqual(TEXT("failed resolve leaves Stellar output untouched"), Resolved.Stellar.StartRadiusCm, 456.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternResolvedSnapshotTest,
+	"DroneProto.BossPattern.DataTable.RuntimeReadyAndActorSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternResolvedSnapshotTest::RunTest(const FString& Parameters)
+{
+	UWorld* NotReadyWorld = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternNotReadyWorld")));
+	ARaidBoss* NotReadyBoss = NotReadyWorld ? NotReadyWorld->SpawnActor<ARaidBoss>() : nullptr;
+	TestFalse(TEXT("pattern cannot start before resolved config is ready"),
+		NotReadyBoss && NotReadyBoss->StartBossPatternForServer());
+	TestEqual(TEXT("no actor exists before resolved config is ready"), CountPatternActors(NotReadyWorld), 0);
+	if (NotReadyWorld)
+	{
+		NotReadyWorld->DestroyWorld(false);
+	}
+
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternResolvedSnapshotWorld"));
+	TestNotNull(TEXT("component exists"), Context.Component);
+	TestTrue(TEXT("resolved config is ready before start"),
+		Context.Component && Context.Component->IsResolvedConfigReadyForTest());
+	TestTrue(TEXT("pattern start succeeds after resolve"), Context.Boss && Context.Boss->StartBossPatternForServer());
+	if (Context.Component)
+	{
+		Context.Component->FireScheduledTransitionForTest();
+	}
+	ABossPatternActorBase* Actor = Context.Component ? Context.Component->GetActivePatternActorForTest() : nullptr;
+	TestNotNull(TEXT("pattern actor spawns"), Actor);
+	TestTrue(TEXT("spawned actor owns a value snapshot"), Actor && Actor->HasResolvedConfigSnapshot());
+	FBossPatternResolvedConfig OriginalSnapshot;
+	TestTrue(TEXT("actor snapshot can be copied by value"),
+		Actor && Actor->CopyResolvedConfigSnapshot(OriginalSnapshot));
+	FBossPatternResolvedConfig Replacement = MakeCanonicalBossPatternResolvedConfig();
+	Replacement.Common.FirstDelaySeconds = 99.0f;
+	Replacement.Stellar.StartRadiusCm = 12345.0f;
+	if (Actor)
+	{
+		Actor->SnapshotResolvedConfig(Replacement);
+	}
+	FBossPatternResolvedConfig SnapshotAfterSecondWrite;
+	TestTrue(TEXT("actor snapshot remains readable"),
+		Actor && Actor->CopyResolvedConfigSnapshot(SnapshotAfterSecondWrite));
+	TestEqual(TEXT("actor snapshot is immutable after creation"),
+		SnapshotAfterSecondWrite.Common.FirstDelaySeconds, OriginalSnapshot.Common.FirstDelaySeconds);
+	TestEqual(TEXT("actor never rereads replacement Stellar data"),
+		SnapshotAfterSecondWrite.Stellar.StartRadiusCm, OriginalSnapshot.Stellar.StartRadiusCm);
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDataAssetContractTest,
+	"DroneProto.BossPattern.DataTable.AssetPathsAndHardReferences",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDataAssetContractTest::RunTest(const FString& Parameters)
+{
+	struct FExpectedAsset
+	{
+		const TCHAR* Path;
+		const TCHAR* ComponentProperty;
+		UScriptStruct* RowStruct;
+	};
+	const FExpectedAsset ExpectedAssets[] =
+	{
+		{TEXT("/Game/Data/BossPattern/DT_BossPattern.DT_BossPattern"), TEXT("BossPatternDataTable"), FBossPatternSystemRow::StaticStruct()},
+		{TEXT("/Game/Data/BossPattern/DT_CorruptedActino.DT_CorruptedActino"), TEXT("CorruptedActinoDataTable"), FCorruptedActinoRow::StaticStruct()},
+		{TEXT("/Game/Data/BossPattern/DT_CorruptedActinoPreset.DT_CorruptedActinoPreset"), TEXT("CorruptedActinoPresetDataTable"), FCorruptedActinoPresetRow::StaticStruct()},
+		{TEXT("/Game/Data/BossPattern/DT_StellarRemnant.DT_StellarRemnant"), TEXT("StellarRemnantDataTable"), FStellarRemnantRow::StaticStruct()}
+	};
+	const UBossPatternComponent* ComponentCDO = GetDefault<UBossPatternComponent>();
+	for (const FExpectedAsset& Expected : ExpectedAssets)
+	{
+		const UDataTable* Table = Cast<UDataTable>(FSoftObjectPath(Expected.Path).TryLoad());
+		TestNotNull(FString::Printf(TEXT("asset loads: %s"), Expected.Path), Table);
+		if (Table)
+		{
+			TestEqual(FString::Printf(TEXT("typed row: %s"), Expected.Path), Table->RowStruct.Get(), Expected.RowStruct);
+		}
+		const FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(
+			UBossPatternComponent::StaticClass(), FName(Expected.ComponentProperty));
+		TestNotNull(FString::Printf(TEXT("hard reference property: %s"), Expected.ComponentProperty), Property);
+		if (Property && ComponentCDO)
+		{
+			const UObject* ReferencedObject = Property->GetObjectPropertyValue_InContainer(ComponentCDO);
+			TestTrue(FString::Printf(TEXT("CDO hard reference: %s"), Expected.Path), ReferencedObject == Table);
+		}
+	}
+
+	FString ComponentSource;
+	const FString ComponentPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/BossPatternComponent.cpp");
+	TestTrue(TEXT("component source loads"), FFileHelper::LoadFileToString(ComponentSource, *ComponentPath));
+	for (const FExpectedAsset& Expected : ExpectedAssets)
+	{
+		TestTrue(FString::Printf(TEXT("hard reference is present: %s"), Expected.Path),
+			ComponentSource.Contains(Expected.Path));
+	}
+	TestFalse(TEXT("runtime does not read CSV"), ComponentSource.Contains(TEXT("FillDataTableFromCSV"))
+		|| ComponentSource.Contains(TEXT("LoadFileToString")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDataAssetCanonicalEqualityTest,
+	"DroneProto.BossPattern.DataTable.AssetCanonicalEquality",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDataAssetCanonicalEqualityTest::RunTest(const FString& Parameters)
+{
+	const FBossPatternDataTableSet Tables =
+	{
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/BossPattern/DT_BossPattern.DT_BossPattern")).TryLoad()),
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/BossPattern/DT_CorruptedActino.DT_CorruptedActino")).TryLoad()),
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/BossPattern/DT_CorruptedActinoPreset.DT_CorruptedActinoPreset")).TryLoad()),
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/BossPattern/DT_StellarRemnant.DT_StellarRemnant")).TryLoad())
+	};
+	FBossPatternResolvedConfig Actual;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::None;
+	TestTrue(TEXT("asset tables resolve"), BossPatternData::TryResolve(Tables, Actual, Reason));
+	FBossPatternResolvedConfig ClientActual;
+	EBossPatternDataFallbackReason ClientReason = EBossPatternDataFallbackReason::None;
+	TestTrue(TEXT("client resolves the same local assets"), BossPatternData::TryResolve(Tables, ClientActual, ClientReason));
+	TestEqual(TEXT("server and client common config match"),
+		Actual.Common.FirstDelaySeconds, ClientActual.Common.FirstDelaySeconds);
+	TestEqual(TEXT("server and client Corrupted config match"),
+		Actual.Corrupted.Presets[3].ZPhaseRadians, ClientActual.Corrupted.Presets[3].ZPhaseRadians);
+	TestEqual(TEXT("server and client Stellar config match"),
+		Actual.Stellar.StartRadiusCm, ClientActual.Stellar.StartRadiusCm);
+	const FBossPatternResolvedConfig Expected = MakeCanonicalBossPatternResolvedConfig();
+
+	TestEqual(TEXT("common first delay"), Actual.Common.FirstDelaySeconds, Expected.Common.FirstDelaySeconds);
+	TestEqual(TEXT("common interval"), Actual.Common.IntermissionSeconds, Expected.Common.IntermissionSeconds);
+	TestEqual(TEXT("common hit lock"), Actual.Common.GlobalHitLockSeconds, Expected.Common.GlobalHitLockSeconds);
+	TestEqual(TEXT("Corrupted duration"), Actual.Common.CorruptedDurationSeconds, Expected.Common.CorruptedDurationSeconds);
+	TestEqual(TEXT("Corrupted telegraph"), Actual.Common.CorruptedTelegraphSeconds, Expected.Common.CorruptedTelegraphSeconds);
+	TestEqual(TEXT("Corrupted damage"), Actual.Common.CorruptedDamage, Expected.Common.CorruptedDamage);
+	TestEqual(TEXT("Stellar duration"), Actual.Common.StellarDurationSeconds, Expected.Common.StellarDurationSeconds);
+	TestEqual(TEXT("Stellar telegraph"), Actual.Common.StellarTelegraphSeconds, Expected.Common.StellarTelegraphSeconds);
+	TestEqual(TEXT("Stellar damage"), Actual.Common.StellarDamage, Expected.Common.StellarDamage);
+
+	TestEqual(TEXT("Corrupted laser count"), Actual.Corrupted.LaserCount, Expected.Corrupted.LaserCount);
+	TestEqual(TEXT("Corrupted start"), Actual.Corrupted.StartRadiusCm, Expected.Corrupted.StartRadiusCm);
+	TestEqual(TEXT("Corrupted end"), Actual.Corrupted.EndRadiusCm, Expected.Corrupted.EndRadiusCm);
+	TestEqual(TEXT("Corrupted length"), Actual.Corrupted.LengthCm, Expected.Corrupted.LengthCm);
+	TestEqual(TEXT("Corrupted inner hit"), Actual.Corrupted.InnerCollisionFullWidthCm, Expected.Corrupted.InnerCollisionFullWidthCm);
+	TestEqual(TEXT("Corrupted outer hit"), Actual.Corrupted.OuterCollisionFullWidthCm, Expected.Corrupted.OuterCollisionFullWidthCm);
+	TestEqual(TEXT("Corrupted inner visual"), Actual.Corrupted.InnerVisualFullWidthCm, Expected.Corrupted.InnerVisualFullWidthCm);
+	TestEqual(TEXT("Corrupted outer visual"), Actual.Corrupted.OuterVisualFullWidthCm, Expected.Corrupted.OuterVisualFullWidthCm);
+	TestEqual(TEXT("Corrupted collision height"), Actual.Corrupted.CollisionFullHeightCm, Expected.Corrupted.CollisionFullHeightCm);
+	TestEqual(TEXT("Corrupted Z amplitude"), Actual.Corrupted.ZAmplitudeCm, Expected.Corrupted.ZAmplitudeCm);
+	TestEqual(TEXT("Corrupted Z period"), Actual.Corrupted.ZPeriodSeconds, Expected.Corrupted.ZPeriodSeconds);
+	TestEqual(TEXT("Corrupted XY amplitude"), Actual.Corrupted.XYAmplitudeDegrees, Expected.Corrupted.XYAmplitudeDegrees);
+	TestEqual(TEXT("Corrupted XY period"), Actual.Corrupted.XYPeriodSeconds, Expected.Corrupted.XYPeriodSeconds);
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		TestEqual(TEXT("preset base"), Actual.Corrupted.Presets[Index].BaseAngleDegrees, Expected.Corrupted.Presets[Index].BaseAngleDegrees);
+		TestTrue(TEXT("preset direction phase"), FMath::IsNearlyEqual(
+			Actual.Corrupted.Presets[Index].XYPhaseRadians, Expected.Corrupted.Presets[Index].XYPhaseRadians));
+		TestTrue(TEXT("preset Z state phase"), FMath::IsNearlyEqual(
+			Actual.Corrupted.Presets[Index].ZPhaseRadians, Expected.Corrupted.Presets[Index].ZPhaseRadians));
+	}
+
+	TestEqual(TEXT("Stellar waves"), Actual.Stellar.WaveCount, Expected.Stellar.WaveCount);
+	TestEqual(TEXT("Stellar damage count"), Actual.Stellar.DamageProjectileCount, Expected.Stellar.DamageProjectileCount);
+	TestEqual(TEXT("Stellar visual count"), Actual.Stellar.VisualProjectileCount, Expected.Stellar.VisualProjectileCount);
+	TestEqual(TEXT("Stellar damage per wave"), Actual.Stellar.DamageProjectilesPerWave, Expected.Stellar.DamageProjectilesPerWave);
+	TestEqual(TEXT("Stellar visual per wave"), Actual.Stellar.VisualProjectilesPerWave, Expected.Stellar.VisualProjectilesPerWave);
+	TestEqual(TEXT("Stellar interval"), Actual.Stellar.WaveIntervalSeconds, Expected.Stellar.WaveIntervalSeconds);
+	TestEqual(TEXT("Stellar independent start"), Actual.Stellar.StartRadiusCm, Expected.Stellar.StartRadiusCm);
+	TestEqual(TEXT("Stellar independent end"), Actual.Stellar.EndRadiusCm, Expected.Stellar.EndRadiusCm);
+	TestEqual(TEXT("Stellar independent length"), Actual.Stellar.LengthCm, Expected.Stellar.LengthCm);
+	TestEqual(TEXT("Stellar travel"), Actual.Stellar.TravelSeconds, Expected.Stellar.TravelSeconds);
+	TestTrue(TEXT("Stellar speed"), FMath::IsNearlyEqual(
+		Actual.Stellar.SpeedCmPerSecond, Expected.Stellar.SpeedCmPerSecond, 0.01f));
+	TestEqual(TEXT("Stellar hit radius"), Actual.Stellar.CollisionRadiusCm, Expected.Stellar.CollisionRadiusCm);
+	TestEqual(TEXT("Stellar angle step"), Actual.Stellar.DamageAngleStepDegrees, Expected.Stellar.DamageAngleStepDegrees);
+	TestEqual(TEXT("Stellar wave offset"), Actual.Stellar.SecondWaveOffsetDegrees, Expected.Stellar.SecondWaveOffsetDegrees);
+	TestEqual(TEXT("Stellar visual Z"), Actual.Stellar.VisualZOffsetCm, Expected.Stellar.VisualZOffsetCm);
+	TestEqual(TEXT("Stellar visual min"), Actual.Stellar.VisualFullSizeMinCm, Expected.Stellar.VisualFullSizeMinCm);
+	TestEqual(TEXT("Stellar visual max"), Actual.Stellar.VisualFullSizeMaxCm, Expected.Stellar.VisualFullSizeMaxCm);
+	TestEqual(TEXT("Stellar visual damage"), Actual.Stellar.VisualDamage, Expected.Stellar.VisualDamage);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDataValidationReasonsTest,
+	"DroneProto.BossPattern.DataTable.DeterministicValidationReasons",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDataValidationReasonsTest::RunTest(const FString& Parameters)
+{
+	auto ResolveReason = [](const FCanonicalBossPatternTables& Tables)
+	{
+		FBossPatternResolvedConfig Config;
+		EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::None;
+		BossPatternData::TryResolve(Tables.AsSet(), Config, Reason);
+		return Reason;
+	};
+	{
+		FCanonicalBossPatternTables Tables;
+		FBossPatternSystemRow Extra = *Tables.Boss->FindRow<FBossPatternSystemRow>(TEXT("BOSS_PATTERN_SYSTEM_001"), TEXT("Automation"));
+		Tables.Boss->AddRow(TEXT("EXTRA"), Extra);
+		TestEqual(TEXT("row count reason"), ResolveReason(Tables), EBossPatternDataFallbackReason::UnexpectedBossPatternRowCount);
+	}
+	{
+		FCanonicalBossPatternTables Tables;
+		Tables.Presets->FindRow<FCorruptedActinoPresetRow>(TEXT("ACTINO_LASER_04"), TEXT("Automation"))->LaserIndex = 3;
+		TestEqual(TEXT("duplicate preset reason"), ResolveReason(Tables), EBossPatternDataFallbackReason::DuplicatePresetLaserIndex);
+	}
+	{
+		FCanonicalBossPatternTables Tables;
+		Tables.Boss->FindRow<FBossPatternSystemRow>(TEXT("BOSS_PATTERN_SYSTEM_001"), TEXT("Automation"))->PatternOrder = TEXT("2\u21921 Repeat");
+		TestEqual(TEXT("pattern order contract"), ResolveReason(Tables), EBossPatternDataFallbackReason::InvalidBossPatternContract);
+	}
+	{
+		FCanonicalBossPatternTables Tables;
+		Tables.Corrupted->FindRow<FCorruptedActinoRow>(TEXT("PATTERN_001"), TEXT("Automation"))->FirstUseTelegraph = true;
+		TestEqual(TEXT("Corrupted nonnumeric contract"), ResolveReason(Tables), EBossPatternDataFallbackReason::InvalidCorruptedContract);
+	}
+	{
+		FCanonicalBossPatternTables Tables;
+		Tables.Stellar->FindRow<FStellarRemnantRow>(TEXT("PATTERN_002"), TEXT("Automation"))->VisualDamage = 1;
+		TestEqual(TEXT("Stellar nonnumeric contract"), ResolveReason(Tables), EBossPatternDataFallbackReason::InvalidStellarContract);
+	}
+	{
+		FCanonicalBossPatternTables Tables;
+		Tables.Stellar->FindRow<FStellarRemnantRow>(TEXT("PATTERN_002"), TEXT("Automation"))->Length = 41.0f;
+		TestEqual(TEXT("Stellar range reason"), ResolveReason(Tables), EBossPatternDataFallbackReason::InvalidStellarRange);
+	}
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -578,6 +993,10 @@ bool FDroneBossPatternPopulationPauseRestartTest::RunTest(const FString& Paramet
 	ARaidGameMode* GameMode = World ? World->SpawnActor<ARaidGameMode>() : nullptr;
 	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
 	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Component)
+	{
+		Component->ResolvePatternDataForTest();
+	}
 	TestNotNull(TEXT("population world is created"), World);
 	TestNotNull(TEXT("population game state exists"), GameState);
 	TestNotNull(TEXT("population game mode exists"), GameMode);

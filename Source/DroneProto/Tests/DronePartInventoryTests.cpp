@@ -83,6 +83,14 @@ void DestroyDroneSelectionTestContext(FDroneSelectionTestContext& Context)
 	Context = FDroneSelectionTestContext();
 }
 
+void ResolveBossPatternForSyntheticWorld(ARaidBoss* Boss)
+{
+	if (UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr)
+	{
+		Component->ResolvePatternDataForTest();
+	}
+}
+
 FDroneSelectionTestContext CreateDroneReturnTestContext(
 	const TCHAR* WorldName,
 	UDronePartReturnManager*& OutReturnManager)
@@ -124,6 +132,7 @@ bool PrepareBattleAttackTest(
 	{
 		return false;
 	}
+	ResolveBossPatternForSyntheticWorld(OutBoss);
 
 	Context.GameState->SetRaidBossForServer(OutBoss);
 	Context.PC->Server_RequestReadyForRaid_Implementation();
@@ -4003,6 +4012,7 @@ bool FRaidBossStateJoinGateTest::RunTest(const FString& Parameters)
 	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Q4BossStateJoinGateWorld"));
 	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
 	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	ResolveBossPatternForSyntheticWorld(Boss);
 
 	TestNotNull(TEXT("boss state gate world is created"), Context.World);
 	TestNotNull(TEXT("boss state gate game state is spawned"), Context.GameState);
@@ -4073,6 +4083,7 @@ bool FRaidBossStateJoinGateTest::RunTest(const FString& Parameters)
 	FDroneSelectionTestContext TimeOverContext = CreateDroneSelectionTestContext(TEXT("Q4BossStateTimeOverWorld"));
 	ARaidGameMode* TimeOverGameMode = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidGameMode>() : nullptr;
 	ARaidBoss* TimeOverBoss = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidBoss>() : nullptr;
+	ResolveBossPatternForSyntheticWorld(TimeOverBoss);
 	TestNotNull(TEXT("time over game mode is spawned"), TimeOverGameMode);
 	TestNotNull(TEXT("time over boss is spawned"), TimeOverBoss);
 	if (!TimeOverContext.World || !TimeOverContext.GameState || !TimeOverContext.PC || !TimeOverContext.Drone || !TimeOverGameMode || !TimeOverBoss)

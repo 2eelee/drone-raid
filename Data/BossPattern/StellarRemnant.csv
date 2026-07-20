@@ -1,0 +1,2 @@
+---,PatternID,PatternName,Difficulty,Damage,Duration,Telegraph,WaveCount,DamageCount,VisualCount,DamagePerWave,VisualPerWave,WaveInterval,StartDistance,EndDistance,Length,MoveDuration,MoveSpeed,HitRadius,VisualSizeMin,VisualSizeMax,SecondWaveOffset,VisualZOffset,VisualDamage
+PATTERN_002,11002,Stellar Remnant,MiddleHigh,25,3,0.8,2,32,16,16,8,0.5,8,50,42,2.5,16.8,0.7,1,1.2,11.25,3,0

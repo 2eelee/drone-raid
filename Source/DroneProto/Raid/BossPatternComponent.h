@@ -7,6 +7,7 @@
 
 class ABossPatternActorBase;
 class ADrone;
+class UDataTable;
 
 UCLASS(ClassGroup = (Raid), meta = (BlueprintSpawnableComponent))
 class DRONEPROTO_API UBossPatternComponent : public UActorComponent
@@ -21,6 +22,7 @@ public:
 	bool IsRunning() const;
 	bool TryApplyPatternDamageForServer(ADrone* Target, int32 DamageAmount);
 	void NotifyPopulationChangedForServer(FName Reason);
+	bool CopyResolvedConfig(FBossPatternResolvedConfig& OutConfig) const;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	EBossPatternServerState GetServerStateForTest() const;
@@ -36,10 +38,27 @@ public:
 	bool FireScheduledTransitionForTest();
 	bool FireTransitionForTest(int32 ExpectedSerial);
 	ABossPatternActorBase* GetActivePatternActorForTest() const;
+	void ResolvePatternDataForTest();
+	bool IsResolvedConfigReadyForTest() const;
 #endif
 
+protected:
+	virtual void BeginPlay() override;
+
 private:
-	FBossPatternConfig Config;
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Data")
+	TObjectPtr<UDataTable> BossPatternDataTable = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Data")
+	TObjectPtr<UDataTable> CorruptedActinoDataTable = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Data")
+	TObjectPtr<UDataTable> CorruptedActinoPresetDataTable = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Data")
+	TObjectPtr<UDataTable> StellarRemnantDataTable = nullptr;
+
+	FBossPatternResolvedConfig ResolvedConfig;
 	FTimerHandle TransitionTimerHandle;
 	TMap<FString, FTimerHandle> HitLockTimerHandles;
 	TSet<FString> DodgeIgnoredLoggedPlayerKeys;
@@ -56,6 +75,7 @@ private:
 	int32 NextPatternInstanceID = 0;
 	int32 ActivePlayerCount = -1;
 	bool bRunning = false;
+	bool bResolvedConfigReady = false;
 
 	void ScheduleTransition(float DelaySeconds);
 	void HandleTransitionForServer(int32 ExpectedSerial);
@@ -71,4 +91,5 @@ private:
 	void PauseForNoPlayersForServer(FName Reason);
 	void RestartAfterNoPlayersForServer(FName Reason);
 	float GetServerWorldTimeSeconds() const;
+	void ResolvePatternData();
 };

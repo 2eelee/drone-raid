@@ -124,3 +124,12 @@ struct FStellarRemnantConfig
 	float VisualFullSizeMaxCm = 120.0f;
 	int32 VisualDamage = 0;
 };
+
+struct FBossPatternResolvedConfig
+{
+	FBossPatternConfig Common;
+	FCorruptedActinoConfig Corrupted;
+	FStellarRemnantConfig Stellar;
+};
+
+DRONEPROTO_API FBossPatternResolvedConfig MakeCanonicalBossPatternResolvedConfig();

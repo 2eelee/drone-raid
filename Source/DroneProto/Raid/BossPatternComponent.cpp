@@ -1,6 +1,7 @@
 #include "BossPatternComponent.h"
 
 #include "BossPatternActorBase.h"
+#include "BossPatternDataTableResolver.h"
 #include "CorruptedActinoPatternActor.h"
 #include "Drone.h"
 #include "RaidBoss.h"
@@ -10,7 +11,9 @@
 #include "StellarRemnantPatternActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Engine/DataTable.h"
 #include "GameFramework/GameStateBase.h"
+#include "UObject/ConstructorHelpers.h"
 #include "TimerManager.h"
 
 namespace
@@ -32,13 +35,75 @@ const TCHAR* ToPatternName(EBossPatternKind PatternKind)
 UBossPatternComponent::UBossPatternComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
+	static ConstructorHelpers::FObjectFinder<UDataTable> BossPatternTableFinder(
+		TEXT("/Game/Data/BossPattern/DT_BossPattern.DT_BossPattern"));
+	static ConstructorHelpers::FObjectFinder<UDataTable> CorruptedTableFinder(
+		TEXT("/Game/Data/BossPattern/DT_CorruptedActino.DT_CorruptedActino"));
+	static ConstructorHelpers::FObjectFinder<UDataTable> PresetTableFinder(
+		TEXT("/Game/Data/BossPattern/DT_CorruptedActinoPreset.DT_CorruptedActinoPreset"));
+	static ConstructorHelpers::FObjectFinder<UDataTable> StellarTableFinder(
+		TEXT("/Game/Data/BossPattern/DT_StellarRemnant.DT_StellarRemnant"));
+	BossPatternDataTable = BossPatternTableFinder.Object;
+	CorruptedActinoDataTable = CorruptedTableFinder.Object;
+	CorruptedActinoPresetDataTable = PresetTableFinder.Object;
+	StellarRemnantDataTable = StellarTableFinder.Object;
+}
+
+void UBossPatternComponent::BeginPlay()
+{
+	Super::BeginPlay();
+	ResolvePatternData();
+}
+
+void UBossPatternComponent::ResolvePatternData()
+{
+	if (bResolvedConfigReady)
+	{
+		return;
+	}
+
+	const FBossPatternDataTableSet Tables =
+	{
+		BossPatternDataTable,
+		CorruptedActinoDataTable,
+		CorruptedActinoPresetDataTable,
+		StellarRemnantDataTable
+	};
+	FBossPatternResolvedConfig Candidate;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::None;
+	const bool bResolvedFromDataTable = BossPatternData::TryResolve(Tables, Candidate, Reason);
+	ResolvedConfig = bResolvedFromDataTable ? Candidate : MakeCanonicalBossPatternResolvedConfig();
+	bResolvedConfigReady = true;
+
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		if (bResolvedFromDataTable)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPatternData Source=DataTable"));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPatternData Source=Fallback Reason=%s"),
+				BossPatternData::ToString(Reason));
+		}
+	}
+}
+
+bool UBossPatternComponent::CopyResolvedConfig(FBossPatternResolvedConfig& OutConfig) const
+{
+	if (!bResolvedConfigReady)
+	{
+		return false;
+	}
+	OutConfig = ResolvedConfig;
+	return true;
 }
 
 bool UBossPatternComponent::StartForServer()
 {
 	AActor* Owner = GetOwner();
 	UWorld* World = GetWorld();
-	if (!Owner || !Owner->HasAuthority() || !World || bRunning)
+	if (!Owner || !Owner->HasAuthority() || !World || bRunning || !bResolvedConfigReady)
 	{
 		return false;
 	}
@@ -54,7 +119,7 @@ bool UBossPatternComponent::StartForServer()
 	ServerState = EBossPatternServerState::FirstDelay;
 	CurrentPattern = EBossPatternKind::None;
 	NextPattern = EBossPatternKind::CorruptedActino;
-	ScheduleTransition(Config.FirstDelaySeconds);
+	ScheduleTransition(ResolvedConfig.Common.FirstDelaySeconds);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern State=FirstDelay Boss=%s Delay=%.2f InstanceID=%d"),
 		*Owner->GetName(),
 		PendingDelaySeconds,
@@ -156,7 +221,7 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 
 	FTimerHandle& HitLockTimer = HitLockTimerHandles.FindOrAdd(PlayerKey);
 	FTimerDelegate Delegate = FTimerDelegate::CreateUObject(this, &UBossPatternComponent::ClearHitLockForServer, PlayerKey);
-	GetWorld()->GetTimerManager().SetTimer(HitLockTimer, Delegate, Config.GlobalHitLockSeconds, false);
+	GetWorld()->GetTimerManager().SetTimer(HitLockTimer, Delegate, ResolvedConfig.Common.GlobalHitLockSeconds, false);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Hit Pattern=%s Player=%s Key=%s Damage=%d HPBefore=%d HPAfter=%d"),
 		ToPatternName(CurrentPattern),
 		*PlayerController->GetName(),
@@ -254,8 +319,8 @@ void UBossPatternComponent::BeginTelegraphForServer()
 	ServerState = EBossPatternServerState::Telegraphing;
 	SpawnPatternActorForServer(EBossPatternLifecycleState::Telegraphing);
 	const float TelegraphSeconds = CurrentPattern == EBossPatternKind::CorruptedActino
-		? Config.CorruptedTelegraphSeconds
-		: Config.StellarTelegraphSeconds;
+		? ResolvedConfig.Common.CorruptedTelegraphSeconds
+		: ResolvedConfig.Common.StellarTelegraphSeconds;
 	ScheduleTransition(TelegraphSeconds);
 }
 
@@ -272,8 +337,8 @@ void UBossPatternComponent::BeginActiveForServer()
 	}
 
 	const float DurationSeconds = CurrentPattern == EBossPatternKind::CorruptedActino
-		? Config.CorruptedDurationSeconds
-		: Config.StellarDurationSeconds;
+		? ResolvedConfig.Common.CorruptedDurationSeconds
+		: ResolvedConfig.Common.StellarDurationSeconds;
 	ScheduleTransition(DurationSeconds);
 }
 
@@ -286,7 +351,10 @@ void UBossPatternComponent::FinishActiveForServer()
 		? EBossPatternKind::StellarRemnant
 		: EBossPatternKind::CorruptedActino;
 	ServerState = EBossPatternServerState::Intermission;
-	ScheduleTransition(FinishedPattern == EBossPatternKind::CorruptedActino ? 1.2f : 1.0f);
+	const float NextTelegraphSeconds = NextPattern == EBossPatternKind::CorruptedActino
+		? ResolvedConfig.Common.CorruptedTelegraphSeconds
+		: ResolvedConfig.Common.StellarTelegraphSeconds;
+	ScheduleTransition(FMath::Max(0.0f, ResolvedConfig.Common.IntermissionSeconds - NextTelegraphSeconds));
 }
 
 ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPatternLifecycleState LifecycleState)
@@ -294,14 +362,11 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 	DestroyActivePatternActorForServer();
 	UWorld* World = GetWorld();
 	AActor* Owner = GetOwner();
-	if (!World || !Owner)
+	if (!World || !Owner || !bResolvedConfigReady)
 	{
 		return nullptr;
 	}
 
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.Owner = Owner;
-	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	UClass* PatternActorClass = ABossPatternActorBase::StaticClass();
 	if (CurrentPattern == EBossPatternKind::CorruptedActino)
 	{
@@ -311,12 +376,16 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 	{
 		PatternActorClass = AStellarRemnantPatternActor::StaticClass();
 	}
-	ActivePatternActor = World->SpawnActor<ABossPatternActorBase>(
+	ActivePatternActor = World->SpawnActorDeferred<ABossPatternActorBase>(
 		PatternActorClass,
 		Owner->GetActorTransform(),
-		SpawnParameters);
+		Owner,
+		nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (ActivePatternActor)
 	{
+		ActivePatternActor->SnapshotResolvedConfig(ResolvedConfig);
+		ActivePatternActor->FinishSpawning(Owner->GetActorTransform());
 		const int32 InstanceID = ++NextPatternInstanceID;
 		ActivePatternActor->InitializeForServer(CurrentPattern, LifecycleState, InstanceID, GetServerWorldTimeSeconds());
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Spawn Pattern=%s Lifecycle=%s InstanceID=%d Boss=%s"),
@@ -405,7 +474,7 @@ void UBossPatternComponent::RestartAfterNoPlayersForServer(FName Reason)
 	ServerState = EBossPatternServerState::FirstDelay;
 	CurrentPattern = EBossPatternKind::None;
 	NextPattern = EBossPatternKind::CorruptedActino;
-	ScheduleTransition(Config.FirstDelaySeconds);
+	ScheduleTransition(ResolvedConfig.Common.FirstDelaySeconds);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern Restart Reason=AlivePlayerJoined Source=%s Boss=%s Delay=%.2f InstanceID=%d"),
 		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
 		*GetNameSafe(GetOwner()),
@@ -492,5 +561,15 @@ bool UBossPatternComponent::FireTransitionForTest(int32 ExpectedSerial)
 ABossPatternActorBase* UBossPatternComponent::GetActivePatternActorForTest() const
 {
 	return ActivePatternActor;
+}
+
+void UBossPatternComponent::ResolvePatternDataForTest()
+{
+	ResolvePatternData();
+}
+
+bool UBossPatternComponent::IsResolvedConfigReadyForTest() const
+{
+	return bResolvedConfigReady;
 }
 #endif

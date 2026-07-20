@@ -14,9 +14,19 @@ ACorruptedActinoPatternActor::ACorruptedActinoPatternActor()
 	PrimaryActorTick.bCanEverTick = true;
 }
 
+void ACorruptedActinoPatternActor::OnResolvedConfigSnapshot()
+{
+	Config = GetResolvedConfigSnapshot().Corrupted;
+	PatternConfig = GetResolvedConfigSnapshot().Common;
+}
+
 void ACorruptedActinoPatternActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (!HasResolvedConfigSnapshot())
+	{
+		return;
+	}
 
 	const FBossPatternRepState& State = GetPatternState();
 	if (State.PatternKind != EBossPatternKind::CorruptedActino)
@@ -37,48 +47,48 @@ void ACorruptedActinoPatternActor::Tick(float DeltaSeconds)
 
 float ACorruptedActinoPatternActor::EvaluateAngleDegrees(
 	const FCorruptedActinoLaserPreset& Preset,
-	float ElapsedSeconds)
+	float ElapsedSeconds,
+	const FCorruptedActinoConfig& InConfig)
 {
-	const FCorruptedActinoConfig CanonicalConfig;
-	const float Phase = TWO_PI * ElapsedSeconds / CanonicalConfig.XYPeriodSeconds + Preset.XYPhaseRadians;
-	return Preset.BaseAngleDegrees + FMath::Sin(Phase) * CanonicalConfig.XYAmplitudeDegrees;
+	const float Phase = TWO_PI * ElapsedSeconds / InConfig.XYPeriodSeconds + Preset.XYPhaseRadians;
+	return Preset.BaseAngleDegrees + FMath::Sin(Phase) * InConfig.XYAmplitudeDegrees;
 }
 
 float ACorruptedActinoPatternActor::EvaluateZCm(
 	const FCorruptedActinoLaserPreset& Preset,
-	float ElapsedSeconds)
+	float ElapsedSeconds,
+	const FCorruptedActinoConfig& InConfig)
 {
-	const FCorruptedActinoConfig CanonicalConfig;
-	const float Phase = TWO_PI * ElapsedSeconds / CanonicalConfig.ZPeriodSeconds + Preset.ZPhaseRadians;
-	return FMath::Sin(Phase) * CanonicalConfig.ZAmplitudeCm;
+	const float Phase = TWO_PI * ElapsedSeconds / InConfig.ZPeriodSeconds + Preset.ZPhaseRadians;
+	return FMath::Sin(Phase) * InConfig.ZAmplitudeCm;
 }
 
 bool ACorruptedActinoPatternActor::IsPointInsideLaser(
 	const FVector& PointWorld,
 	const FTransform& BossTransform,
 	const FCorruptedActinoLaserPreset& Preset,
-	float ElapsedSeconds)
+	float ElapsedSeconds,
+	const FCorruptedActinoConfig& InConfig)
 {
-	const FCorruptedActinoConfig CanonicalConfig;
 	const FVector PointLocal = BossTransform.InverseTransformPosition(PointWorld);
-	const float AngleRadians = FMath::DegreesToRadians(EvaluateAngleDegrees(Preset, ElapsedSeconds));
+	const float AngleRadians = FMath::DegreesToRadians(EvaluateAngleDegrees(Preset, ElapsedSeconds, InConfig));
 	const FVector Direction(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
 	const FVector Right(-Direction.Y, Direction.X, 0.0f);
-	const float LongitudinalCm = FVector::DotProduct(PointLocal, Direction) - CanonicalConfig.StartRadiusCm;
-	if (LongitudinalCm < -KINDA_SMALL_NUMBER || LongitudinalCm > CanonicalConfig.LengthCm + KINDA_SMALL_NUMBER)
+	const float LongitudinalCm = FVector::DotProduct(PointLocal, Direction) - InConfig.StartRadiusCm;
+	if (LongitudinalCm < -KINDA_SMALL_NUMBER || LongitudinalCm > InConfig.LengthCm + KINDA_SMALL_NUMBER)
 	{
 		return false;
 	}
 
-	const float Progress = FMath::Clamp(LongitudinalCm / CanonicalConfig.LengthCm, 0.0f, 1.0f);
+	const float Progress = FMath::Clamp(LongitudinalCm / InConfig.LengthCm, 0.0f, 1.0f);
 	const float CollisionHalfWidthCm = 0.5f * FMath::Lerp(
-		CanonicalConfig.InnerCollisionFullWidthCm,
-		CanonicalConfig.OuterCollisionFullWidthCm,
+		InConfig.InnerCollisionFullWidthCm,
+		InConfig.OuterCollisionFullWidthCm,
 		Progress);
 	const float LateralCm = FVector::DotProduct(PointLocal, Right);
-	const float VerticalOffsetCm = PointLocal.Z - EvaluateZCm(Preset, ElapsedSeconds);
+	const float VerticalOffsetCm = PointLocal.Z - EvaluateZCm(Preset, ElapsedSeconds, InConfig);
 	return FMath::Abs(LateralCm) <= CollisionHalfWidthCm + KINDA_SMALL_NUMBER
-		&& FMath::Abs(VerticalOffsetCm) <= CanonicalConfig.CollisionFullHeightCm * 0.5f + KINDA_SMALL_NUMBER;
+		&& FMath::Abs(VerticalOffsetCm) <= InConfig.CollisionFullHeightCm * 0.5f + KINDA_SMALL_NUMBER;
 }
 
 float ACorruptedActinoPatternActor::GetServerWorldTimeSeconds() const
@@ -110,7 +120,7 @@ void ACorruptedActinoPatternActor::ApplyDamageForServer(float ElapsedSeconds)
 
 		for (int32 Index = 0; Index < Config.LaserCount; ++Index)
 		{
-			if (IsPointInsideLaser(Drone->GetActorLocation(), GetActorTransform(), Config.Presets[Index], ElapsedSeconds))
+			if (IsPointInsideLaser(Drone->GetActorLocation(), GetActorTransform(), Config.Presets[Index], ElapsedSeconds, Config))
 			{
 				++DamageAttemptCountForTest;
 				PatternComponent->TryApplyPatternDamageForServer(Drone, PatternConfig.CorruptedDamage);
@@ -126,11 +136,11 @@ void ACorruptedActinoPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 	for (int32 Index = 0; Index < Config.LaserCount; ++Index)
 	{
 		const FCorruptedActinoLaserPreset& Preset = Config.Presets[Index];
-		const float AngleRadians = FMath::DegreesToRadians(EvaluateAngleDegrees(Preset, ElapsedSeconds));
+		const float AngleRadians = FMath::DegreesToRadians(EvaluateAngleDegrees(Preset, ElapsedSeconds, Config));
 		const FVector LocalDirection(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
 		const FVector LocalRight(-LocalDirection.Y, LocalDirection.X, 0.0f);
 		const FVector LocalStart = LocalDirection * Config.StartRadiusCm
-			+ FVector::UpVector * EvaluateZCm(Preset, ElapsedSeconds);
+			+ FVector::UpVector * EvaluateZCm(Preset, ElapsedSeconds, Config);
 		const FVector LocalEnd = LocalStart + LocalDirection * Config.LengthCm;
 		const FTransform& BossStartTransform = GetActorTransform();
 		const FVector StartWorld = BossStartTransform.TransformPosition(LocalStart);

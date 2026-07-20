@@ -1,5 +1,6 @@
 #include "BossPatternActorBase.h"
 
+#include "BossPatternComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Net/UnrealNetwork.h"
 
@@ -16,6 +17,57 @@ ABossPatternActorBase::ABossPatternActorBase()
 	bReplicates = true;
 	bAlwaysRelevant = true;
 	SetReplicatingMovement(false);
+}
+
+void ABossPatternActorBase::BeginPlay()
+{
+	Super::BeginPlay();
+	if (!bHasResolvedConfigSnapshot)
+	{
+		const UBossPatternComponent* Component = GetOwner()
+			? GetOwner()->FindComponentByClass<UBossPatternComponent>()
+			: nullptr;
+		FBossPatternResolvedConfig LocalConfig;
+		if (Component && Component->CopyResolvedConfig(LocalConfig))
+		{
+			SnapshotResolvedConfig(LocalConfig);
+		}
+	}
+}
+
+void ABossPatternActorBase::SnapshotResolvedConfig(const FBossPatternResolvedConfig& Config)
+{
+	if (bHasResolvedConfigSnapshot)
+	{
+		return;
+	}
+	ResolvedConfigSnapshot = Config;
+	bHasResolvedConfigSnapshot = true;
+	OnResolvedConfigSnapshot();
+}
+
+bool ABossPatternActorBase::HasResolvedConfigSnapshot() const
+{
+	return bHasResolvedConfigSnapshot;
+}
+
+bool ABossPatternActorBase::CopyResolvedConfigSnapshot(FBossPatternResolvedConfig& OutConfig) const
+{
+	if (!bHasResolvedConfigSnapshot)
+	{
+		return false;
+	}
+	OutConfig = ResolvedConfigSnapshot;
+	return true;
+}
+
+const FBossPatternResolvedConfig& ABossPatternActorBase::GetResolvedConfigSnapshot() const
+{
+	return ResolvedConfigSnapshot;
+}
+
+void ABossPatternActorBase::OnResolvedConfigSnapshot()
+{
 }
 
 void ABossPatternActorBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

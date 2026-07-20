@@ -14,17 +14,27 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
-	static float EvaluateAngleDegrees(const FCorruptedActinoLaserPreset& Preset, float ElapsedSeconds);
-	static float EvaluateZCm(const FCorruptedActinoLaserPreset& Preset, float ElapsedSeconds);
+	static float EvaluateAngleDegrees(
+		const FCorruptedActinoLaserPreset& Preset,
+		float ElapsedSeconds,
+		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig());
+	static float EvaluateZCm(
+		const FCorruptedActinoLaserPreset& Preset,
+		float ElapsedSeconds,
+		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig());
 	static bool IsPointInsideLaser(
 		const FVector& PointWorld,
 		const FTransform& BossTransform,
 		const FCorruptedActinoLaserPreset& Preset,
-		float ElapsedSeconds);
+		float ElapsedSeconds,
+		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig());
 
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetDamageAttemptCountForTest() const;
 #endif
+
+protected:
+	virtual void OnResolvedConfigSnapshot() override;
 
 private:
 	FCorruptedActinoConfig Config;

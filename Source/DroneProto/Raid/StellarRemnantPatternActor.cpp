@@ -8,15 +8,25 @@
 #include "GameFramework/GameStateBase.h"
 
 AStellarRemnantPatternActor::AStellarRemnantPatternActor()
-	: Samples(BuildLogicalSamples())
 {
 	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
 	PrimaryActorTick.bCanEverTick = true;
 }
 
+void AStellarRemnantPatternActor::OnResolvedConfigSnapshot()
+{
+	Config = GetResolvedConfigSnapshot().Stellar;
+	PatternConfig = GetResolvedConfigSnapshot().Common;
+	Samples = BuildLogicalSamples(Config, PatternConfig);
+}
+
 void AStellarRemnantPatternActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (!HasResolvedConfigSnapshot())
+	{
+		return;
+	}
 
 	const FBossPatternRepState& State = GetPatternState();
 	if (State.PatternKind != EBossPatternKind::StellarRemnant)
@@ -46,41 +56,41 @@ void AStellarRemnantPatternActor::Tick(float DeltaSeconds)
 	}
 }
 
-TArray<FStellarRemnantSample> AStellarRemnantPatternActor::BuildLogicalSamples()
+TArray<FStellarRemnantSample> AStellarRemnantPatternActor::BuildLogicalSamples(
+	const FStellarRemnantConfig& InConfig,
+	const FBossPatternConfig& InPatternConfig)
 {
-	const FStellarRemnantConfig CanonicalConfig;
-	const FBossPatternConfig CommonConfig;
 	TArray<FStellarRemnantSample> Result;
-	Result.Reserve(CanonicalConfig.DamageProjectileCount + CanonicalConfig.VisualProjectileCount);
-	for (int32 WaveIndex = 0; WaveIndex < CanonicalConfig.WaveCount; ++WaveIndex)
+	Result.Reserve(InConfig.DamageProjectileCount + InConfig.VisualProjectileCount);
+	for (int32 WaveIndex = 0; WaveIndex < InConfig.WaveCount; ++WaveIndex)
 	{
-		const float StartTimeSeconds = WaveIndex * CanonicalConfig.WaveIntervalSeconds;
-		const float DamageAngleOffset = WaveIndex == 0 ? 0.0f : CanonicalConfig.SecondWaveOffsetDegrees;
-		for (int32 Index = 0; Index < CanonicalConfig.DamageProjectilesPerWave; ++Index)
+		const float StartTimeSeconds = WaveIndex * InConfig.WaveIntervalSeconds;
+		const float DamageAngleOffset = WaveIndex == 0 ? 0.0f : InConfig.SecondWaveOffsetDegrees;
+		for (int32 Index = 0; Index < InConfig.DamageProjectilesPerWave; ++Index)
 		{
 			FStellarRemnantSample& Sample = Result.AddDefaulted_GetRef();
 			Sample.WaveIndex = WaveIndex;
-			Sample.AngleDegrees = Index * CanonicalConfig.DamageAngleStepDegrees + DamageAngleOffset;
+			Sample.AngleDegrees = Index * InConfig.DamageAngleStepDegrees + DamageAngleOffset;
 			Sample.StartTimeSeconds = StartTimeSeconds;
-			Sample.Damage = CommonConfig.StellarDamage;
+			Sample.Damage = InPatternConfig.StellarDamage;
 		}
-		for (int32 Index = 0; Index < CanonicalConfig.VisualProjectilesPerWave; ++Index)
+		for (int32 Index = 0; Index < InConfig.VisualProjectilesPerWave; ++Index)
 		{
 			FStellarRemnantSample& Sample = Result.AddDefaulted_GetRef();
 			Sample.WaveIndex = WaveIndex;
 			Sample.AngleDegrees = Index * 45.0f + (WaveIndex == 0 ? 11.25f : 22.5f);
 			Sample.StartTimeSeconds = StartTimeSeconds;
-			Sample.Damage = CanonicalConfig.VisualDamage;
+			Sample.Damage = InConfig.VisualDamage;
 			Sample.bVisualOnly = true;
 			Sample.VisualZOffsetCm = (Index + WaveIndex) % 2 == 0
-				? CanonicalConfig.VisualZOffsetCm
-				: -CanonicalConfig.VisualZOffsetCm;
-			const float SizeAlpha = CanonicalConfig.VisualProjectilesPerWave > 1
-				? static_cast<float>(Index) / static_cast<float>(CanonicalConfig.VisualProjectilesPerWave - 1)
+				? InConfig.VisualZOffsetCm
+				: -InConfig.VisualZOffsetCm;
+			const float SizeAlpha = InConfig.VisualProjectilesPerWave > 1
+				? static_cast<float>(Index) / static_cast<float>(InConfig.VisualProjectilesPerWave - 1)
 				: 0.0f;
 			Sample.VisualFullSizeCm = FMath::Lerp(
-				CanonicalConfig.VisualFullSizeMinCm,
-				CanonicalConfig.VisualFullSizeMaxCm,
+				InConfig.VisualFullSizeMinCm,
+				InConfig.VisualFullSizeMaxCm,
 				SizeAlpha);
 		}
 	}
@@ -89,24 +99,24 @@ TArray<FStellarRemnantSample> AStellarRemnantPatternActor::BuildLogicalSamples()
 
 bool AStellarRemnantPatternActor::IsSampleActive(
 	const FStellarRemnantSample& Sample,
-	float ElapsedSeconds)
+	float ElapsedSeconds,
+	const FStellarRemnantConfig& InConfig)
 {
-	const FStellarRemnantConfig CanonicalConfig;
 	return ElapsedSeconds >= Sample.StartTimeSeconds
-		&& ElapsedSeconds <= Sample.StartTimeSeconds + CanonicalConfig.TravelSeconds;
+		&& ElapsedSeconds <= Sample.StartTimeSeconds + InConfig.TravelSeconds;
 }
 
 FVector AStellarRemnantPatternActor::EvaluateLocalPosition(
 	const FStellarRemnantSample& Sample,
-	float ElapsedSeconds)
+	float ElapsedSeconds,
+	const FStellarRemnantConfig& InConfig)
 {
-	const FStellarRemnantConfig CanonicalConfig;
 	const float TravelElapsedSeconds = FMath::Clamp(
 		ElapsedSeconds - Sample.StartTimeSeconds,
 		0.0f,
-		CanonicalConfig.TravelSeconds);
-	const float RadiusCm = CanonicalConfig.StartRadiusCm
-		+ TravelElapsedSeconds * CanonicalConfig.SpeedCmPerSecond;
+		InConfig.TravelSeconds);
+	const float RadiusCm = InConfig.StartRadiusCm
+		+ TravelElapsedSeconds * InConfig.SpeedCmPerSecond;
 	const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
 	return FVector(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f) * RadiusCm
 		+ FVector::UpVector * Sample.VisualZOffsetCm;
@@ -117,25 +127,25 @@ bool AStellarRemnantPatternActor::IsPointInsideSweptSample(
 	const FTransform& BossTransform,
 	const FStellarRemnantSample& Sample,
 	float PreviousElapsedSeconds,
-	float CurrentElapsedSeconds)
+	float CurrentElapsedSeconds,
+	const FStellarRemnantConfig& InConfig)
 {
 	if (Sample.bVisualOnly || CurrentElapsedSeconds < PreviousElapsedSeconds)
 	{
 		return false;
 	}
 
-	const FStellarRemnantConfig CanonicalConfig;
 	const float SweepStartTime = FMath::Max(PreviousElapsedSeconds, Sample.StartTimeSeconds);
 	const float SweepEndTime = FMath::Min(
 		CurrentElapsedSeconds,
-		Sample.StartTimeSeconds + CanonicalConfig.TravelSeconds);
+		Sample.StartTimeSeconds + InConfig.TravelSeconds);
 	if (SweepStartTime > SweepEndTime)
 	{
 		return false;
 	}
 
-	const FVector SegmentStart = BossTransform.TransformPosition(EvaluateLocalPosition(Sample, SweepStartTime));
-	const FVector SegmentEnd = BossTransform.TransformPosition(EvaluateLocalPosition(Sample, SweepEndTime));
+	const FVector SegmentStart = BossTransform.TransformPosition(EvaluateLocalPosition(Sample, SweepStartTime, InConfig));
+	const FVector SegmentEnd = BossTransform.TransformPosition(EvaluateLocalPosition(Sample, SweepEndTime, InConfig));
 	const FVector Segment = SegmentEnd - SegmentStart;
 	const float SegmentSizeSquared = Segment.SizeSquared();
 	const float Alpha = SegmentSizeSquared > SMALL_NUMBER
@@ -143,7 +153,7 @@ bool AStellarRemnantPatternActor::IsPointInsideSweptSample(
 		: 0.0f;
 	const FVector ClosestPoint = SegmentStart + Segment * Alpha;
 	return FVector::DistSquared(PointWorld, ClosestPoint)
-		<= FMath::Square(CanonicalConfig.CollisionRadiusCm + KINDA_SMALL_NUMBER);
+		<= FMath::Square(InConfig.CollisionRadiusCm + KINDA_SMALL_NUMBER);
 }
 
 float AStellarRemnantPatternActor::GetServerWorldTimeSeconds() const
@@ -181,7 +191,8 @@ void AStellarRemnantPatternActor::ApplyDamageForServer(
 				GetActorTransform(),
 				Sample,
 				PreviousElapsedSeconds,
-				CurrentElapsedSeconds))
+				CurrentElapsedSeconds,
+				Config))
 			{
 				PatternComponent->TryApplyPatternDamageForServer(Drone, PatternConfig.StellarDamage);
 				break;
@@ -201,9 +212,9 @@ void AStellarRemnantPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 			{
 				continue;
 			}
-			const FVector StartWorld = GetActorTransform().TransformPosition(EvaluateLocalPosition(Sample, Sample.StartTimeSeconds));
+			const FVector StartWorld = GetActorTransform().TransformPosition(EvaluateLocalPosition(Sample, Sample.StartTimeSeconds, Config));
 			const FVector EndWorld = GetActorTransform().TransformPosition(
-				EvaluateLocalPosition(Sample, Sample.StartTimeSeconds + Config.TravelSeconds));
+				EvaluateLocalPosition(Sample, Sample.StartTimeSeconds + Config.TravelSeconds, Config));
 			DrawDashedDebugLine(StartWorld, EndWorld, FColor::Yellow, 8.0f);
 		}
 		return;
@@ -211,12 +222,12 @@ void AStellarRemnantPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 
 	for (const FStellarRemnantSample& Sample : Samples)
 	{
-		if (!IsSampleActive(Sample, ElapsedSeconds))
+		if (!IsSampleActive(Sample, ElapsedSeconds, Config))
 		{
 			continue;
 		}
 		const FVector PositionWorld = GetActorTransform().TransformPosition(
-			EvaluateLocalPosition(Sample, ElapsedSeconds));
+			EvaluateLocalPosition(Sample, ElapsedSeconds, Config));
 		DrawForegroundDebugSphere(
 			PositionWorld,
 			Sample.bVisualOnly ? Sample.VisualFullSizeCm * 0.5f : Config.CollisionRadiusCm,

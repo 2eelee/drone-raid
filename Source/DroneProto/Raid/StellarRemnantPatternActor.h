@@ -25,20 +25,32 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
-	static TArray<FStellarRemnantSample> BuildLogicalSamples();
-	static bool IsSampleActive(const FStellarRemnantSample& Sample, float ElapsedSeconds);
-	static FVector EvaluateLocalPosition(const FStellarRemnantSample& Sample, float ElapsedSeconds);
+	static TArray<FStellarRemnantSample> BuildLogicalSamples(
+		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig(),
+		const FBossPatternConfig& InPatternConfig = FBossPatternConfig());
+	static bool IsSampleActive(
+		const FStellarRemnantSample& Sample,
+		float ElapsedSeconds,
+		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig());
+	static FVector EvaluateLocalPosition(
+		const FStellarRemnantSample& Sample,
+		float ElapsedSeconds,
+		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig());
 	static bool IsPointInsideSweptSample(
 		const FVector& PointWorld,
 		const FTransform& BossTransform,
 		const FStellarRemnantSample& Sample,
 		float PreviousElapsedSeconds,
-		float CurrentElapsedSeconds);
+		float CurrentElapsedSeconds,
+		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig());
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void ApplyDamageForServerForTest(float PreviousElapsedSeconds, float CurrentElapsedSeconds);
 	int32 GetLogicalSampleCountForTest() const;
 #endif
+
+protected:
+	virtual void OnResolvedConfigSnapshot() override;
 
 private:
 	FStellarRemnantConfig Config;
