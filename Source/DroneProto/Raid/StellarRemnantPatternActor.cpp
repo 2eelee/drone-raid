@@ -72,6 +72,16 @@ TArray<FStellarRemnantSample> AStellarRemnantPatternActor::BuildLogicalSamples()
 			Sample.StartTimeSeconds = StartTimeSeconds;
 			Sample.Damage = CanonicalConfig.VisualDamage;
 			Sample.bVisualOnly = true;
+			Sample.VisualZOffsetCm = (Index + WaveIndex) % 2 == 0
+				? CanonicalConfig.VisualZOffsetCm
+				: -CanonicalConfig.VisualZOffsetCm;
+			const float SizeAlpha = CanonicalConfig.VisualProjectilesPerWave > 1
+				? static_cast<float>(Index) / static_cast<float>(CanonicalConfig.VisualProjectilesPerWave - 1)
+				: 0.0f;
+			Sample.VisualFullSizeCm = FMath::Lerp(
+				CanonicalConfig.VisualFullSizeMinCm,
+				CanonicalConfig.VisualFullSizeMaxCm,
+				SizeAlpha);
 		}
 	}
 	return Result;
@@ -98,7 +108,8 @@ FVector AStellarRemnantPatternActor::EvaluateLocalPosition(
 	const float RadiusCm = CanonicalConfig.StartRadiusCm
 		+ TravelElapsedSeconds * CanonicalConfig.SpeedCmPerSecond;
 	const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
-	return FVector(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f) * RadiusCm;
+	return FVector(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f) * RadiusCm
+		+ FVector::UpVector * Sample.VisualZOffsetCm;
 }
 
 bool AStellarRemnantPatternActor::IsPointInsideSweptSample(
@@ -208,7 +219,7 @@ void AStellarRemnantPatternActor::DrawDebugPattern(float ElapsedSeconds) const
 			EvaluateLocalPosition(Sample, ElapsedSeconds));
 		DrawForegroundDebugSphere(
 			PositionWorld,
-			Sample.bVisualOnly ? 50.0f : Config.CollisionRadiusCm,
+			Sample.bVisualOnly ? Sample.VisualFullSizeCm * 0.5f : Config.CollisionRadiusCm,
 			12,
 			Sample.bVisualOnly ? FColor::Purple : FColor::Red,
 			6.0f);

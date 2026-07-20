@@ -206,6 +206,8 @@ bool FDroneBossPatternCanonicalFallbackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stellar damage angle step"), Stellar.DamageAngleStepDegrees, 22.5f);
 	TestEqual(TEXT("Stellar second-wave offset"), Stellar.SecondWaveOffsetDegrees, 11.25f);
 	TestEqual(TEXT("Stellar visual Z offset"), Stellar.VisualZOffsetCm, 300.0f);
+	TestEqual(TEXT("Stellar visual full-size minimum"), Stellar.VisualFullSizeMinCm, 100.0f);
+	TestEqual(TEXT("Stellar visual full-size maximum"), Stellar.VisualFullSizeMaxCm, 120.0f);
 	TestEqual(TEXT("visual-only damage"), Stellar.VisualDamage, 0);
 
 	return true;
@@ -657,6 +659,10 @@ bool FDroneStellarRemnantLogicalSamplesTest::RunTest(const FString& Parameters)
 	int32 VisualOnlyCount = 0;
 	int32 DamageIndexByWave[2] = {0, 0};
 	int32 VisualIndexByWave[2] = {0, 0};
+	int32 VisualAboveByWave[2] = {0, 0};
+	int32 VisualBelowByWave[2] = {0, 0};
+	bool bSawVisualMinSize = false;
+	bool bSawVisualMaxSize = false;
 	for (const FStellarRemnantSample& Sample : Samples)
 	{
 		TestTrue(TEXT("sample wave is valid"), Sample.WaveIndex == 0 || Sample.WaveIndex == 1);
@@ -667,6 +673,19 @@ bool FDroneStellarRemnantLogicalSamplesTest::RunTest(const FString& Parameters)
 			++VisualOnlyCount;
 			++VisualIndexByWave[Sample.WaveIndex];
 			TestEqual(TEXT("visual-only damage is zero"), Sample.Damage, 0);
+			TestTrue(TEXT("visual-only Z uses canonical offset"),
+				FMath::IsNearlyEqual(FMath::Abs(Sample.VisualZOffsetCm), Config.VisualZOffsetCm));
+			TestTrue(TEXT("visual-only full size stays in canonical range"),
+				Sample.VisualFullSizeCm >= Config.VisualFullSizeMinCm
+				&& Sample.VisualFullSizeCm <= Config.VisualFullSizeMaxCm);
+			VisualAboveByWave[Sample.WaveIndex] += Sample.VisualZOffsetCm > 0.0f ? 1 : 0;
+			VisualBelowByWave[Sample.WaveIndex] += Sample.VisualZOffsetCm < 0.0f ? 1 : 0;
+			bSawVisualMinSize |= FMath::IsNearlyEqual(Sample.VisualFullSizeCm, Config.VisualFullSizeMinCm);
+			bSawVisualMaxSize |= FMath::IsNearlyEqual(Sample.VisualFullSizeCm, Config.VisualFullSizeMaxCm);
+			TestTrue(TEXT("visual-only evaluated position preserves Z offset"),
+				FMath::IsNearlyEqual(
+					AStellarRemnantPatternActor::EvaluateLocalPosition(Sample, Sample.StartTimeSeconds).Z,
+					Sample.VisualZOffsetCm));
 		}
 		else
 		{
@@ -683,6 +702,12 @@ bool FDroneStellarRemnantLogicalSamplesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("wave two damage count"), DamageIndexByWave[1], Config.DamageProjectilesPerWave);
 	TestEqual(TEXT("wave one visual-only count"), VisualIndexByWave[0], Config.VisualProjectilesPerWave);
 	TestEqual(TEXT("wave two visual-only count"), VisualIndexByWave[1], Config.VisualProjectilesPerWave);
+	TestEqual(TEXT("wave one visual-only above count"), VisualAboveByWave[0], 4);
+	TestEqual(TEXT("wave one visual-only below count"), VisualBelowByWave[0], 4);
+	TestEqual(TEXT("wave two visual-only above count"), VisualAboveByWave[1], 4);
+	TestEqual(TEXT("wave two visual-only below count"), VisualBelowByWave[1], 4);
+	TestTrue(TEXT("visual-only samples include minimum size"), bSawVisualMinSize);
+	TestTrue(TEXT("visual-only samples include maximum size"), bSawVisualMaxSize);
 
 	const FStellarRemnantSample& FirstDamageSample = Samples[0];
 	TestTrue(TEXT("wave one is active at t0"), AStellarRemnantPatternActor::IsSampleActive(FirstDamageSample, 0.0f));

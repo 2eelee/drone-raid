@@ -11,6 +11,8 @@ struct FStellarRemnantSample
 	float StartTimeSeconds = 0.0f;
 	int32 Damage = 0;
 	bool bVisualOnly = false;
+	float VisualZOffsetCm = 0.0f;
+	float VisualFullSizeCm = 0.0f;
 };
 
 UCLASS()

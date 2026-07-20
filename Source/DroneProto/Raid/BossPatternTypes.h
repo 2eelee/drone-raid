@@ -120,5 +120,7 @@ struct FStellarRemnantConfig
 	float DamageAngleStepDegrees = 22.5f;
 	float SecondWaveOffsetDegrees = 11.25f;
 	float VisualZOffsetCm = 300.0f;
+	float VisualFullSizeMinCm = 100.0f;
+	float VisualFullSizeMaxCm = 120.0f;
 	int32 VisualDamage = 0;
 };
