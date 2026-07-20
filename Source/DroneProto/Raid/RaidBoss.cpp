@@ -887,7 +887,6 @@ void ARaidBoss::ApplyPrototypeVisualSettings()
 		constexpr float EngineBasicSphereRadiusCm = 50.0f;
 		const float MeshScale = SafeRadiusCm / EngineBasicSphereRadiusCm;
 		PrototypeVisualMesh->SetRelativeScale3D(FVector(MeshScale));
-		PrototypeVisualMesh->SetRelativeLocation(FVector::ZeroVector);
 		PrototypeVisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		PrototypeVisualMesh->SetGenerateOverlapEvents(false);
 	}

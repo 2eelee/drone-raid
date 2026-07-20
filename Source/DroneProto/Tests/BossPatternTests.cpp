@@ -1,8 +1,10 @@
 #include "CoreMinimal.h"
 #include "CoreGlobals.h"
 #include "Drone.h"
+#include "Engine/Level.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/PlayerStart.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -133,6 +135,157 @@ FVector MakeCorruptedLaserPoint(
 		+ FVector::UpVector * (ACorruptedActinoPatternActor::EvaluateZCm(Preset, ElapsedSeconds) + VerticalOffsetCm);
 	return BossTransform.TransformPosition(LocalPoint);
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBossPatternArenaBossSpawnTransformTest,
+	"DroneProto.POR18.Arena.BossSpawnTransform",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBossPatternArenaBossSpawnTransformTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternArenaBossSpawnTransformWorld")));
+	TestNotNull(TEXT("test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	const FVector ExpectedLocation(600.0f, 0.0f, 100.0f);
+	ARaidBoss* Boss = World->SpawnActor<ARaidBoss>(
+		ARaidBoss::StaticClass(),
+		ExpectedLocation,
+		FRotator::ZeroRotator);
+	TestNotNull(TEXT("boss is spawned"), Boss);
+	if (Boss)
+	{
+		TestTrue(TEXT("boss root preserves the requested spawn location"), Boss->GetActorLocation().Equals(ExpectedLocation, 0.01f));
+	}
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBossPatternArenaPlayerStartAssignmentTest,
+	"DroneProto.POR18.Arena.PlayerStartAssignment",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBossPatternArenaPlayerStartAssignmentTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternArenaPlayerStartAssignmentWorld")));
+	TestNotNull(TEXT("test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
+	APlayerStart* FirstStart = World->SpawnActor<APlayerStart>(FVector(-720.0f, 170.0f, 192.0f), FRotator::ZeroRotator);
+	APlayerStart* SecondStart = World->SpawnActor<APlayerStart>(FVector(-660.0f, -500.0f, 92.0f), FRotator::ZeroRotator);
+	ARaidPlayerController* FirstController = World->SpawnActor<ARaidPlayerController>();
+	ARaidPlayerController* SecondController = World->SpawnActor<ARaidPlayerController>();
+	TestNotNull(TEXT("game mode is spawned"), GameMode);
+	TestNotNull(TEXT("first player start is spawned"), FirstStart);
+	TestNotNull(TEXT("second player start is spawned"), SecondStart);
+	TestNotNull(TEXT("first controller is spawned"), FirstController);
+	TestNotNull(TEXT("second controller is spawned"), SecondController);
+	if (!GameMode || !FirstStart || !SecondStart || !FirstController || !SecondController)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	FMath::RandInit(20260720);
+	AActor* FirstAssignment = GameMode->ChoosePlayerStart(FirstController);
+	FMath::RandInit(20260720);
+	AActor* SecondAssignment = GameMode->ChoosePlayerStart(SecondController);
+	AActor* FirstAssignmentAgain = GameMode->ChoosePlayerStart(FirstController);
+
+	TestNotNull(TEXT("first controller receives a player start"), FirstAssignment);
+	TestNotNull(TEXT("second controller receives a player start"), SecondAssignment);
+	TestNotEqual(TEXT("controllers receive different player starts"), FirstAssignment, SecondAssignment);
+	TestEqual(TEXT("the same controller keeps its player start"), FirstAssignmentAgain, FirstAssignment);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBossPatternArenaMapScaleContractTest,
+	"DroneProto.POR18.Arena.MapScaleContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBossPatternArenaMapScaleContractTest::RunTest(const FString& Parameters)
+{
+	UWorld* ArenaWorld = LoadObject<UWorld>(nullptr, TEXT("/Game/TestMap.TestMap"));
+	TestNotNull(TEXT("TestMap loads"), ArenaWorld);
+	if (!ArenaWorld || !ArenaWorld->PersistentLevel)
+	{
+		return false;
+	}
+
+	const FVector2D BossXY(600.0f, 0.0f);
+	TArray<APlayerStart*> PlayerStarts;
+	AActor* Floor = nullptr;
+	for (AActor* Actor : ArenaWorld->PersistentLevel->Actors)
+	{
+		if (APlayerStart* PlayerStart = Cast<APlayerStart>(Actor))
+		{
+			PlayerStarts.Add(PlayerStart);
+		}
+#if WITH_EDITOR
+		else if (Actor && Actor->GetActorLabel() == TEXT("Floor"))
+		{
+			Floor = Actor;
+		}
+#endif
+	}
+
+	TestEqual(TEXT("TestMap has two PlayerStarts"), PlayerStarts.Num(), 2);
+	if (PlayerStarts.Num() == 2)
+	{
+		TestNotEqual(TEXT("PlayerStarts are distinct actors"), PlayerStarts[0], PlayerStarts[1]);
+		const FVector FirstLocation = PlayerStarts[0]->GetActorLocation();
+		const FVector SecondLocation = PlayerStarts[1]->GetActorLocation();
+		TestFalse(TEXT("PlayerStarts use different angles around the boss"),
+			FVector2D(FirstLocation.X - BossXY.X, FirstLocation.Y - BossXY.Y).GetSafeNormal().Equals(
+				FVector2D(SecondLocation.X - BossXY.X, SecondLocation.Y - BossXY.Y).GetSafeNormal(), 0.001f));
+		for (int32 Index = 0; Index < PlayerStarts.Num(); ++Index)
+		{
+			const FVector Location = PlayerStarts[Index]->GetActorLocation();
+			const float DistanceCm = FVector2D(Location.X - BossXY.X, Location.Y - BossXY.Y).Size();
+			TestTrue(
+				*FString::Printf(TEXT("PlayerStart %d is 10m to 12m from the boss"), Index + 1),
+				DistanceCm >= 1000.0f && DistanceCm <= 1200.0f);
+		}
+	}
+
+	TestNotNull(TEXT("TestMap Floor exists"), Floor);
+	if (Floor)
+	{
+		FVector BoundsOrigin;
+		FVector BoundsExtent;
+		Floor->GetActorBounds(false, BoundsOrigin, BoundsExtent);
+		TestTrue(TEXT("Floor center matches boss XY"), FVector2D(BoundsOrigin.X, BoundsOrigin.Y).Equals(BossXY, 1.0f));
+		TestTrue(TEXT("Floor radius is 55m"),
+			FMath::IsNearlyEqual(BoundsExtent.X, 5500.0f, 1.0f)
+			&& FMath::IsNearlyEqual(BoundsExtent.Y, 5500.0f, 1.0f));
+		TestTrue(TEXT("Floor radius exceeds the 50m MoveClamp"),
+			BoundsExtent.X > 5000.0f && BoundsExtent.Y > 5000.0f);
+	}
+
+	FString DroneHeaderSource;
+	const FString DroneHeaderPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Drone.h");
+	TestTrue(TEXT("Drone header loads"), FFileHelper::LoadFileToString(DroneHeaderSource, *DroneHeaderPath));
+	TestTrue(TEXT("MoveClamp remains 50m"),
+		DroneHeaderSource.Contains(TEXT("float MovementBoundaryRadiusCm = 5000.0f;")));
+	FString DroneSource;
+	const FString DroneSourcePath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Drone.cpp");
+	TestTrue(TEXT("Drone source loads"), FFileHelper::LoadFileToString(DroneSource, *DroneSourcePath));
+	TestTrue(TEXT("MoveClamp center remains the boss location"),
+		DroneSource.Contains(TEXT("MovementBoundaryCenter = Boss->GetActorLocation();")));
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

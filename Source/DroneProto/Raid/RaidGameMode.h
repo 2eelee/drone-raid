@@ -25,6 +25,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void RestartPlayer(AController* NewPlayer) override;
+	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 	virtual APawn* SpawnDefaultPawnAtTransform_Implementation(AController* NewPlayer, const FTransform& SpawnTransform) override;
 	virtual void Logout(AController* Exiting) override;
 
@@ -70,6 +71,7 @@ private:
 
 	TSet<FString> GeneratedDroneReportPlayerKeys;
 	TMap<FString, float> PlayerBossDamageMap;
+	TMap<TWeakObjectPtr<AController>, TWeakObjectPtr<AActor>> PlayerStartAssignments;
 
 	bool EnsureDronePartReturnManagerForServer();
 	void ClearRaidTimeLimitTimerForServer(FName Reason);

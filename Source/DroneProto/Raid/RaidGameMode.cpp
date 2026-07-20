@@ -6,6 +6,7 @@
 #include "RaidGameState.h"
 #include "RaidPlayerController.h"
 #include "RaidPlayerState.h"
+#include "GameFramework/PlayerStart.h"
 #include "GameFramework/PlayerState.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -209,6 +210,60 @@ void ARaidGameMode::RestartPlayer(AController* NewPlayer)
 		Pawn && Pawn->IsA<ADrone>() ? TEXT("true") : TEXT("false"));
 }
 
+AActor* ARaidGameMode::ChoosePlayerStart_Implementation(AController* Player)
+{
+	if (!Player)
+	{
+		return Super::ChoosePlayerStart_Implementation(Player);
+	}
+
+	if (const TWeakObjectPtr<AActor>* ExistingAssignment = PlayerStartAssignments.Find(Player))
+	{
+		if (ExistingAssignment->IsValid())
+		{
+			return ExistingAssignment->Get();
+		}
+		PlayerStartAssignments.Remove(Player);
+	}
+
+	TSet<const AActor*> ClaimedStarts;
+	for (auto It = PlayerStartAssignments.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid() || !It.Value().IsValid())
+		{
+			It.RemoveCurrent();
+			continue;
+		}
+		ClaimedStarts.Add(It.Value().Get());
+	}
+
+	TArray<APlayerStart*> Starts;
+	for (TActorIterator<APlayerStart> It(GetWorld()); It; ++It)
+	{
+		Starts.Add(*It);
+	}
+	Starts.Sort([](const APlayerStart& Left, const APlayerStart& Right)
+	{
+		return Left.GetFName().LexicalLess(Right.GetFName());
+	});
+
+	for (APlayerStart* Start : Starts)
+	{
+		if (Start && !ClaimedStarts.Contains(Start))
+		{
+			PlayerStartAssignments.Add(Player, Start);
+			return Start;
+		}
+	}
+
+	AActor* FallbackStart = Super::ChoosePlayerStart_Implementation(Player);
+	if (FallbackStart)
+	{
+		PlayerStartAssignments.Add(Player, FallbackStart);
+	}
+	return FallbackStart;
+}
+
 APawn* ARaidGameMode::SpawnDefaultPawnAtTransform_Implementation(AController* NewPlayer, const FTransform& SpawnTransform)
 {
 	UWorld* World = GetWorld();
@@ -307,6 +362,8 @@ bool ARaidGameMode::NotifyRaidSpawnFailedForServer(AController* Controller, FNam
 
 void ARaidGameMode::Logout(AController* Exiting)
 {
+	PlayerStartAssignments.Remove(Exiting);
+
 	if (HasAuthority())
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Exiting))
