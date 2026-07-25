@@ -28,6 +28,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
@@ -1857,6 +1858,21 @@ bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters
 		UWidget* RedundantStateText = Widget->WidgetTree->FindWidget(TEXT("ResultText"));
 		TestTrue(TEXT("planning layout collapses the redundant state text"),
 			RedundantStateText && RedundantStateText->GetVisibility() == ESlateVisibility::Collapsed);
+
+		for (const FName ArrowName : {
+			FName(TEXT("Button_CorePrev")),
+			FName(TEXT("Button_CoreNext")),
+			FName(TEXT("Button_RightPrev")),
+			FName(TEXT("Button_RightNext")),
+			FName(TEXT("Button_LeftPrev")),
+			FName(TEXT("Button_LeftNext"))})
+		{
+			UButton* ArrowButton = Cast<UButton>(Widget->WidgetTree->FindWidget(ArrowName));
+			TestNotNull(*FString::Printf(TEXT("%s arrow exists"), *ArrowName.ToString()), ArrowButton);
+			TestTrue(
+				*FString::Printf(TEXT("%s arrow is visible guidance without hit testing"), *ArrowName.ToString()),
+				ArrowButton && ArrowButton->GetVisibility() == ESlateVisibility::HitTestInvisible);
+		}
 	}
 
 	World->DestroyWorld(false);

@@ -458,7 +458,26 @@ void UDronePartSelectWidget::HandleCombatStartClicked()
 
 void UDronePartSelectWidget::ApplyPlanningLayout()
 {
-	if (!WidgetTree || !Button_CombatStart)
+	if (!WidgetTree)
+	{
+		return;
+	}
+
+	for (UButton* ArrowButton : {
+		Button_CorePrev.Get(),
+		Button_CoreNext.Get(),
+		Button_RightPrev.Get(),
+		Button_RightNext.Get(),
+		Button_LeftPrev.Get(),
+		Button_LeftNext.Get()})
+	{
+		if (ArrowButton)
+		{
+			ArrowButton->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+	}
+
+	if (!Button_CombatStart)
 	{
 		return;
 	}
@@ -607,32 +626,26 @@ void UDronePartSelectWidget::BindButtonEvents()
 	if (Button_CorePrev)
 	{
 		Button_CorePrev->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleCorePrevClicked);
-		Button_CorePrev->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleCorePrevClicked);
 	}
 	if (Button_CoreNext)
 	{
 		Button_CoreNext->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleCoreNextClicked);
-		Button_CoreNext->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleCoreNextClicked);
 	}
 	if (Button_RightPrev)
 	{
 		Button_RightPrev->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleRightPrevClicked);
-		Button_RightPrev->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleRightPrevClicked);
 	}
 	if (Button_RightNext)
 	{
 		Button_RightNext->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleRightNextClicked);
-		Button_RightNext->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleRightNextClicked);
 	}
 	if (Button_LeftPrev)
 	{
 		Button_LeftPrev->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleLeftPrevClicked);
-		Button_LeftPrev->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleLeftPrevClicked);
 	}
 	if (Button_LeftNext)
 	{
 		Button_LeftNext->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleLeftNextClicked);
-		Button_LeftNext->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleLeftNextClicked);
 	}
 	if (Button_CombatStart)
 	{
