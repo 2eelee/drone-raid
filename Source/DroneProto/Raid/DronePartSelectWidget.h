@@ -33,6 +33,12 @@ public:
 	void FocusPrevSlot();
 
 	UFUNCTION(BlueprintPure, Category = "UI")
+	bool IsCombatStartFocused() const;
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ActivateFocusedControl();
+
+	UFUNCTION(BlueprintPure, Category = "UI")
 	FName GetPreviewPartIDForSlot(EDronePartSlot PartSlot) const;
 
 	UFUNCTION(BlueprintCallable, Category = "UI")
@@ -97,6 +103,9 @@ private:
 
 	UFUNCTION()
 	void HandleCombatStartClicked();
+
+	UFUNCTION()
+	void ApplyPlanningLayout();
 
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> Text_ControlGuide = nullptr;
@@ -171,6 +180,7 @@ private:
 	TObjectPtr<ARaidPlayerController> CachedRaidPlayerController = nullptr;
 
 	EDronePartSlot FocusedSlot = EDronePartSlot::Core;
+	bool bCombatStartFocused = false;
 	int32 CorePreviewIndex = 0;
 	int32 RightWeaponPreviewIndex = 0;
 	int32 LeftWeaponPreviewIndex = 0;

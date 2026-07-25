@@ -1,8 +1,12 @@
 #include "DronePartSelectWidget.h"
 
 #include "Components/Button.h"
+#include "Components/Border.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
+#include "Blueprint/WidgetTree.h"
 #include "InputCoreTypes.h"
 #include "RaidGameState.h"
 #include "RaidPlayerController.h"
@@ -15,6 +19,7 @@ void UDronePartSelectWidget::NativeConstruct()
 	Super::NativeConstruct();
 
 	SetIsFocusable(true);
+	ApplyPlanningLayout();
 	LogOptionalWidgetBindings();
 	CachedRaidPlayerController = GetOwningRaidPlayerController();
 	if (CachedRaidPlayerController)
@@ -85,25 +90,34 @@ FReply UDronePartSelectWidget::NativeOnKeyDown(const FGeometry& InGeometry, cons
 
 	if (Key == EKeys::Left)
 	{
-		MovePreview(FocusedSlot, -1);
+		if (!bCombatStartFocused)
+		{
+			MovePreview(FocusedSlot, -1);
+		}
 		return FReply::Handled();
 	}
 
 	if (Key == EKeys::Right)
 	{
-		MovePreview(FocusedSlot, 1);
+		if (!bCombatStartFocused)
+		{
+			MovePreview(FocusedSlot, 1);
+		}
 		return FReply::Handled();
 	}
 
 	if (Key == EKeys::Z)
 	{
-		SelectFocusedPart();
+		ActivateFocusedControl();
 		return FReply::Handled();
 	}
 
 	if (Key == EKeys::C)
 	{
-		CancelFocusedPart();
+		if (!bCombatStartFocused)
+		{
+			CancelFocusedPart();
+		}
 		return FReply::Handled();
 	}
 
@@ -146,12 +160,12 @@ void UDronePartSelectWidget::RefreshFromController()
 
 	if (Text_ControlGuide)
 	{
-		Text_ControlGuide->SetText(FText::FromString(TEXT("↑/↓ 슬롯 이동   ←/→ 부품 변경   Z 선택   C 취소")));
+		Text_ControlGuide->SetText(FText::FromString(TEXT("↑/↓ 항목 이동   ←/→ 부품 변경   Z 선택/참가   C 취소")));
 	}
 
 	UE_LOG(LogTemp, VeryVerbose, TEXT("[Client] DronePartSelectWidget RefreshFromController: Player=%s FocusedSlot=%s Core=%s Right=%s Left=%s"),
 		*CachedRaidPlayerController->GetName(),
-		*GetSlotDisplayText(FocusedSlot).ToString(),
+		bCombatStartFocused ? TEXT("CombatStart") : *GetSlotDisplayText(FocusedSlot).ToString(),
 		*GetPreviewPartIDForSlot(EDronePartSlot::Core).ToString(),
 		*GetPreviewPartIDForSlot(EDronePartSlot::RightWeapon).ToString(),
 		*GetPreviewPartIDForSlot(EDronePartSlot::LeftWeapon).ToString());
@@ -160,7 +174,15 @@ void UDronePartSelectWidget::RefreshFromController()
 	{
 		Text_FocusedSlot->SetText(FText::Format(
 			FText::FromString(TEXT("현재 선택: {0}")),
-			GetSlotDisplayText(FocusedSlot)));
+			bCombatStartFocused ? FText::FromString(TEXT("전투 참가")) : GetSlotDisplayText(FocusedSlot)));
+	}
+
+	if (Button_CombatStart)
+	{
+		Button_CombatStart->SetBackgroundColor(
+			bCombatStartFocused
+				? FLinearColor(0.18f, 0.72f, 0.64f, 1.0f)
+				: FLinearColor(0.78f, 0.28f, 0.58f, 1.0f));
 	}
 
 	if (TimerText)
@@ -235,6 +257,12 @@ void UDronePartSelectWidget::MovePreview(EDronePartSlot PartSlot, int32 Delta)
 
 void UDronePartSelectWidget::FocusNextSlot()
 {
+	if (bCombatStartFocused)
+	{
+		SetFocusedSlot(EDronePartSlot::Core);
+		return;
+	}
+
 	switch (FocusedSlot)
 	{
 	case EDronePartSlot::Core:
@@ -245,17 +273,27 @@ void UDronePartSelectWidget::FocusNextSlot()
 		break;
 	case EDronePartSlot::LeftWeapon:
 	default:
-		SetFocusedSlot(EDronePartSlot::Core);
+		bCombatStartFocused = true;
+		RefreshFromController();
+		SetKeyboardFocus();
 		break;
 	}
 }
 
 void UDronePartSelectWidget::FocusPrevSlot()
 {
+	if (bCombatStartFocused)
+	{
+		SetFocusedSlot(EDronePartSlot::LeftWeapon);
+		return;
+	}
+
 	switch (FocusedSlot)
 	{
 	case EDronePartSlot::Core:
-		SetFocusedSlot(EDronePartSlot::LeftWeapon);
+		bCombatStartFocused = true;
+		RefreshFromController();
+		SetKeyboardFocus();
 		break;
 	case EDronePartSlot::RightWeapon:
 		SetFocusedSlot(EDronePartSlot::Core);
@@ -265,6 +303,22 @@ void UDronePartSelectWidget::FocusPrevSlot()
 		SetFocusedSlot(EDronePartSlot::RightWeapon);
 		break;
 	}
+}
+
+bool UDronePartSelectWidget::IsCombatStartFocused() const
+{
+	return bCombatStartFocused;
+}
+
+void UDronePartSelectWidget::ActivateFocusedControl()
+{
+	if (bCombatStartFocused)
+	{
+		HandleCombatStartClicked();
+		return;
+	}
+
+	SelectFocusedPart();
 }
 
 FName UDronePartSelectWidget::GetPreviewPartIDForSlot(EDronePartSlot PartSlot) const
@@ -400,6 +454,108 @@ void UDronePartSelectWidget::HandleCombatStartClicked()
 	}
 
 	CachedRaidPlayerController->RequestReadyForRaidFromUI();
+}
+
+void UDronePartSelectWidget::ApplyPlanningLayout()
+{
+	if (!WidgetTree || !Button_CombatStart)
+	{
+		return;
+	}
+
+	UCanvasPanel* Canvas = Cast<UCanvasPanel>(Button_CombatStart->GetParent());
+	if (!Canvas)
+	{
+		return;
+	}
+
+	const auto AddPanel = [this, Canvas](
+		FName PanelName,
+		FVector2D Position,
+		FVector2D Size,
+		FLinearColor Color,
+		int32 ZOrder,
+		bool bStretchToCanvas = false)
+	{
+		UBorder* Panel = Cast<UBorder>(WidgetTree->FindWidget(PanelName));
+		if (!Panel)
+		{
+			Panel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), PanelName);
+			if (!Panel)
+			{
+				return;
+			}
+			Canvas->AddChildToCanvas(Panel);
+		}
+
+		Panel->SetBrushColor(Color);
+		Panel->SetVisibility(ESlateVisibility::HitTestInvisible);
+
+		if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Panel->Slot))
+		{
+			if (bStretchToCanvas)
+			{
+				CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
+				CanvasSlot->SetOffsets(FMargin(0.0f));
+				CanvasSlot->SetAlignment(FVector2D::ZeroVector);
+			}
+			else
+			{
+				CanvasSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+				CanvasSlot->SetPosition(Position);
+				CanvasSlot->SetSize(Size);
+				CanvasSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+			}
+			CanvasSlot->SetZOrder(ZOrder);
+		}
+	};
+
+	AddPanel(TEXT("Planning_Backdrop"), FVector2D::ZeroVector, FVector2D::ZeroVector,
+		FLinearColor(0.94f, 0.96f, 0.98f, 1.0f), -100, true);
+	AddPanel(TEXT("Planning_CoreCard"), FVector2D(0.0f, -350.0f), FVector2D(280.0f, 200.0f),
+		FLinearColor(1.0f, 0.48f, 0.52f, 0.92f), -20);
+	AddPanel(TEXT("Planning_RightCard"), FVector2D(0.0f, -70.0f), FVector2D(520.0f, 190.0f),
+		FLinearColor(0.27f, 0.93f, 0.45f, 0.92f), -20);
+	AddPanel(TEXT("Planning_LeftCard"), FVector2D(0.0f, 220.0f), FVector2D(520.0f, 190.0f),
+		FLinearColor(0.33f, 0.62f, 0.96f, 0.92f), -20);
+	AddPanel(TEXT("Planning_CoreDescription"), FVector2D(560.0f, -350.0f), FVector2D(460.0f, 200.0f),
+		FLinearColor(0.80f, 0.96f, 0.65f, 0.95f), -20);
+	AddPanel(TEXT("Planning_RightDescription"), FVector2D(-620.0f, -70.0f), FVector2D(480.0f, 190.0f),
+		FLinearColor(1.0f, 0.85f, 0.72f, 0.95f), -20);
+	AddPanel(TEXT("Planning_LeftDescription"), FVector2D(660.0f, 220.0f), FVector2D(460.0f, 190.0f),
+		FLinearColor(0.52f, 0.93f, 0.91f, 0.95f), -20);
+	AddPanel(TEXT("Planning_Timer"), FVector2D(-660.0f, 410.0f), FVector2D(420.0f, 120.0f),
+		FLinearColor(0.72f, 0.74f, 0.78f, 0.98f), -20);
+
+	const FSlateColor PrimaryTextColor(FLinearColor(0.05f, 0.08f, 0.12f, 1.0f));
+	for (UTextBlock* TextBlock : {
+		Text_ControlGuide.Get(),
+		Text_CoreDescription.Get(),
+		Text_RightWeaponDescription.Get(),
+		Text_LeftWeaponDescription.Get(),
+		Text_CoreCount.Get(),
+		Text_RightWeaponCount.Get(),
+		Text_LeftWeaponCount.Get(),
+		TimerText.Get()})
+	{
+		if (TextBlock)
+		{
+			TextBlock->SetColorAndOpacity(PrimaryTextColor);
+		}
+	}
+
+	for (UTextBlock* RedundantText : {
+		CoreSelectedText.Get(),
+		LeftWeaponSelectedText.Get(),
+		RightWeaponSelectedText.Get(),
+		ResultText.Get(),
+		Text_FocusedSlot.Get()})
+	{
+		if (RedundantText)
+		{
+			RedundantText->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
 }
 
 void UDronePartSelectWidget::InitializeCandidatesFromController()
@@ -623,6 +779,7 @@ bool UDronePartSelectWidget::ShouldRefreshTimerText() const
 void UDronePartSelectWidget::SetFocusedSlot(EDronePartSlot NewFocusedSlot)
 {
 	FocusedSlot = NewFocusedSlot;
+	bCombatStartFocused = false;
 	RefreshFromController();
 	SetKeyboardFocus();
 }
@@ -662,7 +819,7 @@ void UDronePartSelectWidget::RefreshSlot(
 	const int32 MaxCount = CachedRaidPlayerController->GetPartMaxCount(PartID);
 	const FName SelectedPartID = CachedRaidPlayerController->GetSelectedPartForSlot(PartSlot);
 	const bool bIsSelected = SelectedPartID == PartID;
-	const bool bIsFocused = FocusedSlot == PartSlot;
+	const bool bIsFocused = !bCombatStartFocused && FocusedSlot == PartSlot;
 
 	if (DescriptionText)
 	{
