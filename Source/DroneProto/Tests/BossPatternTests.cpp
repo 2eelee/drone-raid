@@ -1315,6 +1315,10 @@ bool FDroneStellarRemnantSweptCollisionTest::RunTest(const FString& Parameters)
 		WorldPoint(1640.0f, 70.0f), BossTransform, WaveOneSample, 0.0f, 1.0f));
 	TestFalse(TEXT("outside collision radius is excluded"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
 		WorldPoint(1640.0f, 70.1f), BossTransform, WaveOneSample, 0.0f, 1.0f));
+	TestTrue(TEXT("target hit radius includes visible edge contact"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+		WorldPoint(1640.0f, 120.0f), BossTransform, WaveOneSample, 0.0f, 1.0f, FStellarRemnantConfig(), 50.0f));
+	TestFalse(TEXT("outside combined projectile and target radii is excluded"), AStellarRemnantPatternActor::IsPointInsideSweptSample(
+		WorldPoint(1640.0f, 120.1f), BossTransform, WaveOneSample, 0.0f, 1.0f, FStellarRemnantConfig(), 50.0f));
 
 	const FStellarRemnantSample* WaveTwoSample = Samples.FindByPredicate([](const FStellarRemnantSample& Sample)
 	{

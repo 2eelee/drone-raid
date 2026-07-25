@@ -128,7 +128,8 @@ bool AStellarRemnantPatternActor::IsPointInsideSweptSample(
 	const FStellarRemnantSample& Sample,
 	float PreviousElapsedSeconds,
 	float CurrentElapsedSeconds,
-	const FStellarRemnantConfig& InConfig)
+	const FStellarRemnantConfig& InConfig,
+	float TargetRadiusCm)
 {
 	if (Sample.bVisualOnly || CurrentElapsedSeconds < PreviousElapsedSeconds)
 	{
@@ -152,8 +153,9 @@ bool AStellarRemnantPatternActor::IsPointInsideSweptSample(
 		? FMath::Clamp(FVector::DotProduct(PointWorld - SegmentStart, Segment) / SegmentSizeSquared, 0.0f, 1.0f)
 		: 0.0f;
 	const FVector ClosestPoint = SegmentStart + Segment * Alpha;
+	const float CombinedRadiusCm = InConfig.CollisionRadiusCm + FMath::Max(0.0f, TargetRadiusCm);
 	return FVector::DistSquared(PointWorld, ClosestPoint)
-		<= FMath::Square(InConfig.CollisionRadiusCm + KINDA_SMALL_NUMBER);
+		<= FMath::Square(CombinedRadiusCm + KINDA_SMALL_NUMBER);
 }
 
 float AStellarRemnantPatternActor::GetServerWorldTimeSeconds() const
@@ -184,15 +186,21 @@ void AStellarRemnantPatternActor::ApplyDamageForServer(
 			continue;
 		}
 
+		FVector TargetOrigin = Drone->GetActorLocation();
+		FVector TargetExtent = FVector::ZeroVector;
+		Drone->GetActorBounds(false, TargetOrigin, TargetExtent);
+		const float TargetRadiusCm = TargetExtent.Size();
+
 		for (const FStellarRemnantSample& Sample : Samples)
 		{
 			if (IsPointInsideSweptSample(
-				Drone->GetActorLocation(),
+				TargetOrigin,
 				GetActorTransform(),
 				Sample,
 				PreviousElapsedSeconds,
 				CurrentElapsedSeconds,
-				Config))
+				Config,
+				TargetRadiusCm))
 			{
 				PatternComponent->TryApplyPatternDamageForServer(Drone, PatternConfig.StellarDamage);
 				break;

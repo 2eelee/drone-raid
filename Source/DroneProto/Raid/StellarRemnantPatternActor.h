@@ -42,7 +42,8 @@ public:
 		const FStellarRemnantSample& Sample,
 		float PreviousElapsedSeconds,
 		float CurrentElapsedSeconds,
-		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig());
+		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig(),
+		float TargetRadiusCm = 0.0f);
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void ApplyDamageForServerForTest(float PreviousElapsedSeconds, float CurrentElapsedSeconds);
