@@ -38,7 +38,7 @@ public:
 	// Battle 전이 시 모든 보스의 패턴 타이머 시작/정지 오케스트레이션. 개별 타이머는 Boss가 소유한다.
 	void StartBossPatternsForServer();
 	void StopBossPatternsForServer(FName Reason);
-	bool CanAcceptRaidJoinForServer(FName& OutRejectReason) const;
+	bool CanAcceptRaidJoinForServer(FName& OutRejectReason, bool bCheckNewPlayerCapacity = true) const;
 
 	// DroneReport 중복 방지: PC 인스턴스 bool과 별개로 PlayerKey 기반 서버 set을 관리한다.
 	// 재접속으로 PC가 새로 만들어져도 같은 플레이어의 Report가 중복 생성되지 않는다.

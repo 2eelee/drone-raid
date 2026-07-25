@@ -573,7 +573,7 @@ void ARaidGameMode::StopBossPatternsForServer(FName Reason)
 	}
 }
 
-bool ARaidGameMode::CanAcceptRaidJoinForServer(FName& OutRejectReason) const
+bool ARaidGameMode::CanAcceptRaidJoinForServer(FName& OutRejectReason, bool bCheckNewPlayerCapacity) const
 {
 	OutRejectReason = NAME_None;
 	if (!HasAuthority())
@@ -593,6 +593,12 @@ bool ARaidGameMode::CanAcceptRaidJoinForServer(FName& OutRejectReason) const
 	if (!GS)
 	{
 		OutRejectReason = FName(TEXT("NoRaidState"));
+		return false;
+	}
+
+	if (bCheckNewPlayerCapacity && GS->CurrentPlayers >= 16)
+	{
+		OutRejectReason = FName(TEXT("Full"));
 		return false;
 	}
 

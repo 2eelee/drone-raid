@@ -4003,6 +4003,49 @@ bool FDronePOR18StatsRecalcGuardTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidServerCapacityJoinGateTest,
+	"DroneProto.RaidEntry.ServerCapacityJoinGate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidServerCapacityJoinGateTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidServerCapacityJoinGateWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	ResolveBossPatternForSyntheticWorld(Boss);
+
+	TestNotNull(TEXT("capacity gate game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("capacity gate player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("capacity gate game mode is spawned"), GameMode);
+	TestNotNull(TEXT("capacity gate boss is spawned"), Boss);
+	if (!Context.World || !Context.GameState || !Context.PC || !GameMode || !Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	Context.GameState->SetRaidBossForServer(Boss);
+
+	FName RejectReason;
+	Context.GameState->CurrentPlayers = 15;
+	TestTrue(TEXT("15 players still accepts a new raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("accepted capacity check has no reject reason"), RejectReason, NAME_None);
+
+	Context.GameState->CurrentPlayers = 16;
+	TestFalse(TEXT("16 players rejects a new raid join"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("full raid reject reason is Full"), RejectReason, FName(TEXT("Full")));
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("an existing player can Ready while the raid is full"),
+		Context.PC->GetPlayerSelectionState(),
+		EPlayerSelectionState::InBattle);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidBossStateJoinGateTest,
 	"DroneProto.Q4.RaidBoss.BossStateJoinGate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

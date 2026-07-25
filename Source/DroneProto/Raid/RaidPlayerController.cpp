@@ -2056,7 +2056,7 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		if (RaidGameMode)
 		{
 			FName RejectReason;
-			if (!RaidGameMode->CanAcceptRaidJoinForServer(RejectReason))
+			if (!RaidGameMode->CanAcceptRaidJoinForServer(RejectReason, false))
 			{
 				const FString FailureReason = RejectReason.IsNone() ? TEXT("Raid join rejected") : RejectReason.ToString();
 				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=Ready RaidState=%s"),
