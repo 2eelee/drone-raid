@@ -52,7 +52,6 @@ private:
 	ARaidPlayerController* GetOwningRaidPlayerController() const;
 
 	void RefreshBossHUDWithReason(FName Reason);
-	static FText BuildHPText(const ARaidBoss* Boss);
 	static FText BuildTimerText(float RemainingSeconds);
 	static void SetOptionalText(UTextBlock* TextBlock, const FText& Text);
 

@@ -52,7 +52,7 @@ float UBossHUDWidget::GetBossHPPercent() const
 
 FText UBossHUDWidget::GetBossHPText() const
 {
-	return BuildHPText(GetRaidBoss());
+	return FText::GetEmpty();
 }
 
 float UBossHUDWidget::GetRaidRemainingSeconds() const
@@ -191,18 +191,6 @@ ARaidPlayerController* UBossHUDWidget::GetOwningRaidPlayerController() const
 	}
 
 	return GetTypedOuter<ARaidPlayerController>();
-}
-
-FText UBossHUDWidget::BuildHPText(const ARaidBoss* Boss)
-{
-	if (!Boss || Boss->GetMaxHP() <= KINDA_SMALL_NUMBER)
-	{
-		return FText::FromString(TEXT("0 / 0"));
-	}
-
-	const int32 CurrentHP = FMath::Max(0, FMath::RoundToInt(Boss->GetCurrentHP()));
-	const int32 MaxHP = FMath::Max(0, FMath::RoundToInt(Boss->GetMaxHP()));
-	return FText::FromString(FString::Printf(TEXT("%d / %d"), CurrentHP, MaxHP));
 }
 
 FText UBossHUDWidget::BuildTimerText(float RemainingSeconds)

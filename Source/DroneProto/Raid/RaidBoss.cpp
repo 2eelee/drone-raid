@@ -69,8 +69,8 @@ ARaidBoss::ARaidBoss()
 	NetDormancy = DORM_Never;
 	SetReplicatingMovement(false);
 
-	BossID = FName(TEXT("BOSS_MAIN"));
-	BossDisplayName = FText::FromString(TEXT("Raid Boss"));
+	BossID = FName(TEXT("404_StarDust"));
+	BossDisplayName = FText::FromString(TEXT("404_StarDust"));
 	bIsTargetable = true;
 	TargetMarkerSocketName = FName(TEXT("TargetMarker"));
 	BossPatternComponent = CreateDefaultSubobject<UBossPatternComponent>(TEXT("BossPatternComponent"));

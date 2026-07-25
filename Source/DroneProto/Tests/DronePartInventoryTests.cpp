@@ -1229,7 +1229,7 @@ bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(TEXT("boss HUD without world has zero HP percent"), EmptyWidget->GetBossHPPercent(), 0.0f);
-	TestEqual(TEXT("boss HUD without world has empty HP text"), EmptyWidget->GetBossHPText().ToString(), FString(TEXT("0 / 0")));
+	TestTrue(TEXT("boss HUD without world keeps numeric HP text hidden"), EmptyWidget->GetBossHPText().IsEmpty());
 	TestEqual(TEXT("boss HUD without world has zero remaining seconds"), EmptyWidget->GetRaidRemainingSeconds(), 0.0f);
 	TestEqual(TEXT("boss HUD without world has zero timer text"), EmptyWidget->GetRaidTimerText().ToString(), FString(TEXT("00:00")));
 
@@ -1250,9 +1250,7 @@ bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
 	Boss->ApplyDamageForServer(Boss->GetMaxHP() * 0.25f, Context.PC, Context.Drone);
 	TestTrue(TEXT("boss HUD reads replicated boss HP percent"),
 		FMath::IsNearlyEqual(Widget->GetBossHPPercent(), 0.75f, 0.001f));
-	TestEqual(TEXT("boss HUD builds HP text"),
-		Widget->GetBossHPText().ToString(),
-		FString(TEXT("45000 / 60000")));
+	TestTrue(TEXT("boss HUD keeps numeric HP text hidden after damage"), Widget->GetBossHPText().IsEmpty());
 
 	Context.GameState->SetRaidTimeEndServerTimeForServer(Context.World->GetTimeSeconds() + 125.0f);
 	TestTrue(TEXT("boss HUD reads raid remaining seconds"),
@@ -1265,9 +1263,7 @@ bool FDroneQ6BossHUDWidgetTest::RunTest(const FString& Parameters)
 		SetFloatPropertyForAutomationTest(Boss, FName(TEXT("MaxHP")), 0.0f));
 	Widget->RefreshBossHUD();
 	TestEqual(TEXT("boss HUD clamps zero MaxHP percent safely"), Widget->GetBossHPPercent(), 0.0f);
-	TestEqual(TEXT("boss HUD clamps zero MaxHP text safely"),
-		Widget->GetBossHPText().ToString(),
-		FString(TEXT("0 / 0")));
+	TestTrue(TEXT("boss HUD keeps numeric HP text hidden at zero MaxHP"), Widget->GetBossHPText().IsEmpty());
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -1303,9 +1299,7 @@ bool FDroneQ11BossHUDObservedBossFallbackTest::RunTest(const FString& Parameters
 	Boss->ApplyDamageForServer(Boss->GetMaxHP() * 0.50f, Context.PC, Context.Drone);
 	TestTrue(TEXT("boss HUD falls back to owning PC target boss when GameState boss is not available"),
 		FMath::IsNearlyEqual(Widget->GetBossHPPercent(), 0.50f, 0.001f));
-	TestEqual(TEXT("boss HUD fallback builds HP text from owning PC target"),
-		Widget->GetBossHPText().ToString(),
-		FString(TEXT("30000 / 60000")));
+	TestTrue(TEXT("boss HUD fallback keeps numeric HP text hidden"), Widget->GetBossHPText().IsEmpty());
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;
@@ -3019,6 +3013,12 @@ bool FRaidBossSpecMaxHPTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	TestEqual(TEXT("Q1 boss ID matches current spec"),
+		Boss->GetBossID(),
+		FName(TEXT("404_StarDust")));
+	TestEqual(TEXT("Q1 boss display name matches current spec"),
+		Boss->GetBossDisplayName().ToString(),
+		FString(TEXT("404_StarDust")));
 	TestTrue(TEXT("Q1 boss MaxHP matches current 60000 spec"),
 		FMath::IsNearlyEqual(Boss->GetMaxHP(), 60000.0f, 0.01f));
 	TestTrue(TEXT("Q1 boss CurrentHP initializes from MaxHP"),
