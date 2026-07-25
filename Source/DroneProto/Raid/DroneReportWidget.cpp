@@ -185,7 +185,7 @@ FText UDroneReportWidget::BuildAchievedBonusText(const TArray<EDroneReportBonusT
 {
 	if (AchievedBonusList.IsEmpty())
 	{
-		return FText::FromString(TEXT("None"));
+		return FText::GetEmpty();
 	}
 
 	TArray<FString> BonusNames;

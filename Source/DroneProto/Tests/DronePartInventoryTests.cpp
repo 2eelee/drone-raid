@@ -894,6 +894,11 @@ bool FDroneReportWidgetTextTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("B grade display text"), UDroneReportWidget::GetGradeDisplayText(EDroneReportGrade::B).ToString(), FString(TEXT("B")));
 	TestEqual(TEXT("C grade display text"), UDroneReportWidget::GetGradeDisplayText(EDroneReportGrade::C).ToString(), FString(TEXT("C")));
 
+	UDroneReportWidget* Widget = NewObject<UDroneReportWidget>();
+	FDroneReportData ReportWithoutBonuses;
+	Widget->RefreshReport(ReportWithoutBonuses);
+	TestTrue(TEXT("unearned bonuses produce no display text"), Widget->GetAchievedBonusText().IsEmpty());
+
 	return true;
 }
 
