@@ -8,6 +8,7 @@
 #include "Drone.h"
 #include "DronePart.h"
 #include "Raid/DronePartInventory.h"
+#include "Raid/DronePartSelectWidget.h"
 #include "Raid/DroneDataTableRows.h"
 #include "Raid/DroneCombatTypes.h"
 #include "Raid/DronePartReturnManager.h"
@@ -26,6 +27,9 @@
 
 #include "Components/StaticMeshComponent.h"
 #include "Components/TextRenderComponent.h"
+#include "Components/Border.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -1725,6 +1729,136 @@ bool FDronePartSelectUIGlueTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("known part description is not empty"), PC->GetPartDescription(ADronePartInventory::GetPulseLaserPartID()).IsEmpty());
 	TestEqual(TEXT("unknown part current count is zero without inventory"), PC->GetPartCurrentCount(TEXT("UNKNOWN_PART")), 0);
 	TestEqual(TEXT("unknown part max count is zero without inventory"), PC->GetPartMaxCount(TEXT("UNKNOWN_PART")), 0);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIKeyboardCombatStartTest,
+	"DroneProto.D5.DronePartSelectUI.KeyboardCombatStart",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIKeyboardCombatStartTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DronePartSelectUIKeyboardCombatStartWorld"));
+	UDronePartSelectWidget* Widget = Context.PC ? NewObject<UDronePartSelectWidget>(Context.PC) : nullptr;
+
+	TestNotNull(TEXT("keyboard combat-start world is created"), Context.World);
+	TestNotNull(TEXT("keyboard combat-start player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("keyboard combat-start drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("keyboard combat-start widget is created"), Widget);
+	if (!Context.World || !Context.PC || !Context.Drone || !Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	FObjectProperty* CachedControllerProperty = FindFProperty<FObjectProperty>(
+		UDronePartSelectWidget::StaticClass(),
+		TEXT("CachedRaidPlayerController"));
+	TestNotNull(TEXT("widget controller cache is reflected for the synthetic world"), CachedControllerProperty);
+	if (!CachedControllerProperty)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	CachedControllerProperty->SetObjectPropertyValue_InContainer(Widget, Context.PC);
+	Widget->RefreshFromController();
+	TestFalse(TEXT("keyboard focus starts on a part slot"), Widget->IsCombatStartFocused());
+
+	Widget->FocusNextSlot();
+	Widget->FocusNextSlot();
+	Widget->FocusNextSlot();
+	TestTrue(TEXT("Down reaches CombatStart after the three part slots"), Widget->IsCombatStartFocused());
+
+	FString WidgetSource;
+	const bool bWidgetSourceLoaded = FFileHelper::LoadFileToString(
+		WidgetSource,
+		*(FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/DronePartSelectWidget.cpp")));
+	TestTrue(TEXT("DronePartSelectWidget source loads"), bWidgetSourceLoaded);
+	TestTrue(TEXT("Z activates the currently focused control"),
+		WidgetSource.Contains(TEXT("if (Key == EKeys::Z)"))
+		&& WidgetSource.Contains(TEXT("ActivateFocusedControl();")));
+	TestTrue(TEXT("CombatStart activation reuses the existing button handler"),
+		WidgetSource.Contains(TEXT("if (bCombatStartFocused)"))
+		&& WidgetSource.Contains(TEXT("HandleCombatStartClicked();")));
+	TestTrue(TEXT("CombatStart handler keeps the existing Ready request path"),
+		WidgetSource.Contains(TEXT("CachedRaidPlayerController->RequestReadyForRaidFromUI();")));
+
+	Widget->FocusPrevSlot();
+	TestFalse(TEXT("Up from CombatStart returns to the left weapon slot"), Widget->IsCombatStartFocused());
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIBlueprintStructureTest,
+	"DroneProto.D5.DronePartSelectUI.BlueprintStructure",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DronePartSelectUIBlueprintStructureWorld")));
+	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* Widget = World && WidgetClass
+		? NewObject<UDronePartSelectWidget>(World, WidgetClass)
+		: nullptr;
+
+	TestNotNull(TEXT("selection widget asset class loads"), WidgetClass);
+	TestNotNull(TEXT("selection widget asset instance is created"), Widget);
+	if (!World || !Widget)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	TestTrue(TEXT("selection widget asset initializes"), Widget->Initialize());
+	TestNotNull(TEXT("selection widget asset has a widget tree"), Widget->WidgetTree.Get());
+	TestNotNull(TEXT("selection widget asset has a root widget"),
+		Widget->WidgetTree ? Widget->WidgetTree->RootWidget.Get() : nullptr);
+
+	if (Widget->WidgetTree)
+	{
+		UFunction* ApplyLayoutFunction = Widget->FindFunction(TEXT("ApplyPlanningLayout"));
+		TestNotNull(TEXT("selection widget exposes its native planning-layout pass"), ApplyLayoutFunction);
+		if (ApplyLayoutFunction)
+		{
+			Widget->ProcessEvent(ApplyLayoutFunction, nullptr);
+		}
+
+		UBorder* Backdrop = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Planning_Backdrop")));
+		UBorder* CoreCard = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Planning_CoreCard")));
+		TestNotNull(TEXT("planning layout adds an opaque backdrop"), Backdrop);
+		TestNotNull(TEXT("planning layout adds the core card surface"), CoreCard);
+		if (Backdrop)
+		{
+			TestTrue(TEXT("planning backdrop is effectively opaque"), Backdrop->GetBrushColor().A >= 0.98f);
+		}
+		if (const UCanvasPanelSlot* CoreCardSlot = CoreCard ? Cast<UCanvasPanelSlot>(CoreCard->Slot) : nullptr)
+		{
+			TestEqual(TEXT("planning core card keeps the mockup center position"),
+				CoreCardSlot->GetPosition(),
+				FVector2D(0.0f, -350.0f));
+			TestEqual(TEXT("planning core card keeps the mockup size"),
+				CoreCardSlot->GetSize(),
+				FVector2D(280.0f, 200.0f));
+		}
+		else
+		{
+			AddError(TEXT("planning core card is not attached to the selection canvas"));
+		}
+
+		UWidget* RedundantStateText = Widget->WidgetTree->FindWidget(TEXT("ResultText"));
+		TestTrue(TEXT("planning layout collapses the redundant state text"),
+			RedundantStateText && RedundantStateText->GetVisibility() == ESlateVisibility::Collapsed);
+	}
 
 	World->DestroyWorld(false);
 	return true;
