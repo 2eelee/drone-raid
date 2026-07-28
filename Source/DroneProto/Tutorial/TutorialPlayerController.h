@@ -15,10 +15,10 @@ public:
 	void StartTutorial();
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial")
-	void AdvanceTutorialStep();
+	bool AdvanceTutorialStep();
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial")
-	void CompleteTutorial();
+	bool CompleteTutorial();
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
 	bool NotifyTutorialMoveInput(FVector2D RawAxis);
@@ -28,6 +28,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
 	bool NotifyTutorialDodgeInput(FVector2D RawDirection);
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial")
+	bool NotifyTutorialDebrisDestroyed();
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial")
 	bool ReturnToLobbyAfterTutorial();
@@ -40,6 +43,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Tutorial")
 	bool IsTutorialActive() const { return bTutorialActive; }
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial|Input")
+	bool IsTutorialMoveAllowed() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial|Input")
+	bool IsTutorialAttackAllowed() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial|Input")
+	bool IsTutorialDodgeAllowed() const;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
 	void BP_OnTutorialStepChanged(ETutorialStep PreviousStep, ETutorialStep NewStep);

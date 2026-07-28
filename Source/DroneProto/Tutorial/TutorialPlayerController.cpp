@@ -1,8 +1,10 @@
 #include "Tutorial/TutorialPlayerController.h"
 
 #include "Components/InputComponent.h"
+#include "EngineUtils.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
+#include "Tutorial/TutorialGameMode.h"
 
 void ATutorialPlayerController::SetupInputComponent()
 {
@@ -32,51 +34,62 @@ void ATutorialPlayerController::StartTutorial()
 
 	bReturnToLobbyRequested = false;
 	bTutorialActive = true;
-	SetTutorialStep(ETutorialStep::MoveLeft, FName(TEXT("Start")));
+	SetTutorialStep(ETutorialStep::Start, FName(TEXT("Start")));
 }
 
-void ATutorialPlayerController::AdvanceTutorialStep()
+bool ATutorialPlayerController::AdvanceTutorialStep()
 {
 	switch (CurrentTutorialStep)
 	{
 	case ETutorialStep::None:
 		StartTutorial();
-		break;
-	case ETutorialStep::MoveLeft:
-		SetTutorialStep(ETutorialStep::Attack, FName(TEXT("MoveLeft")));
-		break;
-	case ETutorialStep::Attack:
-		SetTutorialStep(ETutorialStep::Dodge, FName(TEXT("Attack")));
-		break;
-	case ETutorialStep::Dodge:
-		CompleteTutorial();
-		break;
+		return true;
+	case ETutorialStep::Start:
+		SetTutorialStep(ETutorialStep::WorldBriefing, FName(TEXT("StartPresented")));
+		return true;
+	case ETutorialStep::WorldBriefing:
+		SetTutorialStep(ETutorialStep::Move, FName(TEXT("WorldBriefingComplete")));
+		return true;
+	case ETutorialStep::CombatBriefing:
+		SetTutorialStep(ETutorialStep::DebrisCombat, FName(TEXT("CombatBriefingComplete")));
+		return true;
+	case ETutorialStep::ClosingBriefing:
+		return CompleteTutorial();
 	case ETutorialStep::Complete:
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Tutorial Step=Complete Result=Ignored Reason=AlreadyComplete Controller=%s"),
 			*GetNameSafe(this));
-		break;
+		return false;
 	default:
-		break;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Tutorial Step=%s Result=Ignored Reason=RequiresGameplaySuccess Controller=%s"),
+			ToTutorialStepLogString(CurrentTutorialStep),
+			*GetNameSafe(this));
+		return false;
 	}
 }
 
-void ATutorialPlayerController::CompleteTutorial()
+bool ATutorialPlayerController::CompleteTutorial()
 {
+	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::ClosingBriefing)
+	{
+		return false;
+	}
+
 	bTutorialActive = false;
 	SetTutorialStep(ETutorialStep::Complete, FName(TEXT("Complete")));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Tutorial Complete Controller=%s"),
 		*GetNameSafe(this));
 	BP_OnTutorialComplete();
+	return true;
 }
 
 bool ATutorialPlayerController::NotifyTutorialMoveInput(FVector2D RawAxis)
 {
-	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::MoveLeft || RawAxis.X >= -0.1f)
+	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::Move || RawAxis.IsNearlyZero())
 	{
 		return false;
 	}
 
-	AdvanceTutorialStep();
+	SetTutorialStep(ETutorialStep::Attack, FName(TEXT("MoveSucceeded")));
 	return true;
 }
 
@@ -87,19 +100,54 @@ bool ATutorialPlayerController::NotifyTutorialAttackInput()
 		return false;
 	}
 
-	AdvanceTutorialStep();
+	SetTutorialStep(ETutorialStep::Dodge, FName(TEXT("AttackSucceeded")));
 	return true;
 }
 
 bool ATutorialPlayerController::NotifyTutorialDodgeInput(FVector2D RawDirection)
 {
-	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::Dodge || RawDirection.Y <= 0.1f)
+	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::Dodge || RawDirection.IsNearlyZero())
 	{
 		return false;
 	}
 
-	AdvanceTutorialStep();
+	SetTutorialStep(ETutorialStep::CombatBriefing, FName(TEXT("DodgeSucceeded")));
 	return true;
+}
+
+bool ATutorialPlayerController::NotifyTutorialDebrisDestroyed()
+{
+	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::DebrisCombat)
+	{
+		return false;
+	}
+
+	SetTutorialStep(ETutorialStep::ClosingBriefing, FName(TEXT("DebrisDestroyed")));
+	return true;
+}
+
+bool ATutorialPlayerController::IsTutorialMoveAllowed() const
+{
+	return bTutorialActive
+		&& (CurrentTutorialStep == ETutorialStep::Move
+			|| CurrentTutorialStep == ETutorialStep::CombatBriefing
+			|| CurrentTutorialStep == ETutorialStep::DebrisCombat);
+}
+
+bool ATutorialPlayerController::IsTutorialAttackAllowed() const
+{
+	return bTutorialActive
+		&& (CurrentTutorialStep == ETutorialStep::Attack
+			|| CurrentTutorialStep == ETutorialStep::CombatBriefing
+			|| CurrentTutorialStep == ETutorialStep::DebrisCombat);
+}
+
+bool ATutorialPlayerController::IsTutorialDodgeAllowed() const
+{
+	return bTutorialActive
+		&& (CurrentTutorialStep == ETutorialStep::Dodge
+			|| CurrentTutorialStep == ETutorialStep::CombatBriefing
+			|| CurrentTutorialStep == ETutorialStep::DebrisCombat);
 }
 
 bool ATutorialPlayerController::ReturnToLobbyAfterTutorial()
@@ -172,6 +220,24 @@ void ATutorialPlayerController::SetTutorialStep(ETutorialStep NewStep, FName Rea
 		*GetNameSafe(this));
 
 	BP_OnTutorialStepChanged(PreviousStep, CurrentTutorialStep);
+
+	if (HasAuthority())
+	{
+		UWorld* World = GetWorld();
+		ATutorialGameMode* TutorialGameMode = World ? World->GetAuthGameMode<ATutorialGameMode>() : nullptr;
+		if (!TutorialGameMode && World)
+		{
+			for (TActorIterator<ATutorialGameMode> It(World); It; ++It)
+			{
+				TutorialGameMode = *It;
+				break;
+			}
+		}
+		if (TutorialGameMode)
+		{
+			TutorialGameMode->HandleTutorialStepChangedForServer(this, CurrentTutorialStep);
+		}
+	}
 }
 
 void ATutorialPlayerController::HandleTutorialLeftPressed()

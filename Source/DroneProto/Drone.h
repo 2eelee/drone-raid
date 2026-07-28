@@ -65,6 +65,8 @@ struct FDroneOwnerMoveSync
 	uint32 Sequence = 0;
 };
 
+class ATutorialPlayerController;
+
 UCLASS()
 class DRONEPROTO_API ADrone : public APawn
 {
@@ -599,6 +601,7 @@ private:
 	void HandleDeath();
 	void NotifyPatternPopulationDeathForServer();
 	void HandleAttackBossForServer();
+	bool HandleTutorialAttackForServer(ATutorialPlayerController* TutorialPlayerController);
 	void RecordAttackIgnoredForServer(FName Reason);
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	void UpdateLocalCombatCamera(float DeltaSeconds);

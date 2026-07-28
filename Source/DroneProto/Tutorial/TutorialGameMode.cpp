@@ -1,10 +1,15 @@
 #include "Tutorial/TutorialGameMode.h"
 
+#include "Drone.h"
+#include "Raid/DronePartInventory.h"
+#include "Tutorial/TutorialDebris.h"
 #include "Tutorial/TutorialPlayerController.h"
 
 ATutorialGameMode::ATutorialGameMode()
 {
 	PlayerControllerClass = ATutorialPlayerController::StaticClass();
+	DefaultPawnClass = ADrone::StaticClass();
+	TutorialDebrisClass = ATutorialDebris::StaticClass();
 }
 
 bool ATutorialGameMode::StartTutorialForController(ATutorialPlayerController* TutorialPlayerController)
@@ -12,6 +17,12 @@ bool ATutorialGameMode::StartTutorialForController(ATutorialPlayerController* Tu
 	if (!HasAuthority() || !TutorialPlayerController)
 	{
 		return false;
+	}
+
+	if (ADrone* Drone = Cast<ADrone>(TutorialPlayerController->GetPawn()))
+	{
+		const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+		Drone->ApplyLoadout(NAME_None, PulseLaser, PulseLaser);
 	}
 
 	TutorialPlayerController->StartTutorial();
@@ -25,8 +36,7 @@ bool ATutorialGameMode::AdvanceTutorialForController(ATutorialPlayerController* 
 		return false;
 	}
 
-	TutorialPlayerController->AdvanceTutorialStep();
-	return true;
+	return TutorialPlayerController->AdvanceTutorialStep();
 }
 
 bool ATutorialGameMode::CompleteTutorialForController(ATutorialPlayerController* TutorialPlayerController)
@@ -36,6 +46,55 @@ bool ATutorialGameMode::CompleteTutorialForController(ATutorialPlayerController*
 		return false;
 	}
 
-	TutorialPlayerController->CompleteTutorial();
-	return true;
+	return TutorialPlayerController->CompleteTutorial();
+}
+
+void ATutorialGameMode::HandleTutorialStepChangedForServer(
+	ATutorialPlayerController* TutorialPlayerController,
+	ETutorialStep NewStep)
+{
+	if (HasAuthority() && NewStep == ETutorialStep::DebrisCombat)
+	{
+		EnsureTutorialDebrisForController(TutorialPlayerController);
+	}
+}
+
+ATutorialDebris* ATutorialGameMode::EnsureTutorialDebrisForController(
+	ATutorialPlayerController* TutorialPlayerController)
+{
+	if (!HasAuthority() || !TutorialPlayerController)
+	{
+		return nullptr;
+	}
+
+	if (IsValid(TutorialDebris) && !TutorialDebris->IsTutorialDebrisDestroyed())
+	{
+		return TutorialDebris;
+	}
+
+	UWorld* World = GetWorld();
+	UClass* SpawnClass = TutorialDebrisClass ? TutorialDebrisClass.Get() : ATutorialDebris::StaticClass();
+	if (!World || !SpawnClass)
+	{
+		return nullptr;
+	}
+
+	APawn* TargetPawn = TutorialPlayerController->GetPawn();
+	const FVector SpawnLocation = (TargetPawn ? TargetPawn->GetActorLocation() : FVector::ZeroVector)
+		+ TutorialDebrisSpawnOffset;
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = TutorialPlayerController;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	TutorialDebris = World->SpawnActor<ATutorialDebris>(
+		SpawnClass,
+		SpawnLocation,
+		FRotator::ZeroRotator,
+		SpawnParameters);
+
+	if (TutorialDebris)
+	{
+		TutorialDebris->SetTargetPawnForServer(TargetPawn);
+	}
+
+	return TutorialDebris;
 }

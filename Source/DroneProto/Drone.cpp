@@ -24,6 +24,9 @@
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
+#include "Tutorial/TutorialDebris.h"
+#include "Tutorial/TutorialGameMode.h"
+#include "Tutorial/TutorialPlayerController.h"
 
 namespace
 {
@@ -406,6 +409,11 @@ float ADrone::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent,
 	if (!HasAuthority())
 		return 0.f;
 
+	if (Cast<ATutorialPlayerController>(GetController()))
+	{
+		return 0.0f;
+	}
+
 	if (bIsDead)
 	{
 		return 0.f;
@@ -427,6 +435,15 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 
 	if (bIsDead)
 	{
+		return;
+	}
+
+	if (Cast<ATutorialPlayerController>(GetController()))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneDamageIgnored PC=%s Drone=%s Reason=TutorialInvulnerable Damage=%d"),
+			*BuildDroneControllerLogString(Cast<AController>(GetController())),
+			*GetName(),
+			FMath::Max(0, DamageAmount));
 		return;
 	}
 
@@ -575,7 +592,9 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		return false;
 	}
 
-	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	APlayerController* PlayerPC = Cast<APlayerController>(GetController());
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(PlayerPC);
+	ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(PlayerPC);
 	const FVector DodgeDirection = FVector(Direction.X, Direction.Y, 0.0f).GetSafeNormal();
 	if (DodgeDirection.IsNearlyZero())
 	{
@@ -588,7 +607,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move ZLocked: FixedZ=%.2f Player=%s Before=%s"),
 			FixedZPosition,
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*StartLocation.ToString());
 	}
 	StartLocation = ClampFinalMovementPositionForServer(StartLocation);
@@ -602,7 +621,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move ZLocked: FixedZ=%.2f Player=%s Before=%s"),
 			FixedZPosition,
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*RequestedLocation.ToString());
 	}
 	FVector FinalLocation = ClampFinalMovementPositionForServer(RequestedLocation);
@@ -653,23 +672,23 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	Multicast_SetDodgeInvincibleVisual(true);
 	ApplyDodgeInvincibleVisualLocally(true);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleStart Player=%s Duration=%.2f"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DodgeInvincible: State=Begin Player=%s Duration=%.2f"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualHidden: Player=%s Reason=InvincibleStart Duration=%.2f"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Started: Player=%s Dir=%s Start=%s Target=%s Duration=%.2f Invincible=%.2f"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		*DodgeDirection.GetSafeNormal().ToString(),
 		*StartLocation.ToString(),
 		*FinalLocation.ToString(),
 		FMath::Max(0.0f, DodgeDurationSeconds),
 		FMath::Max(0.0f, DodgeInvincibleDurationSeconds));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Accepted: Player=%s Dir=%s Start=%s Target=%s PlannedDistance=%.2f Invincible=%.2f Duration=%.2f MoveDistancePolicy=Deferred"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		*DodgeDirection.GetSafeNormal().ToString(),
 		*StartLocation.ToString(),
 		*FinalLocation.ToString(),
@@ -678,16 +697,16 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		FMath::Max(0.0f, DodgeDurationSeconds));
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge PC=%s Direction=%s Result=Success Reason=%s DistanceCm=%.2f Cooldown=%.2f MoveDistancePolicy=Included"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		*Direction.ToString(),
 		bWasClamped ? TEXT("Clamped") : TEXT("OK"),
 		PlannedDistanceMeters / MoveDistanceCmToMeters,
 		FMath::Max(0.0f, DodgeCooldownSeconds));
 
-	const AActor* ViewTarget = RaidPC->GetViewTarget();
-	const APawn* ControlledPawn = RaidPC->GetPawn();
+	const AActor* ViewTarget = PlayerPC ? PlayerPC->GetViewTarget() : nullptr;
+	const APawn* ControlledPawn = PlayerPC ? PlayerPC->GetPawn() : nullptr;
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerDodgeApplied PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Direction=%s Delta=%s ServerLocation=%s Target=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s MoveDistancePolicy=Deferred"),
-		*BuildDroneControllerLogString(RaidPC),
+		*BuildDroneControllerLogString(PlayerPC),
 		*GetName(),
 		ControlledPawn ? *ControlledPawn->GetName() : TEXT("None"),
 		ControlledPawn == this ? TEXT("true") : TEXT("false"),
@@ -695,10 +714,15 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		*FVector::ZeroVector.ToString(),
 		*StartLocation.ToString(),
 		*FinalLocation.ToString(),
-		ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()),
+		RaidPC ? ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()) : TEXT("Tutorial"),
 		IsReplicatingMovement() ? TEXT("true") : TEXT("false"),
 		ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
 		TEXT("ServerObserved"));
+
+	if (TutorialPC)
+	{
+		TutorialPC->NotifyTutorialDodgeInput(Direction);
+	}
 
 	return true;
 }
@@ -1704,7 +1728,14 @@ void ADrone::HandleAttackBossForServer()
 		return;
 	}
 
-	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	if (ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController()))
+	{
+		HandleTutorialAttackForServer(TutorialPC);
+		return;
+	}
+
+	APlayerController* PlayerPC = Cast<APlayerController>(GetController());
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(PlayerPC);
 	if (!RaidPC || RaidPC->GetPawn() != this)
 	{
 		RecordAttackIgnoredForServer(FName(TEXT("PossessMismatch")));
@@ -1722,7 +1753,7 @@ void ADrone::HandleAttackBossForServer()
 	{
 		RecordAttackIgnoredForServer(FName(TEXT("Dodging")));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=Dodging Player=%s Drone=%s"),
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*GetName());
 		return;
 	}
@@ -1743,10 +1774,10 @@ void ADrone::HandleAttackBossForServer()
 	{
 		RecordAttackIgnoredForServer(FName(TEXT("NotInBattle")));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Target Invalid: Reason=NotInBattle Player=%s Drone=%s"),
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*GetName());
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] AttackIgnored PC=%s Reason=NotInBattle SelectionState=%s"),
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()));
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Attack Ignored: Reason=NotInBattle Player=%s SelectionState=%s"),
 			*BuildDroneControllerLogString(RaidPC),
@@ -2010,6 +2041,71 @@ void ADrone::HandleAttackBossForServer()
 		}
 	}
 }
+bool ADrone::HandleTutorialAttackForServer(ATutorialPlayerController* TutorialPlayerController)
+{
+	if (!TutorialPlayerController
+		|| TutorialPlayerController->GetPawn() != this
+		|| bIsDead
+		|| bIsDodging
+		|| !TutorialPlayerController->IsTutorialAttackAllowed())
+	{
+		RecordAttackIgnoredForServer(FName(TEXT("TutorialRestricted")));
+		return false;
+	}
+
+	bool bAccepted = true;
+	FVector AttackTo = GetActorLocation() + GetActorForwardVector() * 600.0f;
+	if (TutorialPlayerController->GetCurrentTutorialStep() == ETutorialStep::DebrisCombat)
+	{
+		ATutorialGameMode* TutorialGameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ATutorialGameMode>() : nullptr;
+		if (!TutorialGameMode && GetWorld())
+		{
+			for (TActorIterator<ATutorialGameMode> It(GetWorld()); It; ++It)
+			{
+				TutorialGameMode = *It;
+				break;
+			}
+		}
+
+		ATutorialDebris* Debris = TutorialGameMode ? TutorialGameMode->GetTutorialDebris() : nullptr;
+		bAccepted = Debris && Debris->ApplyTutorialHitForServer(TutorialPlayerController);
+		if (Debris)
+		{
+			AttackTo = Debris->GetActorLocation();
+		}
+	}
+	else if (TutorialPlayerController->GetCurrentTutorialStep() == ETutorialStep::Attack)
+	{
+		TutorialPlayerController->NotifyTutorialAttackInput();
+	}
+
+	if (!bAccepted)
+	{
+		RecordAttackIgnoredForServer(FName(TEXT("TutorialDebrisUnavailable")));
+		return false;
+	}
+
+	RecordAttackIgnoredForServer(NAME_None);
+	const FVector AttackFrom = GetActorLocation();
+	Multicast_PlayDroneAttackVisual(
+		EquippedLeftWeaponPartID,
+		EquippedRightWeaponPartID,
+		1.0f,
+		AttackFrom,
+		AttackTo);
+	if (GetNetMode() == NM_Standalone)
+	{
+		PlayDroneAttackVisualLocally(
+			EquippedLeftWeaponPartID,
+			EquippedRightWeaponPartID,
+			1.0f,
+			AttackFrom,
+			AttackTo);
+	}
+
+	return true;
+}
+
 void ADrone::UpdateLocalCombatCamera(float DeltaSeconds)
 {
 	(void)DeltaSeconds;
@@ -2324,6 +2420,32 @@ bool ADrone::IsMovementAllowedForServer(FName& OutIgnoreReason) const
 		return false;
 	}
 
+	const ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController());
+	if (TutorialPC)
+	{
+		if (TutorialPC->GetPawn() != this)
+		{
+			OutIgnoreReason = FName(TEXT("NoPawn"));
+			return false;
+		}
+		if (bIsDead)
+		{
+			OutIgnoreReason = FName(TEXT("Dead"));
+			return false;
+		}
+		if (bIsDodging)
+		{
+			OutIgnoreReason = FName(TEXT("Dodging"));
+			return false;
+		}
+		if (!TutorialPC->IsTutorialMoveAllowed())
+		{
+			OutIgnoreReason = FName(TEXT("TutorialRestricted"));
+			return false;
+		}
+		return true;
+	}
+
 	const ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
 	if (!RaidPC || RaidPC->GetPawn() != this)
 	{
@@ -2596,6 +2718,47 @@ bool ADrone::IsDodgeAllowedForServer(const FVector2D& Direction, FName& OutIgnor
 	{
 		OutIgnoreReason = FName(TEXT("NotAuthority"));
 		return false;
+	}
+
+	const ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController());
+	if (TutorialPC)
+	{
+		if (TutorialPC->GetPawn() != this)
+		{
+			OutIgnoreReason = FName(TEXT("NoPawn"));
+			return false;
+		}
+		if (Direction.IsNearlyZero())
+		{
+			OutIgnoreReason = FName(TEXT("NoDirection"));
+			return false;
+		}
+		if (bIsDead)
+		{
+			OutIgnoreReason = FName(TEXT("Dead"));
+			return false;
+		}
+		if (bIsDodging)
+		{
+			OutIgnoreReason = FName(TEXT("AlreadyDodging"));
+			return false;
+		}
+		if (bIsAttacking)
+		{
+			OutIgnoreReason = FName(TEXT("Attacking"));
+			return false;
+		}
+		if (!TutorialPC->IsTutorialDodgeAllowed())
+		{
+			OutIgnoreReason = FName(TEXT("TutorialRestricted"));
+			return false;
+		}
+		if (GetDodgeCooldownRemaining() > KINDA_SMALL_NUMBER)
+		{
+			OutIgnoreReason = FName(TEXT("Cooldown"));
+			return false;
+		}
+		return true;
 	}
 
 	const ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
@@ -3022,12 +3185,14 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 		return false;
 	}
 
-	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	APlayerController* PlayerPC = Cast<APlayerController>(GetController());
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(PlayerPC);
+	ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(PlayerPC);
 	FName IgnoreReason;
 	if (!IsMovementAllowedForServer(IgnoreReason))
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerMoveIgnored PC=%s Reason=%s Axis=%s"),
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			IgnoreReason.IsNone() ? TEXT("Unknown") : *IgnoreReason.ToString(),
 			*Axis.ToString());
 		return false;
@@ -3052,7 +3217,7 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move ZLocked: FixedZ=%.2f Player=%s Before=%s"),
 			FixedZPosition,
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*RequestedLocation.ToString());
 	}
 	const FVector FinalLocation = ClampFinalMovementPositionForServer(RequestedLocation);
@@ -3081,7 +3246,7 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 		LastMoveAcceptedSummaryAxis = Axis;
 		bHasLastMoveAcceptedSummaryAxis = true;
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Move Accepted: Player=%s Axis=%s Speed=%.2f Delta2D=%.2f TotalDistance=%.2f"),
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*Axis.ToString(),
 			GetCurrentMoveSpeed(),
 			DeltaMetersForLog,
@@ -3092,20 +3257,25 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 	if (Now - LastServerMoveAppliedSummaryLogTime >= MoveDistanceSummaryLogIntervalSeconds)
 	{
 		LastServerMoveAppliedSummaryLogTime = Now;
-		const APawn* ControlledPawn = RaidPC->GetPawn();
-		const AActor* ViewTarget = RaidPC->GetViewTarget();
+		const APawn* ControlledPawn = PlayerPC ? PlayerPC->GetPawn() : nullptr;
+		const AActor* ViewTarget = PlayerPC ? PlayerPC->GetViewTarget() : nullptr;
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ServerMoveApplied PC=%s Drone=%s Pawn=%s bPawnMatchesDrone=%s Axis=%s Delta=%s ServerLocation=%s State=%s ReplicateMovement=%s ViewTarget=%s ViewTargetResult=%s"),
-			*BuildDroneControllerLogString(RaidPC),
+			*BuildDroneControllerLogString(PlayerPC),
 			*GetName(),
 			ControlledPawn ? *ControlledPawn->GetName() : TEXT("None"),
 			ControlledPawn == this ? TEXT("true") : TEXT("false"),
 			*Axis.ToString(),
 			*MoveDelta.ToString(),
 			*CurrentLocation.ToString(),
-			ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()),
+			RaidPC ? ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()) : TEXT("Tutorial"),
 			IsReplicatingMovement() ? TEXT("true") : TEXT("false"),
 			ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
 			TEXT("ServerObserved"));
+	}
+
+	if (TutorialPC)
+	{
+		TutorialPC->NotifyTutorialMoveInput(Axis);
 	}
 
 	return true;
