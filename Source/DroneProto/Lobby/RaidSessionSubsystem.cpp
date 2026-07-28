@@ -51,6 +51,105 @@ void URaidSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 
 	Assignment = NewObject<ULocalAssignment>(this);
+	LoadLocalProfile();
+}
+
+bool URaidSessionSubsystem::TryLoginWithCallsign(const FString& RawCallsign)
+{
+	FString NormalizedCallsign;
+	if (!TryNormalizeCallsign(RawCallsign, NormalizedCallsign))
+	{
+		return false;
+	}
+
+	Callsign = MoveTemp(NormalizedCallsign);
+	return SaveLocalProfile();
+}
+
+FName URaidSessionSubsystem::GetPostLoginMapName() const
+{
+	return bHasCompletedTutorial ? FName(TEXT("LobbyMap")) : FName(TEXT("TestMap"));
+}
+
+bool URaidSessionSubsystem::MarkTutorialCompleted()
+{
+	if (bHasCompletedTutorial)
+	{
+		return true;
+	}
+
+	bHasCompletedTutorial = true;
+	return SaveLocalProfile();
+}
+
+#if WITH_DEV_AUTOMATION_TESTS
+bool URaidSessionSubsystem::ReloadLocalProfileForTest()
+{
+	return LoadLocalProfile();
+}
+#endif
+
+bool URaidSessionSubsystem::LoadLocalProfile()
+{
+	Callsign = TEXT("AAA");
+	bHasCompletedTutorial = false;
+
+	if (!UGameplayStatics::DoesSaveGameExist(ProfileSaveSlotName, ProfileSaveUserIndex))
+	{
+		return false;
+	}
+
+	const UDroneLocalProfileSaveGame* Profile = Cast<UDroneLocalProfileSaveGame>(
+		UGameplayStatics::LoadGameFromSlot(ProfileSaveSlotName, ProfileSaveUserIndex));
+	if (!Profile)
+	{
+		return false;
+	}
+
+	FString NormalizedCallsign;
+	if (TryNormalizeCallsign(Profile->Callsign, NormalizedCallsign))
+	{
+		Callsign = MoveTemp(NormalizedCallsign);
+	}
+	bHasCompletedTutorial = Profile->bHasCompletedTutorial;
+	return true;
+}
+
+bool URaidSessionSubsystem::SaveLocalProfile() const
+{
+	UDroneLocalProfileSaveGame* Profile = Cast<UDroneLocalProfileSaveGame>(
+		UGameplayStatics::CreateSaveGameObject(UDroneLocalProfileSaveGame::StaticClass()));
+	if (!Profile)
+	{
+		return false;
+	}
+
+	Profile->Callsign = Callsign;
+	Profile->bHasCompletedTutorial = bHasCompletedTutorial;
+	return UGameplayStatics::SaveGameToSlot(Profile, ProfileSaveSlotName, ProfileSaveUserIndex);
+}
+
+bool URaidSessionSubsystem::TryNormalizeCallsign(const FString& RawCallsign, FString& OutCallsign)
+{
+	if (RawCallsign.Len() != 3)
+	{
+		return false;
+	}
+
+	OutCallsign.Reset(3);
+	for (const TCHAR Character : RawCallsign)
+	{
+		if ((Character < TEXT('A') || Character > TEXT('Z'))
+			&& (Character < TEXT('a') || Character > TEXT('z')))
+		{
+			OutCallsign.Reset();
+			return false;
+		}
+
+		OutCallsign.AppendChar(FChar::ToUpper(Character));
+	}
+
+	return true;
 }
 
 void URaidSessionSubsystem::SetActiveLobbyWidget(URaidLobbyWidget* InWidget)

@@ -4,6 +4,7 @@
 #include "EngineUtils.h"
 #include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
+#include "Lobby/RaidSessionSubsystem.h"
 #include "Tutorial/TutorialGameMode.h"
 
 void ATutorialPlayerController::SetupInputComponent()
@@ -69,7 +70,7 @@ bool ATutorialPlayerController::AdvanceTutorialStep()
 
 bool ATutorialPlayerController::CompleteTutorial()
 {
-	if (!bTutorialActive || CurrentTutorialStep != ETutorialStep::ClosingBriefing)
+	if (!HasAuthority() || !bTutorialActive || CurrentTutorialStep != ETutorialStep::ClosingBriefing)
 	{
 		return false;
 	}
@@ -78,8 +79,32 @@ bool ATutorialPlayerController::CompleteTutorial()
 	SetTutorialStep(ETutorialStep::Complete, FName(TEXT("Complete")));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Tutorial Complete Controller=%s"),
 		*GetNameSafe(this));
-	BP_OnTutorialComplete();
+	Client_PersistTutorialCompletion();
 	return true;
+}
+
+void ATutorialPlayerController::Client_PersistTutorialCompletion_Implementation()
+{
+	bool bSaved = false;
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (URaidSessionSubsystem* Session = GameInstance->GetSubsystem<URaidSessionSubsystem>())
+		{
+			bSaved = Session->MarkTutorialCompleted();
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] TutorialProfileSaved Controller=%s Result=%s"),
+		*GetNameSafe(this),
+		bSaved ? TEXT("Success") : TEXT("UnavailableOrFailed"));
+	if (!bSaved)
+	{
+		return;
+	}
+
+	bTutorialActive = false;
+	SetTutorialStep(ETutorialStep::Complete, FName(TEXT("ClientCompletion")));
+	BP_OnTutorialComplete();
 }
 
 bool ATutorialPlayerController::NotifyTutorialMoveInput(FVector2D RawAxis)

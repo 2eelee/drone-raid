@@ -187,6 +187,9 @@ struct DRONEPROTO_API FDroneReportData
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Report")
+	FString Callsign = TEXT("AAA");
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Report")
 	float SurvivalTime = 0.0f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Report")

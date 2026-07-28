@@ -27,6 +27,7 @@ void UDroneReportWidget::NativeConstruct()
 
 void UDroneReportWidget::RefreshReport(const FDroneReportData& InReportData)
 {
+	CachedCallsignText = FText::FromString(InReportData.Callsign.IsEmpty() ? TEXT("AAA") : InReportData.Callsign);
 	CachedSurvivalTimeText = FText::FromString(FString::Printf(TEXT("%.1f s"), InReportData.SurvivalTime));
 	CachedBossDamageText = FText::FromString(FString::Printf(TEXT("%.1f"), InReportData.BossDamage));
 	CachedBossDamageRatioText = FText::FromString(FString::Printf(TEXT("%.1f%%"), InReportData.BossDamageRatio * 100.0f));
@@ -36,6 +37,7 @@ void UDroneReportWidget::RefreshReport(const FDroneReportData& InReportData)
 	CachedAchievedBonusText = BuildAchievedBonusText(InReportData.AchievedBonusList);
 	CachedGradeText = GetGradeDisplayText(InReportData.Grade);
 
+	SetOptionalText(CallsignText, CachedCallsignText);
 	SetOptionalText(SurvivalTimeText, CachedSurvivalTimeText);
 	SetOptionalText(BossDamageText, CachedBossDamageText);
 	SetOptionalText(BossDamageRatioText, CachedBossDamageRatioText);
@@ -103,6 +105,11 @@ void UDroneReportWidget::RequestReturnToLobby()
 void UDroneReportWidget::HandleReturnToLobbyClicked()
 {
 	RequestReturnToLobby();
+}
+
+FText UDroneReportWidget::GetCallsignText() const
+{
+	return CachedCallsignText;
 }
 
 FText UDroneReportWidget::GetSurvivalTimeText() const

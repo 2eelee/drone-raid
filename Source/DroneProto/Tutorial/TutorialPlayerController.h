@@ -71,6 +71,9 @@ protected:
 	virtual void SetupInputComponent() override;
 
 private:
+	UFUNCTION(Client, Reliable)
+	void Client_PersistTutorialCompletion();
+
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
 	ETutorialStep CurrentTutorialStep = ETutorialStep::None;
 

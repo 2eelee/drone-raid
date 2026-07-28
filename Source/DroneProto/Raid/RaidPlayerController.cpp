@@ -3,6 +3,7 @@
 #include "Drone.h"
 #include "DronePartInventory.h"
 #include "DroneReportWidget.h"
+#include "Lobby/RaidSessionSubsystem.h"
 #include "RaidBoss.h"
 #include "RaidGameMode.h"
 #include "RaidGameState.h"
@@ -992,8 +993,17 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 	ShowBossHUDForLocalPlayer();
 }
 
-void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDroneReportData& ReportData)
+void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDroneReportData& ServerReportData)
 {
+	FDroneReportData ReportData = ServerReportData;
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (const URaidSessionSubsystem* Session = GameInstance->GetSubsystem<URaidSessionSubsystem>())
+		{
+			ReportData.Callsign = Session->GetCallsign();
+		}
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportClientReceived Player=%s Grade=%s BonusScore=%d"),
 		*BuildControllerLogString(this),
 		ReportGradeToLogString(ReportData.Grade),

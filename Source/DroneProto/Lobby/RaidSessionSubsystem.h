@@ -2,12 +2,26 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "GameFramework/SaveGame.h"
 #include "RaidAssignmentBase.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "TimerManager.h"
 #include "RaidSessionSubsystem.generated.h"
 
 class URaidLobbyWidget;
+
+UCLASS()
+class DRONEPROTO_API UDroneLocalProfileSaveGame : public USaveGame
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY()
+	FString Callsign = TEXT("AAA");
+
+	UPROPERTY()
+	bool bHasCompletedTutorial = false;
+};
 
 UCLASS()
 class DRONEPROTO_API URaidSessionSubsystem : public UGameInstanceSubsystem
@@ -22,6 +36,21 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Raid")
 	void RequestRaidEntry(const FString& SlotId);
+
+	UFUNCTION(BlueprintCallable, Category="Profile")
+	bool TryLoginWithCallsign(const FString& RawCallsign);
+
+	UFUNCTION(BlueprintPure, Category="Profile")
+	FString GetCallsign() const { return Callsign; }
+
+	UFUNCTION(BlueprintPure, Category="Profile")
+	bool HasCompletedTutorial() const { return bHasCompletedTutorial; }
+
+	UFUNCTION(BlueprintPure, Category="Profile")
+	FName GetPostLoginMapName() const;
+
+	UFUNCTION(BlueprintCallable, Category="Profile")
+	bool MarkTutorialCompleted();
 
 	UFUNCTION(BlueprintPure, Category="Raid")
 	bool IsSlotEnabled(const FString& SlotId) const;
@@ -60,6 +89,8 @@ public:
 	void ResetTravelRequestedForTest();
 	void RetryRaidEntryForTest();
 	void ExpireMatchmakingWaitForTest();
+	void SetProfileSaveSlotForTest(const FString& InSlotName) { ProfileSaveSlotName = InSlotName; }
+	bool ReloadLocalProfileForTest();
 #endif
 
 private:
@@ -83,9 +114,13 @@ private:
 	double MatchmakingWaitStartTimeSeconds = 0.0;
 	bool bMatchmakingRetryActive = false;
 	FRaidAssignmentResult LastAssignmentResult;
+	FString Callsign = TEXT("AAA");
+	bool bHasCompletedTutorial = false;
+	FString ProfileSaveSlotName = TEXT("DroneLocalProfile");
 
 	static constexpr double MatchmakingTimeoutSeconds = 10.0;
 	static constexpr float MatchmakingRetryIntervalSeconds = 1.0f;
+	static constexpr int32 ProfileSaveUserIndex = 0;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	bool bSuppressTravelForTest = false;
@@ -99,6 +134,9 @@ private:
 	void StopMatchmakingRetry();
 	void HandleMatchmakingRetry();
 	void HandleRaidEntryFailure(const FRaidAssignmentResult& Result);
+	bool LoadLocalProfile();
+	bool SaveLocalProfile() const;
+	static bool TryNormalizeCallsign(const FString& RawCallsign, FString& OutCallsign);
 	void TravelToRaidEndpoint(const FRaidAssignmentResult& Result);
 	void RecordAssignmentResult(const FRaidAssignmentResult& Result);
 	double GetMatchmakingNowSeconds() const;

@@ -21,6 +21,9 @@ public:
 	FText GetSurvivalTimeText() const;
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Report")
+	FText GetCallsignText() const;
+
+	UFUNCTION(BlueprintPure, Category = "Drone|Report")
 	FText GetBossDamageText() const;
 
 	UFUNCTION(BlueprintPure, Category = "Drone|Report")
@@ -62,6 +65,9 @@ protected:
 	TObjectPtr<UTextBlock> SurvivalTimeText = nullptr;
 
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional), Category = "Drone|Report")
+	TObjectPtr<UTextBlock> CallsignText = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional), Category = "Drone|Report")
 	TObjectPtr<UTextBlock> BossDamageText = nullptr;
 
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional), Category = "Drone|Report")
@@ -96,6 +102,7 @@ private:
 	void HandleReturnToLobbyClicked();
 
 	FText CachedSurvivalTimeText;
+	FText CachedCallsignText;
 	FText CachedBossDamageText;
 	FText CachedBossDamageRatioText;
 	FText CachedMoveDistanceText;

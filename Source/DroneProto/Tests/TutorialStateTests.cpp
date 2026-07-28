@@ -7,12 +7,16 @@
 #include "Tutorial/TutorialPlayerController.h"
 #include "Tutorial/TutorialTypes.h"
 #include "Drone.h"
+#include "Lobby/RaidSessionSubsystem.h"
+#include "Raid/DroneReportWidget.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
 
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Kismet/GameplayStatics.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneQ10TutorialStepSequenceTest,
@@ -295,6 +299,74 @@ bool FDronePOR23TutorialRealDroneFlowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("tutorial drone is invulnerable"), Drone->GetHealth(), HealthBeforeDamage);
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR23LocalProfilePersistenceTest,
+	"DroneProto.POR23.Profile.LocalPersistenceAndReport",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR23LocalProfilePersistenceTest::RunTest(const FString& Parameters)
+{
+	const FString TestSlot = TEXT("DroneProtoAutomation_POR23_LocalProfile");
+	UGameplayStatics::DeleteGameInSlot(TestSlot, 0);
+
+	UGameInstance* FirstGameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* FirstSession = NewObject<URaidSessionSubsystem>(FirstGameInstance);
+	TestNotNull(TEXT("first local profile session is created"), FirstSession);
+	if (!FirstSession)
+	{
+		return false;
+	}
+
+	FirstSession->SetProfileSaveSlotForTest(TestSlot);
+	TestFalse(TEXT("empty automation slot has no saved profile"), FirstSession->ReloadLocalProfileForTest());
+	TestEqual(TEXT("new profile starts with AAA callsign"), FirstSession->GetCallsign(), FString(TEXT("AAA")));
+	TestFalse(TEXT("new profile has not completed tutorial"), FirstSession->HasCompletedTutorial());
+	TestEqual(TEXT("new profile routes to tutorial map"), FirstSession->GetPostLoginMapName(), FName(TEXT("TestMap")));
+	TestFalse(TEXT("short callsign is rejected"), FirstSession->TryLoginWithCallsign(TEXT("AB")));
+	TestFalse(TEXT("non-letter callsign is rejected"), FirstSession->TryLoginWithCallsign(TEXT("A1C")));
+	TestTrue(TEXT("lowercase callsign is normalized and saved"), FirstSession->TryLoginWithCallsign(TEXT("aBc")));
+	TestEqual(TEXT("saved callsign is uppercase"), FirstSession->GetCallsign(), FString(TEXT("ABC")));
+
+	UGameInstance* SecondGameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* SecondSession = NewObject<URaidSessionSubsystem>(SecondGameInstance);
+	TestNotNull(TEXT("second local profile session is created"), SecondSession);
+	if (!SecondSession)
+	{
+		UGameplayStatics::DeleteGameInSlot(TestSlot, 0);
+		return false;
+	}
+
+	SecondSession->SetProfileSaveSlotForTest(TestSlot);
+	TestTrue(TEXT("saved profile reloads"), SecondSession->ReloadLocalProfileForTest());
+	TestEqual(TEXT("reloaded callsign is preserved"), SecondSession->GetCallsign(), FString(TEXT("ABC")));
+	TestFalse(TEXT("tutorial completion remains false before completion"), SecondSession->HasCompletedTutorial());
+	TestTrue(TEXT("tutorial completion is persisted"), SecondSession->MarkTutorialCompleted());
+	TestEqual(TEXT("completed profile routes to lobby"), SecondSession->GetPostLoginMapName(), FName(TEXT("LobbyMap")));
+
+	UGameInstance* ThirdGameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* ThirdSession = NewObject<URaidSessionSubsystem>(ThirdGameInstance);
+	TestNotNull(TEXT("third local profile session is created"), ThirdSession);
+	if (ThirdSession)
+	{
+		ThirdSession->SetProfileSaveSlotForTest(TestSlot);
+		TestTrue(TEXT("completed profile reloads"), ThirdSession->ReloadLocalProfileForTest());
+		TestTrue(TEXT("tutorial completion survives reload"), ThirdSession->HasCompletedTutorial());
+
+		FDroneReportData ReportData;
+		ReportData.Callsign = ThirdSession->GetCallsign();
+		UDroneReportWidget* ReportWidget = NewObject<UDroneReportWidget>();
+		TestNotNull(TEXT("report widget is created"), ReportWidget);
+		if (ReportWidget)
+		{
+			ReportWidget->RefreshReport(ReportData);
+			TestEqual(TEXT("DroneReport displays the local callsign"), ReportWidget->GetCallsignText().ToString(), FString(TEXT("ABC")));
+		}
+	}
+
+	UGameplayStatics::DeleteGameInSlot(TestSlot, 0);
 	return true;
 }
 
