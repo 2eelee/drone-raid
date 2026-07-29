@@ -44,6 +44,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tutorial")
 	bool IsTutorialActive() const { return bTutorialActive; }
 
+	UFUNCTION(BlueprintPure, Category = "Tutorial|Dialogue")
+	int32 GetCurrentTutorialDialogueIndex() const { return CurrentTutorialDialogueIndex; }
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial|Dialogue")
+	FText GetCurrentTutorialDialogueText() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tutorial|Dialogue")
+	bool IsCurrentTutorialDialogueReady() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial|Dialogue")
+	bool TryAdvanceTutorialDialogue();
+
 	UFUNCTION(BlueprintPure, Category = "Tutorial|Input")
 	bool IsTutorialMoveAllowed() const;
 
@@ -55,6 +67,9 @@ public:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
 	void BP_OnTutorialStepChanged(ETutorialStep PreviousStep, ETutorialStep NewStep);
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
+	void BP_OnTutorialDialogueChanged(ETutorialStep Step, int32 DialogueIndex, const FText& DialogueText);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|UI")
 	void BP_OnTutorialComplete();
@@ -74,8 +89,17 @@ private:
 	UFUNCTION(Client, Reliable)
 	void Client_PersistTutorialCompletion();
 
+	UFUNCTION(Server, Reliable)
+	void Server_RequestAdvanceTutorialDialogue();
+
+	UFUNCTION(Client, Reliable)
+	void Client_SyncTutorialPresentation(ETutorialStep Step, int32 DialogueIndex);
+
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
 	ETutorialStep CurrentTutorialStep = ETutorialStep::None;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Tutorial|Dialogue", meta = (AllowPrivateAccess = "true"))
+	int32 CurrentTutorialDialogueIndex = 0;
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
 	bool bTutorialActive = false;
@@ -92,8 +116,9 @@ private:
 #endif
 
 	void SetTutorialStep(ETutorialStep NewStep, FName Reason);
+	bool AdvanceTutorialDialogueForServer();
+	void SyncTutorialPresentationForOwner(ETutorialStep PreviousStep);
 	void HandleTutorialLeftPressed();
-	void HandleTutorialAttackPressed();
 	void HandleTutorialDodgePressed();
 	void HandleTutorialUpPressed();
 	void HandleTutorialUpReleased();

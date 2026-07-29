@@ -862,6 +862,14 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 
 void ADrone::RequestAttackBoss()
 {
+	if (ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController()))
+	{
+		if (TutorialPC->TryAdvanceTutorialDialogue())
+		{
+			return;
+		}
+	}
+
 	if (HasAuthority())
 	{
 		HandleAttackBossForServer();
