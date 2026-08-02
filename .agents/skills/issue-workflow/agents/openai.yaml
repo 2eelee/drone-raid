@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue Workflow"
+  short_description: "Run focused Linear issues end to end"
+  default_prompt: "Use $issue-workflow with POR-123 and a short instruction."

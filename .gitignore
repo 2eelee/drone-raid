@@ -512,3 +512,5 @@ AGENTS.md
 
 # 로컬 문서
 docs/*
+# Added by code-review-graph
+.code-review-graph/
