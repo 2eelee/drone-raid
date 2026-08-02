@@ -32,10 +32,15 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
+#include "Engine/Engine.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GameFramework/DefaultPawn.h"
 #include "TimerManager.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/SWindow.h"
 
 namespace
 {
@@ -1789,6 +1794,77 @@ bool FDronePartSelectUIKeyboardCombatStartTest::RunTest(const FString& Parameter
 	Widget->FocusPrevSlot();
 	TestFalse(TEXT("Up from CombatStart returns to the left weapon slot"), Widget->IsCombatStartFocused());
 
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIRestoresKeyboardFocusTest,
+	"DroneProto.D5.DronePartSelectUI.RestoresKeyboardFocusAfterWorldStartup",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIRestoresKeyboardFocusTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DronePartSelectUIRestoresKeyboardFocusWorld"));
+	TestNotNull(TEXT("focus restore world is created"), Context.World);
+	TestNotNull(TEXT("focus restore player controller is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	Context.PC->SetPlayer(LocalPlayer);
+	TestTrue(TEXT("focus restore player controller is local"), Context.PC->IsLocalController());
+	UClass* SelectWidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	TestNotNull(TEXT("part select widget asset class loads"), SelectWidgetClass);
+	Context.PC->DronePartSelectWidgetClass = SelectWidgetClass;
+	UDronePartSelectWidget* SelectWidget = CreateWidget<UDronePartSelectWidget>(Context.PC, SelectWidgetClass);
+	TestNotNull(TEXT("part select widget is created"), SelectWidget);
+	if (!SelectWidget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	SelectWidget->SetIsFocusable(true);
+	FObjectProperty* SelectWidgetProperty = FindFProperty<FObjectProperty>(
+		ARaidPlayerController::StaticClass(),
+		TEXT("DronePartSelectWidget"));
+	TestNotNull(TEXT("player controller exposes its select widget reference"), SelectWidgetProperty);
+	if (!SelectWidgetProperty)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	SelectWidgetProperty->SetObjectPropertyValue_InContainer(Context.PC, SelectWidget);
+
+	AddExpectedError(TEXT("DronePartSelectWidget has no ARaidPlayerController owning player"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("RefreshFromController skipped: Owning ARaidPlayerController is missing"), EAutomationExpectedErrorFlags::Contains, 1);
+	TSharedRef<SWindow> SelectWindow = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[SelectWidget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(SelectWindow, false);
+	AddExpectedError(TEXT("No game viewport was found"), EAutomationExpectedErrorFlags::Contains, 1);
+	Context.PC->DispatchBeginPlay();
+
+	TSharedRef<SEditableTextBox> StartupFocusSink = SNew(SEditableTextBox);
+	TSharedRef<SWindow> StartupWindow = SNew(SWindow)
+		.ClientSize(FVector2D(320.0f, 120.0f))
+		[StartupFocusSink];
+	FSlateApplication::Get().AddWindow(StartupWindow, false);
+	TestTrue(TEXT("later world startup can take the initial keyboard focus"),
+		FSlateApplication::Get().SetKeyboardFocus(StartupFocusSink, EFocusCause::SetDirectly));
+
+	TickWorldForAutomationTest(Context.World, 0.01f);
+	FSlateApplication::Get().Tick();
+	TestTrue(TEXT("part select widget restores keyboard focus after world startup"),
+		SelectWidget->HasKeyboardFocus());
+
+	FSlateApplication::Get().RequestDestroyWindow(StartupWindow);
+	FSlateApplication::Get().RequestDestroyWindow(SelectWindow);
 	DestroyDroneSelectionTestContext(Context);
 	return true;
 }

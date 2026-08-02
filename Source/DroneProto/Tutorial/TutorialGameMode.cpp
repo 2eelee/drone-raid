@@ -1,6 +1,7 @@
 #include "Tutorial/TutorialGameMode.h"
 
 #include "Drone.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Raid/DronePartInventory.h"
 #include "Tutorial/TutorialDebris.h"
 #include "Tutorial/TutorialPlayerController.h"
@@ -8,8 +9,26 @@
 ATutorialGameMode::ATutorialGameMode()
 {
 	PlayerControllerClass = ATutorialPlayerController::StaticClass();
+	static ConstructorHelpers::FClassFinder<ADrone> DronePawnClass(TEXT("/Game/BP_Drone"));
 	DefaultPawnClass = ADrone::StaticClass();
+	if (DronePawnClass.Succeeded())
+	{
+		DefaultPawnClass = DronePawnClass.Class;
+	}
 	TutorialDebrisClass = ATutorialDebris::StaticClass();
+}
+
+void ATutorialGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
+{
+	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+
+	if (ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(NewPlayer))
+	{
+		if (StartTutorialForController(TutorialPC))
+		{
+			AdvanceTutorialForController(TutorialPC);
+		}
+	}
 }
 
 bool ATutorialGameMode::StartTutorialForController(ATutorialPlayerController* TutorialPlayerController)

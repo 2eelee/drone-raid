@@ -1,11 +1,10 @@
 #include "Tutorial/TutorialPlayerController.h"
 
-#include "Components/InputComponent.h"
 #include "EngineUtils.h"
-#include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Lobby/RaidSessionSubsystem.h"
 #include "Tutorial/TutorialGameMode.h"
+#include "Tutorial/TutorialHUDWidget.h"
 
 namespace
 {
@@ -69,19 +68,39 @@ bool IsDialogueOnlyStep(ETutorialStep Step)
 }
 }
 
-void ATutorialPlayerController::SetupInputComponent()
+ATutorialPlayerController::ATutorialPlayerController()
 {
-	Super::SetupInputComponent();
+	TutorialHUDWidgetClass = TSoftClassPtr<UTutorialHUDWidget>(
+		FSoftObjectPath(TEXT("/Game/WBP_TutorialHUD.WBP_TutorialHUD_C")));
+}
 
-	if (!InputComponent)
+void ATutorialPlayerController::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsLocalController() || GetNetMode() == NM_DedicatedServer)
 	{
 		return;
 	}
 
-	InputComponent->BindKey(EKeys::Left, IE_Pressed, this, &ATutorialPlayerController::HandleTutorialLeftPressed);
-	InputComponent->BindKey(EKeys::Up, IE_Pressed, this, &ATutorialPlayerController::HandleTutorialUpPressed);
-	InputComponent->BindKey(EKeys::Up, IE_Released, this, &ATutorialPlayerController::HandleTutorialUpReleased);
-	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ATutorialPlayerController::HandleTutorialDodgePressed);
+	SetInputMode(FInputModeGameOnly());
+	bShowMouseCursor = false;
+
+	UClass* WidgetClass = TutorialHUDWidgetClass.LoadSynchronous();
+	if (!WidgetClass)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] TutorialHUDMissing Class=%s Controller=%s"),
+			*TutorialHUDWidgetClass.ToString(),
+			*GetNameSafe(this));
+		return;
+	}
+
+	ActiveTutorialHUD = CreateWidget<UTutorialHUDWidget>(this, WidgetClass);
+	if (ActiveTutorialHUD)
+	{
+		ActiveTutorialHUD->AddToViewport();
+		RefreshTutorialHUD();
+	}
 }
 
 void ATutorialPlayerController::StartTutorial()
@@ -187,6 +206,7 @@ void ATutorialPlayerController::Client_PersistTutorialCompletion_Implementation(
 
 	bTutorialActive = false;
 	BP_OnTutorialComplete();
+	ReturnToLobbyAfterTutorial();
 }
 
 FText ATutorialPlayerController::GetCurrentTutorialDialogueText() const
@@ -256,13 +276,26 @@ bool ATutorialPlayerController::AdvanceTutorialDialogueForServer()
 	return IsDialogueOnlyStep(CurrentTutorialStep) && AdvanceTutorialStep();
 }
 
-bool ATutorialPlayerController::NotifyTutorialMoveInput(FVector2D RawAxis)
+bool ATutorialPlayerController::NotifyTutorialMoveInput(
+	FVector2D RawAxis,
+	float AppliedDistanceMeters)
 {
 	if (!HasAuthority()
 		|| !bTutorialActive
 		|| CurrentTutorialStep != ETutorialStep::Move
-		|| !IsCurrentTutorialDialogueReady()
-		|| RawAxis.IsNearlyZero())
+		|| !IsCurrentTutorialDialogueReady())
+	{
+		return false;
+	}
+
+	if (!RawAxis.IsNearlyZero())
+	{
+		AccumulatedTutorialMoveDistanceMeters += FMath::Max(0.0f, AppliedDistanceMeters);
+		return false;
+	}
+
+	if (AccumulatedTutorialMoveDistanceMeters + KINDA_SMALL_NUMBER
+		< TutorialMoveDistanceRequiredMeters)
 	{
 		return false;
 	}
@@ -277,6 +310,21 @@ bool ATutorialPlayerController::NotifyTutorialAttackInput()
 		|| !bTutorialActive
 		|| CurrentTutorialStep != ETutorialStep::Attack
 		|| !IsCurrentTutorialDialogueReady())
+	{
+		return false;
+	}
+
+	bTutorialAttackInputPending = true;
+	return true;
+}
+
+bool ATutorialPlayerController::NotifyTutorialAttackInputReleased()
+{
+	if (!HasAuthority()
+		|| !bTutorialActive
+		|| CurrentTutorialStep != ETutorialStep::Attack
+		|| !IsCurrentTutorialDialogueReady()
+		|| !bTutorialAttackInputPending)
 	{
 		return false;
 	}
@@ -398,6 +446,8 @@ void ATutorialPlayerController::SetTutorialStep(ETutorialStep NewStep, FName Rea
 	const ETutorialStep PreviousStep = CurrentTutorialStep;
 	CurrentTutorialStep = NewStep;
 	CurrentTutorialDialogueIndex = 0;
+	AccumulatedTutorialMoveDistanceMeters = 0.0f;
+	bTutorialAttackInputPending = false;
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Tutorial Step=%s Previous=%s Reason=%s Controller=%s"),
 		ToTutorialStepLogString(CurrentTutorialStep),
@@ -438,6 +488,7 @@ void ATutorialPlayerController::SyncTutorialPresentationForOwner(ETutorialStep P
 			CurrentTutorialStep,
 			CurrentTutorialDialogueIndex,
 			GetCurrentTutorialDialogueText());
+		RefreshTutorialHUD();
 		return;
 	}
 
@@ -461,27 +512,17 @@ void ATutorialPlayerController::Client_SyncTutorialPresentation_Implementation(
 		CurrentTutorialStep,
 		CurrentTutorialDialogueIndex,
 		GetCurrentTutorialDialogueText());
+	RefreshTutorialHUD();
 }
 
-void ATutorialPlayerController::HandleTutorialLeftPressed()
+void ATutorialPlayerController::RefreshTutorialHUD()
 {
-	NotifyTutorialMoveInput(FVector2D(-1.0f, 0.0f));
-}
-
-void ATutorialPlayerController::HandleTutorialDodgePressed()
-{
-	if (bUpPressedForTutorialDodge)
+	if (ActiveTutorialHUD)
 	{
-		NotifyTutorialDodgeInput(FVector2D(0.0f, 1.0f));
+		ActiveTutorialHUD->RefreshTutorial(
+			CurrentTutorialStep,
+			CurrentTutorialDialogueIndex,
+			GetCurrentTutorialDialogueText(),
+			IsCurrentTutorialDialogueReady());
 	}
-}
-
-void ATutorialPlayerController::HandleTutorialUpPressed()
-{
-	bUpPressedForTutorialDodge = true;
-}
-
-void ATutorialPlayerController::HandleTutorialUpReleased()
-{
-	bUpPressedForTutorialDodge = false;
 }

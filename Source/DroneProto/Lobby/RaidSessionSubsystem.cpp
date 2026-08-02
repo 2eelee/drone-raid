@@ -63,12 +63,43 @@ bool URaidSessionSubsystem::TryLoginWithCallsign(const FString& RawCallsign)
 	}
 
 	Callsign = MoveTemp(NormalizedCallsign);
-	return SaveLocalProfile();
+	const bool bSaved = SaveLocalProfile();
+	bCallsignIdentified = bSaved;
+	return bSaved;
+}
+
+bool URaidSessionSubsystem::TryLoginWithCallsignAndTravel(const FString& RawCallsign)
+{
+	if (!TryLoginWithCallsign(RawCallsign))
+	{
+		return false;
+	}
+
+	UGameInstance* GameInstance = GetGameInstance();
+	UWorld* World = GameInstance ? GameInstance->GetWorld() : nullptr;
+	if (!World)
+	{
+		return false;
+	}
+
+	UGameplayStatics::OpenLevel(
+		World,
+		GetPostLoginMapName(),
+		true,
+		GetPostLoginTravelOptions());
+	return true;
 }
 
 FName URaidSessionSubsystem::GetPostLoginMapName() const
 {
 	return bHasCompletedTutorial ? FName(TEXT("LobbyMap")) : FName(TEXT("TestMap"));
+}
+
+FString URaidSessionSubsystem::GetPostLoginTravelOptions() const
+{
+	return bHasCompletedTutorial
+		? FString()
+		: TEXT("game=/Script/DroneProto.TutorialGameMode");
 }
 
 bool URaidSessionSubsystem::MarkTutorialCompleted()

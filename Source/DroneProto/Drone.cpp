@@ -314,6 +314,7 @@ void ADrone::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	}
 
 	PlayerInputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ADrone::RequestAttackBoss);
+	PlayerInputComponent->BindKey(EKeys::Z, IE_Released, this, &ADrone::FinishTutorialAttackInput);
 }
 
 void ADrone::Move(const FInputActionValue& Value)
@@ -393,6 +394,19 @@ void ADrone::ClearMoveInputForDodge(const FInputActionValue& Value)
 {
 	(void)Value;
 	ClearCachedMoveInputForDodge();
+	if (Cast<ATutorialPlayerController>(GetController()))
+	{
+		if (HasAuthority())
+		{
+			ApplyMoveInputForServer(FVector2D::ZeroVector);
+		}
+		else
+		{
+			Server_FinishTutorialMoveInput();
+		}
+		return;
+	}
+
 	if (HasAuthority())
 	{
 		ApplyMoveInputForServer(FVector2D::ZeroVector);
@@ -719,11 +733,6 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		ViewTarget ? *ViewTarget->GetName() : TEXT("None"),
 		TEXT("ServerObserved"));
 
-	if (TutorialPC)
-	{
-		TutorialPC->NotifyTutorialDodgeInput(Direction);
-	}
-
 	return true;
 }
 
@@ -879,6 +888,23 @@ void ADrone::RequestAttackBoss()
 	Server_RequestAttackBoss();
 }
 
+void ADrone::FinishTutorialAttackInput()
+{
+	ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController());
+	if (!TutorialPC)
+	{
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		TutorialPC->NotifyTutorialAttackInputReleased();
+		return;
+	}
+
+	Server_FinishTutorialAttackInput();
+}
+
 void ADrone::RequestDodge(FVector2D RawDirection)
 {
 	if (HasAuthority())
@@ -907,6 +933,19 @@ bool ADrone::RequestDodgeFromCurrentMoveInput()
 void ADrone::Server_RequestAttackBoss_Implementation()
 {
 	HandleAttackBossForServer();
+}
+
+void ADrone::Server_FinishTutorialAttackInput_Implementation()
+{
+	if (ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController()))
+	{
+		TutorialPC->NotifyTutorialAttackInputReleased();
+	}
+}
+
+void ADrone::Server_FinishTutorialMoveInput_Implementation()
+{
+	ApplyMoveInputForServer(FVector2D::ZeroVector);
 }
 
 void ADrone::Server_RequestDodge_Implementation(FVector2D RawDirection)
@@ -1357,6 +1396,11 @@ bool ADrone::ApplyMoveInputForServerForTest(FVector2D RawAxis)
 bool ADrone::ApplyPendingServerMoveInputForTest(float DeltaSeconds)
 {
 	return ApplyPendingServerMoveInputForServer(DeltaSeconds);
+}
+
+void ADrone::FinishTutorialAttackInputForTest()
+{
+	FinishTutorialAttackInput();
 }
 
 void ADrone::UpdateMoveDistanceForServerForTest(float DeltaSeconds)
@@ -3126,6 +3170,15 @@ void ADrone::EndDodgeForServer()
 		BP_OnDodgeVisualStateChanged(false);
 	}
 
+	if (bHadDodgeState)
+	{
+		if (ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController()))
+		{
+			TutorialPC->NotifyTutorialDodgeInput(
+				FVector2D(DodgeDirectionForServer.X, DodgeDirectionForServer.Y));
+		}
+	}
+
 	LastServerMoveInput = FVector2D::ZeroVector;
 	ClearDodgeInterpolationForServer();
 	ForceNetUpdate();
@@ -3153,6 +3206,17 @@ bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 	const FVector2D Axis = ClampMoveInputAxisForServer(RawAxis, bWasClamped);
 	LastServerMoveInput = FVector2D::ZeroVector;
 
+	if (Axis.IsNearlyZero())
+	{
+		if (ATutorialPlayerController* TutorialPC = Cast<ATutorialPlayerController>(GetController()))
+		{
+			TutorialPC->NotifyTutorialMoveInput(FVector2D::ZeroVector, 0.0f);
+		}
+		bMoveAcceptedSummaryInputActive = false;
+		LogMoveInputSummary(TEXT("Ignored"), TEXT("ZeroAxis"), Axis);
+		return false;
+	}
+
 	FName IgnoreReason;
 	if (!IsMovementAllowedForServer(IgnoreReason))
 	{
@@ -3162,13 +3226,6 @@ bool ADrone::ApplyMoveInputForServer(FVector2D RawAxis)
 		}
 		bMoveAcceptedSummaryInputActive = false;
 		LogMoveInputSummary(TEXT("Ignored"), IgnoreReason.IsNone() ? TEXT("Unknown") : *IgnoreReason.ToString(), Axis);
-		return false;
-	}
-
-	if (Axis.IsNearlyZero())
-	{
-		bMoveAcceptedSummaryInputActive = false;
-		LogMoveInputSummary(TEXT("Ignored"), TEXT("ZeroAxis"), Axis);
 		return false;
 	}
 
@@ -3283,7 +3340,7 @@ bool ADrone::ApplyPendingServerMoveInputForServer(float DeltaSeconds)
 
 	if (TutorialPC)
 	{
-		TutorialPC->NotifyTutorialMoveInput(Axis);
+		TutorialPC->NotifyTutorialMoveInput(Axis, DeltaMetersForLog);
 	}
 
 	return true;

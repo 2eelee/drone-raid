@@ -4,9 +4,11 @@
 
 #include "Tutorial/TutorialGameMode.h"
 #include "Tutorial/TutorialDebris.h"
+#include "Tutorial/TutorialHUDWidget.h"
 #include "Tutorial/TutorialPlayerController.h"
 #include "Tutorial/TutorialTypes.h"
 #include "Drone.h"
+#include "Lobby/RaidLobbyWidget.h"
 #include "Lobby/RaidSessionSubsystem.h"
 #include "Raid/DroneReportWidget.h"
 #include "Raid/RaidBoss.h"
@@ -16,7 +18,16 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/EditableTextBox.h"
+#include "Components/StaticMeshComponent.h"
+#include "Components/TextBlock.h"
+#include "GameFramework/WorldSettings.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/SWindow.h"
 #include "Kismet/GameplayStatics.h"
+#include "UObject/UnrealType.h"
 
 namespace
 {
@@ -58,6 +69,105 @@ bool AdvanceDialogueStepToNext(ATutorialPlayerController* TutorialPC)
 	}
 	return TutorialPC->GetCurrentTutorialStep() != InitialStep;
 }
+
+bool CompleteTutorialMoveStep(ATutorialPlayerController* TutorialPC)
+{
+	if (!TutorialPC)
+	{
+		return false;
+	}
+
+	TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f), 1.5f);
+	return TutorialPC->NotifyTutorialMoveInput(FVector2D::ZeroVector, 0.0f);
+}
+
+bool CompleteTutorialAttackStep(ATutorialPlayerController* TutorialPC)
+{
+	return TutorialPC
+		&& TutorialPC->NotifyTutorialAttackInput()
+		&& TutorialPC->NotifyTutorialAttackInputReleased();
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR23AssetContractTest,
+	"DroneProto.POR23.Assets.MapAndWidgetContracts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR23AssetContractTest::RunTest(const FString& Parameters)
+{
+	UWorld* LobbyMap = LoadObject<UWorld>(nullptr, TEXT("/Game/LobbyMap.LobbyMap"));
+	UWorld* TestMap = LoadObject<UWorld>(nullptr, TEXT("/Game/TestMap.TestMap"));
+	TestNotNull(TEXT("LobbyMap asset loads"), LobbyMap);
+	TestNotNull(TEXT("TestMap asset loads"), TestMap);
+
+	if (LobbyMap)
+	{
+		const AWorldSettings* LobbyWorldSettings = LobbyMap->GetWorldSettings();
+		TestNotNull(TEXT("LobbyMap has world settings"), LobbyWorldSettings);
+		if (LobbyWorldSettings)
+		{
+			TestEqual(
+				TEXT("LobbyMap keeps its lobby game mode"),
+				GetNameSafe(LobbyWorldSettings->DefaultGameMode),
+				FString(TEXT("BP_LobbyGameMode_C")));
+		}
+	}
+
+	if (TestMap)
+	{
+		const AWorldSettings* TestWorldSettings = TestMap->GetWorldSettings();
+		TestNotNull(TEXT("TestMap has world settings"), TestWorldSettings);
+		if (TestWorldSettings)
+		{
+			TestEqual(
+				TEXT("TestMap keeps its raid game mode for normal raid entry"),
+				GetNameSafe(TestWorldSettings->DefaultGameMode),
+				FString(TEXT("BP_RaidGameMode_C")));
+		}
+	}
+
+	UClass* TutorialHUDClass = LoadClass<UTutorialHUDWidget>(
+		nullptr,
+		TEXT("/Game/WBP_TutorialHUD.WBP_TutorialHUD_C"));
+	UClass* DroneReportClass = LoadClass<UDroneReportWidget>(
+		nullptr,
+		TEXT("/Game/WBP_DroneReport.WBP_DroneReport_C"));
+	TestNotNull(TEXT("tutorial HUD Blueprint class loads"), TutorialHUDClass);
+	TestNotNull(TEXT("DroneReport Blueprint class loads"), DroneReportClass);
+
+	UWorld* WidgetWorld = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("POR23AssetContractWorld")));
+	TestNotNull(TEXT("asset contract widget world is created"), WidgetWorld);
+	if (!WidgetWorld)
+	{
+		return false;
+	}
+
+	if (TutorialHUDClass)
+	{
+		UTutorialHUDWidget* TutorialHUD = CreateWidget<UTutorialHUDWidget>(WidgetWorld, TutorialHUDClass);
+		TestNotNull(TEXT("tutorial HUD Blueprint instance is created"), TutorialHUD);
+		if (TutorialHUD && TutorialHUD->WidgetTree)
+		{
+			TestNotNull(TEXT("tutorial HUD binds DialoguePanel"), TutorialHUD->WidgetTree->FindWidget(TEXT("DialoguePanel")));
+			TestNotNull(TEXT("tutorial HUD binds DialogueText"), TutorialHUD->WidgetTree->FindWidget(TEXT("DialogueText")));
+			TestNotNull(TEXT("tutorial HUD binds StepText"), TutorialHUD->WidgetTree->FindWidget(TEXT("StepText")));
+			TestNotNull(TEXT("tutorial HUD binds InputHintText"), TutorialHUD->WidgetTree->FindWidget(TEXT("InputHintText")));
+		}
+	}
+
+	if (DroneReportClass)
+	{
+		UDroneReportWidget* DroneReport = CreateWidget<UDroneReportWidget>(WidgetWorld, DroneReportClass);
+		TestNotNull(TEXT("DroneReport Blueprint instance is created"), DroneReport);
+		if (DroneReport && DroneReport->WidgetTree)
+		{
+			TestNotNull(TEXT("DroneReport binds CallsignText"), DroneReport->WidgetTree->FindWidget(TEXT("CallsignText")));
+		}
+	}
+
+	WidgetWorld->DestroyWorld(false);
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -109,14 +219,19 @@ bool FDroneQ10TutorialStepSequenceTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("dialogue advance cannot skip move"), TutorialPC->AdvanceTutorialStep());
 	TestFalse(TEXT("movement is blocked before final instruction"), TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f)));
 	TestTrue(TEXT("Z reveals final move instruction"), TutorialPC->TryAdvanceTutorialDialogue());
-	TestTrue(TEXT("actual movement advances to attack"), TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f)));
-	TestEqual(TEXT("movement completion enters attack"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Attack);
+	TestFalse(TEXT("short movement does not end the move step"), TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f), 1.0f));
+	TestFalse(TEXT("releasing before enough movement keeps the move step"), TutorialPC->NotifyTutorialMoveInput(FVector2D::ZeroVector, 0.0f));
+	TestFalse(TEXT("enough movement waits for input release"), TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f), 0.5f));
+	TestTrue(TEXT("releasing after 1.5 meters advances to attack"), TutorialPC->NotifyTutorialMoveInput(FVector2D::ZeroVector, 0.0f));
+	TestEqual(TEXT("movement release enters attack"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Attack);
 
 	TestFalse(TEXT("attack is blocked before final instruction"), TutorialPC->NotifyTutorialAttackInput());
 	TestTrue(TEXT("Z advances first attack instruction"), TutorialPC->TryAdvanceTutorialDialogue());
 	TestTrue(TEXT("Z advances second attack instruction"), TutorialPC->TryAdvanceTutorialDialogue());
-	TestTrue(TEXT("actual attack advances to dodge"), TutorialPC->NotifyTutorialAttackInput());
-	TestEqual(TEXT("attack completion enters dodge"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Dodge);
+	TestTrue(TEXT("actual attack is accepted"), TutorialPC->NotifyTutorialAttackInput());
+	TestEqual(TEXT("attack press keeps the attack step"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Attack);
+	TestTrue(TEXT("attack release advances to dodge"), TutorialPC->NotifyTutorialAttackInputReleased());
+	TestEqual(TEXT("attack release enters dodge"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Dodge);
 
 	TestFalse(TEXT("dodge is blocked before final instruction"), TutorialPC->NotifyTutorialDodgeInput(FVector2D(0.0f, 1.0f)));
 	TestTrue(TEXT("Z advances first dodge instruction"), TutorialPC->TryAdvanceTutorialDialogue());
@@ -184,9 +299,9 @@ bool FDroneQ10TutorialIsolationAndReturnTest::RunTest(const FString& Parameters)
 	TutorialPC->AdvanceTutorialStep();
 	AdvanceDialogueStepToNext(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TutorialPC->NotifyTutorialMoveInput(FVector2D(-1.0f, 0.0f));
+	CompleteTutorialMoveStep(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TutorialPC->NotifyTutorialAttackInput();
+	CompleteTutorialAttackStep(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
 	TutorialPC->NotifyTutorialDodgeInput(FVector2D(0.0f, 1.0f));
 	AdvanceDialogueStepToNext(TutorialPC);
@@ -220,8 +335,28 @@ bool FDronePOR23TutorialDebrisTest::RunTest(const FString& Parameters)
 
 	ATutorialPlayerController* TutorialPC = World->SpawnActor<ATutorialPlayerController>();
 	ATutorialDebris* Debris = World->SpawnActor<ATutorialDebris>();
+	UStaticMeshComponent* DebrisMesh = Debris ? Debris->FindComponentByClass<UStaticMeshComponent>() : nullptr;
+	FProperty* HitCountProperty = FindFProperty<FProperty>(ATutorialDebris::StaticClass(), TEXT("TutorialHitCount"));
+	FProperty* DestroyedProperty = FindFProperty<FProperty>(ATutorialDebris::StaticClass(), TEXT("bTutorialDebrisDestroyed"));
 	TestNotNull(TEXT("tutorial controller is spawned"), TutorialPC);
 	TestNotNull(TEXT("tutorial debris is spawned"), Debris);
+	TestNotNull(TEXT("tutorial debris has a visible mesh component"), DebrisMesh);
+	if (DebrisMesh)
+	{
+		TestNotNull(TEXT("tutorial debris mesh component has a mesh asset"), DebrisMesh->GetStaticMesh().Get());
+	}
+	TestNotNull(TEXT("tutorial hit count is reflected"), HitCountProperty);
+	TestNotNull(TEXT("tutorial destroyed state is reflected"), DestroyedProperty);
+	if (HitCountProperty)
+	{
+		TestEqual(TEXT("tutorial hit effects use a client RepNotify"),
+			HitCountProperty->RepNotifyFunc, FName(TEXT("OnRep_TutorialHitCount")));
+	}
+	if (DestroyedProperty)
+	{
+		TestEqual(TEXT("tutorial destroy effects use a client RepNotify"),
+			DestroyedProperty->RepNotifyFunc, FName(TEXT("OnRep_TutorialDebrisDestroyed")));
+	}
 	if (!TutorialPC || !Debris)
 	{
 		World->DestroyWorld(false);
@@ -232,9 +367,9 @@ bool FDronePOR23TutorialDebrisTest::RunTest(const FString& Parameters)
 	TutorialPC->AdvanceTutorialStep();
 	AdvanceDialogueStepToNext(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f));
+	CompleteTutorialMoveStep(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TutorialPC->NotifyTutorialAttackInput();
+	CompleteTutorialAttackStep(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
 	TutorialPC->NotifyTutorialDodgeInput(FVector2D(0.0f, 1.0f));
 	AdvanceDialogueStepToNext(TutorialPC);
@@ -248,9 +383,19 @@ bool FDronePOR23TutorialDebrisTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("second hit does not destroy debris"), Debris->IsTutorialDebrisDestroyed());
 	TestTrue(TEXT("third actual hit is accepted"), Debris->ApplyTutorialHitForServer(TutorialPC));
 	TestEqual(TEXT("third hit count"), Debris->GetTutorialHitCount(), 3);
-	TestTrue(TEXT("third hit destroys debris"), Debris->IsTutorialDebrisDestroyed());
-	TestEqual(TEXT("debris destruction enters closing briefing"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::ClosingBriefing);
-	TestFalse(TEXT("destroyed debris rejects extra hits"), Debris->ApplyTutorialHitForServer(TutorialPC));
+	TestFalse(TEXT("third hit waits for the attack visual before destroying debris"), Debris->IsTutorialDebrisDestroyed());
+	TestEqual(TEXT("attack visual window keeps debris combat active"),
+		TutorialPC->GetCurrentTutorialStep(),
+		ETutorialStep::DebrisCombat);
+	TestFalse(TEXT("pending destruction rejects extra hits"), Debris->ApplyTutorialHitForServer(TutorialPC));
+	Debris->Tick(0.44f);
+	TestFalse(TEXT("debris remains during the attack visual"), Debris->IsTutorialDebrisDestroyed());
+	Debris->Tick(0.02f);
+	TestTrue(TEXT("debris is destroyed after the attack visual"), Debris->IsTutorialDebrisDestroyed());
+	TestTrue(TEXT("destroyed debris is hidden after the attack visual"), Debris->IsHidden());
+	TestEqual(TEXT("debris destruction then enters closing briefing"),
+		TutorialPC->GetCurrentTutorialStep(),
+		ETutorialStep::ClosingBriefing);
 
 	World->DestroyWorld(false);
 	return true;
@@ -284,16 +429,19 @@ bool FDronePOR23TutorialGameModeSpawnTest::RunTest(const FString& Parameters)
 
 	World->AddController(TutorialPC);
 	TutorialPC->Possess(Drone);
-	TestTrue(TEXT("tutorial game mode uses the real drone class"), GameMode->DefaultPawnClass == ADrone::StaticClass());
+	TestTrue(TEXT("tutorial game mode uses the configured playable drone class"),
+		GameMode->DefaultPawnClass
+			&& GameMode->DefaultPawnClass != ADrone::StaticClass()
+			&& GameMode->DefaultPawnClass->IsChildOf(ADrone::StaticClass()));
 	TestNull(TEXT("tutorial starts without debris"), GameMode->GetTutorialDebris());
 
 	GameMode->StartTutorialForController(TutorialPC);
 	GameMode->AdvanceTutorialForController(TutorialPC);
 	AdvanceDialogueStepToNext(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TutorialPC->NotifyTutorialMoveInput(FVector2D(1.0f, 0.0f));
+	CompleteTutorialMoveStep(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TutorialPC->NotifyTutorialAttackInput();
+	CompleteTutorialAttackStep(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
 	TutorialPC->NotifyTutorialDodgeInput(FVector2D(0.0f, 1.0f));
 	AdvanceDialogueStepToNext(TutorialPC);
@@ -333,6 +481,16 @@ bool FDronePOR23TutorialRealDroneFlowTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("real flow game mode is spawned"), GameMode);
 	TestNotNull(TEXT("real flow controller is spawned"), TutorialPC);
 	TestNotNull(TEXT("real flow drone is spawned"), Drone);
+	const UFunction* MoveReleaseRPC =
+		ADrone::StaticClass()->FindFunctionByName(FName(TEXT("Server_FinishTutorialMoveInput")));
+	TestNotNull(TEXT("tutorial move release has a dedicated RPC"), MoveReleaseRPC);
+	if (MoveReleaseRPC)
+	{
+		TestTrue(TEXT("tutorial move release RPC is server-authoritative"),
+			MoveReleaseRPC->HasAnyFunctionFlags(FUNC_NetServer));
+		TestTrue(TEXT("tutorial move release RPC is reliable"),
+			MoveReleaseRPC->HasAnyFunctionFlags(FUNC_NetReliable));
+	}
 	if (!GameMode || !TutorialPC || !Drone)
 	{
 		World->DestroyWorld(false);
@@ -347,21 +505,29 @@ bool FDronePOR23TutorialRealDroneFlowTest::RunTest(const FString& Parameters)
 	GameMode->AdvanceTutorialForController(TutorialPC);
 	AdvanceDialogueStepToNext(TutorialPC);
 	RevealFinalTutorialDialogue(TutorialPC);
-	TestTrue(TEXT("real drone move input is accepted during move step"), Drone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
-	TestTrue(TEXT("real drone movement is applied"), Drone->ApplyPendingServerMoveInputForTest(0.1f));
-	TestEqual(TEXT("real movement advances tutorial"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Attack);
+	for (int32 MoveSample = 0; MoveSample < 4; ++MoveSample)
+	{
+		TestTrue(TEXT("real drone move input is accepted during move step"), Drone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
+		TestTrue(TEXT("real drone movement is applied"), Drone->ApplyPendingServerMoveInputForTest(0.1f));
+	}
+	TestEqual(TEXT("enough real movement waits for release"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Move);
+	TestFalse(TEXT("move release is not itself movement"), Drone->ApplyMoveInputForServerForTest(FVector2D::ZeroVector));
+	TestEqual(TEXT("real movement release advances tutorial"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Attack);
 
 	Drone->RequestAttackBoss();
 	TestEqual(TEXT("first Z advances attack dialogue"), TutorialPC->GetCurrentTutorialDialogueIndex(), 1);
 	Drone->RequestAttackBoss();
 	TestEqual(TEXT("second Z reveals attack instruction"), TutorialPC->GetCurrentTutorialDialogueIndex(), 2);
 	Drone->RequestAttackBoss();
-	TestEqual(TEXT("real attack advances tutorial without a target"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Dodge);
+	TestEqual(TEXT("real attack waits for Z release"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Attack);
+	Drone->FinishTutorialAttackInputForTest();
+	TestEqual(TEXT("real attack release advances tutorial without a target"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Dodge);
 	TestTrue(TEXT("first Z advances dodge dialogue"), TutorialPC->TryAdvanceTutorialDialogue());
 	TestTrue(TEXT("second Z reveals dodge instruction"), TutorialPC->TryAdvanceTutorialDialogue());
 	TestTrue(TEXT("real dodge is accepted during dodge step"), Drone->RequestDodgeForServer(FVector2D(0.0f, 1.0f)));
-	TestEqual(TEXT("real dodge advances tutorial"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::CombatBriefing);
-	Drone->TickForTest(1.0f);
+	TestEqual(TEXT("dodge start keeps the dodge step"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::Dodge);
+	Drone->TickForTest(0.25f);
+	TestEqual(TEXT("real dodge completion advances tutorial"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::CombatBriefing);
 
 	Drone->RequestAttackBoss();
 	TestEqual(TEXT("first combat Z advances briefing"), TutorialPC->GetCurrentTutorialDialogueIndex(), 1);
@@ -373,7 +539,12 @@ bool FDronePOR23TutorialRealDroneFlowTest::RunTest(const FString& Parameters)
 		Drone->RequestAttackBoss();
 		Drone->RequestAttackBoss();
 		Drone->RequestAttackBoss();
-		TestTrue(TEXT("three real attacks destroy tutorial debris"), Debris->IsTutorialDebrisDestroyed());
+		TestFalse(TEXT("third real attack keeps debris visible for the attack effect"), Debris->IsTutorialDebrisDestroyed());
+		TestEqual(TEXT("third real attack keeps debris combat active"),
+			TutorialPC->GetCurrentTutorialStep(),
+			ETutorialStep::DebrisCombat);
+		Debris->Tick(0.45f);
+		TestTrue(TEXT("three real attacks destroy tutorial debris after the effect"), Debris->IsTutorialDebrisDestroyed());
 	}
 	TestEqual(TEXT("real debris combat enters closing briefing"), TutorialPC->GetCurrentTutorialStep(), ETutorialStep::ClosingBriefing);
 
@@ -382,6 +553,253 @@ bool FDronePOR23TutorialRealDroneFlowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("tutorial drone is invulnerable"), Drone->GetHealth(), HealthBeforeDamage);
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR23TutorialHUDPresentationTest,
+	"DroneProto.POR23.Tutorial.HUDPresentation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR23TutorialHUDPresentationTest::RunTest(const FString& Parameters)
+{
+	UTutorialHUDWidget* Widget = NewObject<UTutorialHUDWidget>();
+	TestNotNull(TEXT("tutorial HUD widget is created"), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+
+	Widget->RefreshTutorial(
+		ETutorialStep::Move,
+		1,
+		FText::FromString(TEXT("원하시는 방향으로 [방향키]를 입력해주세요.")),
+		true);
+	TestEqual(TEXT("dialogue text is cached"),
+		Widget->GetDialogueText().ToString(),
+		FString(TEXT("원하시는 방향으로 [방향키]를 입력해주세요.")));
+	TestEqual(TEXT("move step label is cached"),
+		Widget->GetStepText().ToString(),
+		FString(TEXT("3. 이동")));
+	TestEqual(TEXT("move hint uses the real move input"),
+		Widget->GetInputHintText().ToString(),
+		FString(TEXT("방향키 : 이동")));
+
+	Widget->RefreshTutorial(
+		ETutorialStep::Attack,
+		0,
+		FText::FromString(TEXT("공격 설명")),
+		false);
+	TestEqual(TEXT("unfinished instruction uses dialogue advance hint"),
+		Widget->GetInputHintText().ToString(),
+		FString(TEXT("Z : 다음")));
+
+	Widget->RefreshTutorial(
+		ETutorialStep::DebrisCombat,
+		0,
+		FText::GetEmpty(),
+		false);
+	TestEqual(TEXT("debris combat shows three-hit attack hint"),
+		Widget->GetInputHintText().ToString(),
+		FString(TEXT("Z : 잔해 공격 (3회)")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR23CallsignTypingFilterTest,
+	"DroneProto.POR23.Profile.CallsignAcceptsOnlyThreeAsciiLettersWhileTyping",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR23CallsignTypingFilterTest::RunTest(const FString& Parameters)
+{
+	URaidLobbyWidget* Widget = NewObject<URaidLobbyWidget>();
+	UEditableTextBox* Input = NewObject<UEditableTextBox>(Widget);
+	UTextBlock* ErrorText = NewObject<UTextBlock>(Widget);
+	TestNotNull(TEXT("raid lobby widget is created"), Widget);
+	TestNotNull(TEXT("callsign input is created"), Input);
+	TestNotNull(TEXT("callsign error text is created"), ErrorText);
+	if (!Widget || !Input || !ErrorText)
+	{
+		return false;
+	}
+
+	Input->TakeWidget();
+	Widget->SetCallsignInputForTest(Input);
+	ErrorText->SetVisibility(ESlateVisibility::Hidden);
+	Widget->SetCallsignErrorTextForTest(ErrorText);
+	TestTrue(TEXT("callsign input change handler is bound"), Input->OnTextChanged.IsBound());
+
+	TSharedRef<SEditableTextBox> SlateInput =
+		StaticCastSharedRef<SEditableTextBox>(Input->TakeWidget());
+	TSharedRef<SWindow> TestWindow = SNew(SWindow)
+		.ClientSize(FVector2D(320.0f, 120.0f))
+		[SlateInput];
+	FSlateApplication::Get().AddWindow(TestWindow, false);
+	const FModifierKeysState Modifiers;
+	TestTrue(TEXT("callsign input receives keyboard focus"),
+		FSlateApplication::Get().SetKeyboardFocus(SlateInput, EFocusCause::SetDirectly));
+	TestTrue(TEXT("lowercase key is handled before Slate inserts it"),
+		FSlateApplication::Get().ProcessKeyCharEvent(
+			FCharacterEvent(TEXT('a'), Modifiers, 0, false)));
+	TestEqual(TEXT("lowercase key is displayed as uppercase immediately"),
+		Input->GetText().ToString(),
+		FString(TEXT("A")));
+	TestTrue(TEXT("non-ASCII key is blocked before Slate inserts it"),
+		FSlateApplication::Get().ProcessKeyCharEvent(
+			FCharacterEvent(TEXT('한'), Modifiers, 0, false)));
+	TestEqual(TEXT("non-ASCII key does not change the callsign"),
+		Input->GetText().ToString(),
+		FString(TEXT("A")));
+	TestEqual(TEXT("blocked non-ASCII input shows the English-only error"),
+		ErrorText->GetText().ToString(),
+		FString(TEXT("영문만 입력할 수 있습니다.")));
+	TestEqual(TEXT("blocked non-ASCII input makes the error visible"),
+		ErrorText->GetVisibility(),
+		ESlateVisibility::HitTestInvisible);
+	TestTrue(TEXT("lowercase key after non-ASCII input is still handled"),
+		FSlateApplication::Get().ProcessKeyCharEvent(
+			FCharacterEvent(TEXT('b'), Modifiers, 0, false)));
+	TestEqual(TEXT("lowercase input still becomes uppercase after non-ASCII input"),
+		Input->GetText().ToString(),
+		FString(TEXT("AB")));
+	TestEqual(TEXT("valid input hides the previous error"),
+		ErrorText->GetVisibility(),
+		ESlateVisibility::Hidden);
+	FSlateApplication::Get().ProcessKeyCharEvent(
+		FCharacterEvent(TEXT('c'), Modifiers, 0, false));
+	FSlateApplication::Get().ProcessKeyCharEvent(
+		FCharacterEvent(TEXT('d'), Modifiers, 0, false));
+	TestEqual(TEXT("fourth letter shows the three-letter limit error"),
+		ErrorText->GetText().ToString(),
+		FString(TEXT("영문 3자까지만 입력할 수 있습니다.")));
+	TestEqual(TEXT("fourth letter makes the error visible"),
+		ErrorText->GetVisibility(),
+		ESlateVisibility::HitTestInvisible);
+	const FCharacterEvent BackspaceEvent(TCHAR(8), Modifiers, 0, false);
+	FSlateApplication::Get().ProcessKeyCharEvent(BackspaceEvent);
+	FSlateApplication::Get().ProcessKeyCharEvent(BackspaceEvent);
+	FSlateApplication::Get().ProcessKeyCharEvent(BackspaceEvent);
+	TestEqual(TEXT("deleting all letters empties the callsign"),
+		Input->GetText().ToString(),
+		FString());
+	TestEqual(TEXT("deleting all letters hides the previous error"),
+		ErrorText->GetVisibility(),
+		ESlateVisibility::Hidden);
+	FSlateApplication::Get().ProcessKeyCharEvent(
+		FCharacterEvent(TEXT('e'), Modifiers, 0, false));
+	TestEqual(TEXT("typing works again after deleting all letters"),
+		Input->GetText().ToString(),
+		FString(TEXT("E")));
+
+	Input->SetText(FText::GetEmpty());
+	TSharedRef<SEditableTextBox> ActiveImeSink =
+		SNew(SEditableTextBox)
+		.OnKeyCharHandler_Lambda(
+			[](const FGeometry&, const FCharacterEvent&)
+			{
+				return FReply::Handled();
+			});
+	TSharedRef<SWindow> ActiveImeWindow = SNew(SWindow)
+		.ClientSize(FVector2D(320.0f, 120.0f))
+		[ActiveImeSink];
+	FSlateApplication::Get().AddWindow(ActiveImeWindow, false);
+	TestTrue(TEXT("active IME sink receives keyboard focus"),
+		FSlateApplication::Get().SetKeyboardFocus(ActiveImeSink, EFocusCause::SetDirectly));
+	Widget->HandleCallsignKeyCharForTest(
+		FCharacterEvent(TEXT('s'), Modifiers, 0, false));
+	Widget->HandleCallsignKeyCharForTest(
+		FCharacterEvent(TEXT('d'), Modifiers, 0, false));
+	Widget->HandleCallsignKeyCharForTest(
+		FCharacterEvent(TEXT('f'), Modifiers, 0, false));
+	Widget->HandleCallsignKeyCharForTest(
+		FCharacterEvent(TEXT('g'), Modifiers, 0, false));
+	TestEqual(TEXT("active IME cannot swallow accepted letters or bypass the three-letter limit"),
+		Input->GetText().ToString(),
+		FString(TEXT("SDF")));
+	Widget->HandleCallsignKeyCharForTest(BackspaceEvent);
+	Widget->HandleCallsignKeyCharForTest(BackspaceEvent);
+	Widget->HandleCallsignKeyCharForTest(BackspaceEvent);
+	TestEqual(TEXT("active IME backspace removes all accepted letters"),
+		Input->GetText().ToString(),
+		FString());
+	Widget->HandleCallsignKeyCharForTest(
+		FCharacterEvent(TEXT('a'), Modifiers, 0, false));
+	TestEqual(TEXT("typing resumes after active IME backspace removes all letters"),
+		Input->GetText().ToString(),
+		FString(TEXT("A")));
+	FSlateApplication::Get().RequestDestroyWindow(ActiveImeWindow);
+	FSlateApplication::Get().RequestDestroyWindow(TestWindow);
+
+	Input->SetText(FText::GetEmpty());
+	const FText MixedInput = FText::FromString(TEXT("a한1b-cD"));
+	Input->SetText(MixedInput);
+	Input->OnTextChanged.Broadcast(MixedInput);
+	TestEqual(TEXT("paste or IME input is sanitized before the change handler returns"),
+		Input->GetText().ToString(),
+		FString(TEXT("ABC")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR23CallsignAutoLoginTest,
+	"DroneProto.POR23.Profile.CallsignEntryStartsEmptyThenAutoLogsIn",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR23CallsignAutoLoginTest::RunTest(const FString& Parameters)
+{
+	const FString TestSlot = TEXT("DroneProtoAutomation_POR23_AutoLogin");
+	UGameplayStatics::DeleteGameInSlot(TestSlot, 0);
+
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* Session = NewObject<URaidSessionSubsystem>(GameInstance);
+	URaidLobbyWidget* Widget = NewObject<URaidLobbyWidget>();
+	UEditableTextBox* Input = NewObject<UEditableTextBox>(Widget);
+	UTextBlock* ErrorText = NewObject<UTextBlock>(Widget);
+	TestNotNull(TEXT("auto-login session is created"), Session);
+	TestNotNull(TEXT("auto-login widget is created"), Widget);
+	TestNotNull(TEXT("auto-login input is created"), Input);
+	if (!Session || !Widget || !Input || !ErrorText)
+	{
+		return false;
+	}
+
+	Session->SetProfileSaveSlotForTest(TestSlot);
+	TestTrue(TEXT("completed profile is saved for lobby-only auto-login"), Session->MarkTutorialCompleted());
+	Widget->SetRaidSubsystemForTest(Session);
+	Widget->SetCallsignErrorTextForTest(ErrorText);
+	Widget->SetCallsignInputForTest(Input);
+
+	TestEqual(TEXT("callsign entry initially starts empty"),
+		Input->GetText().ToString(),
+		FString());
+	TestEqual(TEXT("callsign entry shows AAA as hint text"),
+		Input->GetHintText().ToString(),
+		FString(TEXT("AAA")));
+	const FModifierKeysState Modifiers;
+	Widget->HandleCallsignKeyCharForTest(FCharacterEvent(TEXT('b'), Modifiers, 0, false));
+	TestEqual(TEXT("first new letter fills the first empty slot"),
+		Input->GetText().ToString(),
+		FString(TEXT("B")));
+	TestFalse(TEXT("one new letter does not log in"), Session->IsCallsignIdentified());
+	Widget->HandleCallsignKeyCharForTest(FCharacterEvent(TEXT('c'), Modifiers, 0, false));
+	TestFalse(TEXT("two new letters do not log in"), Session->IsCallsignIdentified());
+	Widget->HandleCallsignKeyCharForTest(FCharacterEvent(TEXT('d'), Modifiers, 0, false));
+	TestFalse(TEXT("third new letter remains visible before automatic login"), Session->IsCallsignIdentified());
+	TestTrue(TEXT("third new letter schedules automatic login"), Widget->IsCallsignAutoSubmitPendingForTest());
+	Widget->HandleCallsignKeyCharForTest(FCharacterEvent(TCHAR(8), Modifiers, 0, false));
+	TestFalse(TEXT("editing the completed callsign cancels automatic login"), Widget->IsCallsignAutoSubmitPendingForTest());
+	Widget->CompleteCallsignAutoSubmitDelayForTest();
+	TestFalse(TEXT("cancelled automatic login cannot complete"), Session->IsCallsignIdentified());
+	Widget->HandleCallsignKeyCharForTest(FCharacterEvent(TEXT('d'), Modifiers, 0, false));
+	TestTrue(TEXT("completed callsign reschedules automatic login"), Widget->IsCallsignAutoSubmitPendingForTest());
+	Widget->CompleteCallsignAutoSubmitDelayForTest();
+	TestTrue(TEXT("automatic login completes after the confirmation delay"), Session->IsCallsignIdentified());
+	TestEqual(TEXT("automatic login saves the three new uppercase letters"),
+		Session->GetCallsign(),
+		FString(TEXT("BCD")));
+
+	UGameplayStatics::DeleteGameInSlot(TestSlot, 0);
 	return true;
 }
 
@@ -407,10 +825,15 @@ bool FDronePOR23LocalProfilePersistenceTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("empty automation slot has no saved profile"), FirstSession->ReloadLocalProfileForTest());
 	TestEqual(TEXT("new profile starts with AAA callsign"), FirstSession->GetCallsign(), FString(TEXT("AAA")));
 	TestFalse(TEXT("new profile has not completed tutorial"), FirstSession->HasCompletedTutorial());
+	TestFalse(TEXT("callsign is not identified before submit"), FirstSession->IsCallsignIdentified());
 	TestEqual(TEXT("new profile routes to tutorial map"), FirstSession->GetPostLoginMapName(), FName(TEXT("TestMap")));
+	TestEqual(TEXT("tutorial route overrides TestMap raid mode"),
+		FirstSession->GetPostLoginTravelOptions(),
+		FString(TEXT("game=/Script/DroneProto.TutorialGameMode")));
 	TestFalse(TEXT("short callsign is rejected"), FirstSession->TryLoginWithCallsign(TEXT("AB")));
 	TestFalse(TEXT("non-letter callsign is rejected"), FirstSession->TryLoginWithCallsign(TEXT("A1C")));
 	TestTrue(TEXT("lowercase callsign is normalized and saved"), FirstSession->TryLoginWithCallsign(TEXT("aBc")));
+	TestTrue(TEXT("valid callsign identifies this session"), FirstSession->IsCallsignIdentified());
 	TestEqual(TEXT("saved callsign is uppercase"), FirstSession->GetCallsign(), FString(TEXT("ABC")));
 
 	UGameInstance* SecondGameInstance = NewObject<UGameInstance>();
@@ -428,6 +851,7 @@ bool FDronePOR23LocalProfilePersistenceTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("tutorial completion remains false before completion"), SecondSession->HasCompletedTutorial());
 	TestTrue(TEXT("tutorial completion is persisted"), SecondSession->MarkTutorialCompleted());
 	TestEqual(TEXT("completed profile routes to lobby"), SecondSession->GetPostLoginMapName(), FName(TEXT("LobbyMap")));
+	TestTrue(TEXT("completed profile needs no game mode override"), SecondSession->GetPostLoginTravelOptions().IsEmpty());
 
 	UGameInstance* ThirdGameInstance = NewObject<UGameInstance>();
 	URaidSessionSubsystem* ThirdSession = NewObject<URaidSessionSubsystem>(ThirdGameInstance);

@@ -1,9 +1,11 @@
 #include "Tutorial/TutorialDebris.h"
 
 #include "Components/SphereComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
 #include "Tutorial/TutorialPlayerController.h"
+#include "UObject/ConstructorHelpers.h"
 
 ATutorialDebris::ATutorialDebris()
 {
@@ -15,13 +17,42 @@ ATutorialDebris::ATutorialDebris()
 	CollisionComponent->InitSphereRadius(100.0f);
 	CollisionComponent->SetCollisionProfileName(TEXT("Pawn"));
 	RootComponent = CollisionComponent;
+
+	VisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("VisualMesh"));
+	VisualMesh->SetupAttachment(CollisionComponent);
+	VisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	VisualMesh->SetGenerateOverlapEvents(false);
+	VisualMesh->SetCanEverAffectNavigation(false);
+	VisualMesh->SetRelativeScale3D(FVector(1.5f));
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> DebrisMeshAsset(
+		TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (DebrisMeshAsset.Succeeded())
+	{
+		VisualMesh->SetStaticMesh(DebrisMeshAsset.Object);
+	}
 }
 
 void ATutorialDebris::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (!HasAuthority() || bTutorialDebrisDestroyed || !TargetPawn || DeltaSeconds <= 0.0f)
+	if (!HasAuthority() || bTutorialDebrisDestroyed || DeltaSeconds <= 0.0f)
+	{
+		return;
+	}
+
+	if (bTutorialDebrisDestructionPending)
+	{
+		PendingDestructionTimeRemaining -= DeltaSeconds;
+		if (PendingDestructionTimeRemaining <= 0.0f)
+		{
+			CompleteTutorialDestructionForServer();
+		}
+		return;
+	}
+
+	if (!TargetPawn)
 	{
 		return;
 	}
@@ -36,7 +67,7 @@ void ATutorialDebris::Tick(float DeltaSeconds)
 
 bool ATutorialDebris::ApplyTutorialHitForServer(AController* InstigatorController)
 {
-	if (!HasAuthority() || bTutorialDebrisDestroyed)
+	if (!HasAuthority() || bTutorialDebrisDestroyed || bTutorialDebrisDestructionPending)
 	{
 		return false;
 	}
@@ -52,15 +83,57 @@ bool ATutorialDebris::ApplyTutorialHitForServer(AController* InstigatorControlle
 
 	if (TutorialHitCount >= RequiredHitCount)
 	{
-		bTutorialDebrisDestroyed = true;
-		SetActorEnableCollision(false);
-		SetActorTickEnabled(false);
-		TutorialPC->NotifyTutorialDebrisDestroyed();
-		BP_OnTutorialDebrisDestroyed();
+		bTutorialDebrisDestructionPending = true;
+		PendingDestructionController = TutorialPC;
+		PendingDestructionTimeRemaining = DestructionDelaySeconds;
+		if (PendingDestructionTimeRemaining <= 0.0f)
+		{
+			CompleteTutorialDestructionForServer();
+		}
 	}
 
 	ForceNetUpdate();
 	return true;
+}
+
+void ATutorialDebris::CompleteTutorialDestructionForServer()
+{
+	if (!HasAuthority() || bTutorialDebrisDestroyed || !bTutorialDebrisDestructionPending)
+	{
+		return;
+	}
+
+	bTutorialDebrisDestructionPending = false;
+	bTutorialDebrisDestroyed = true;
+	BP_OnTutorialDebrisDestroyed();
+	ApplyDestroyedPresentation();
+	if (PendingDestructionController)
+	{
+		PendingDestructionController->NotifyTutorialDebrisDestroyed();
+	}
+	PendingDestructionController = nullptr;
+	ForceNetUpdate();
+}
+
+void ATutorialDebris::OnRep_TutorialHitCount()
+{
+	BP_OnTutorialDebrisHit(TutorialHitCount, RequiredHitCount);
+}
+
+void ATutorialDebris::OnRep_TutorialDebrisDestroyed()
+{
+	if (bTutorialDebrisDestroyed)
+	{
+		BP_OnTutorialDebrisDestroyed();
+		ApplyDestroyedPresentation();
+	}
+}
+
+void ATutorialDebris::ApplyDestroyedPresentation()
+{
+	SetActorEnableCollision(false);
+	SetActorTickEnabled(false);
+	SetActorHiddenInGame(true);
 }
 
 void ATutorialDebris::SetTargetPawnForServer(APawn* InTargetPawn)

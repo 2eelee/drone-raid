@@ -215,7 +215,7 @@ void ARaidPlayerController::BeginPlay()
 
 	if (bAutoShowDronePartSelectUI)
 	{
-		ShowDronePartSelectUI();
+		GetWorldTimerManager().SetTimerForNextTick(this, &ARaidPlayerController::ShowDronePartSelectUI);
 	}
 }
 
@@ -1517,6 +1517,7 @@ void ARaidPlayerController::ShowDronePartSelectUI()
 		InputMode.SetWidgetToFocus(DronePartSelectWidget->TakeWidget());
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		SetInputMode(InputMode);
+		DronePartSelectWidget->SetKeyboardFocus();
 		Server_RequestStartSelectionTimer();
 
 		UE_LOG(LogTemp, Log, TEXT("[Client] Drone part select UI shown"));

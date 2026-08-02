@@ -5,12 +5,16 @@
 #include "TutorialTypes.h"
 #include "TutorialPlayerController.generated.h"
 
+class UTutorialHUDWidget;
+
 UCLASS()
 class DRONEPROTO_API ATutorialPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 
 public:
+	ATutorialPlayerController();
+
 	UFUNCTION(BlueprintCallable, Category = "Tutorial")
 	void StartTutorial();
 
@@ -21,10 +25,13 @@ public:
 	bool CompleteTutorial();
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
-	bool NotifyTutorialMoveInput(FVector2D RawAxis);
+	bool NotifyTutorialMoveInput(FVector2D RawAxis, float AppliedDistanceMeters = 0.0f);
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
 	bool NotifyTutorialAttackInput();
+
+	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
+	bool NotifyTutorialAttackInputReleased();
 
 	UFUNCTION(BlueprintCallable, Category = "Tutorial|Input")
 	bool NotifyTutorialDodgeInput(FVector2D RawDirection);
@@ -83,7 +90,7 @@ public:
 #endif
 
 protected:
-	virtual void SetupInputComponent() override;
+	virtual void BeginPlay() override;
 
 private:
 	UFUNCTION(Client, Reliable)
@@ -107,8 +114,17 @@ private:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial", meta = (AllowPrivateAccess = "true"))
 	FName LobbyMapName = FName(TEXT("LobbyMap"));
 
+	UPROPERTY(EditDefaultsOnly, Category = "Tutorial|UI")
+	TSoftClassPtr<UTutorialHUDWidget> TutorialHUDWidgetClass;
+
+	UPROPERTY()
+	TObjectPtr<UTutorialHUDWidget> ActiveTutorialHUD;
+
 	bool bReturnToLobbyRequested = false;
-	bool bUpPressedForTutorialDodge = false;
+	float AccumulatedTutorialMoveDistanceMeters = 0.0f;
+	bool bTutorialAttackInputPending = false;
+
+	static constexpr float TutorialMoveDistanceRequiredMeters = 1.5f;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	bool bSuppressTutorialLobbyTravelForTest = false;
@@ -118,8 +134,5 @@ private:
 	void SetTutorialStep(ETutorialStep NewStep, FName Reason);
 	bool AdvanceTutorialDialogueForServer();
 	void SyncTutorialPresentationForOwner(ETutorialStep PreviousStep);
-	void HandleTutorialLeftPressed();
-	void HandleTutorialDodgePressed();
-	void HandleTutorialUpPressed();
-	void HandleTutorialUpReleased();
+	void RefreshTutorialHUD();
 };

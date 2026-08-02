@@ -221,6 +221,7 @@ public:
 		FVector2D Axis);
 	bool ApplyMoveInputForServerForTest(FVector2D RawAxis);
 	bool ApplyPendingServerMoveInputForTest(float DeltaSeconds);
+	void FinishTutorialAttackInputForTest();
 	void UpdateMoveDistanceForServerForTest(float DeltaSeconds);
 	void ResetMoveDistanceForServerForTest(FName Reason);
 	void ResetVectorMoveDistanceForServerForTest(FName Reason);
@@ -349,6 +350,12 @@ private:
 	void Server_RequestAttackBoss();
 
 	UFUNCTION(Server, Reliable)
+	void Server_FinishTutorialAttackInput();
+
+	UFUNCTION(Server, Reliable)
+	void Server_FinishTutorialMoveInput();
+
+	UFUNCTION(Server, Reliable)
 	void Server_RequestDodge(FVector2D RawDirection);
 
 	UFUNCTION(Server, Unreliable)
@@ -356,6 +363,7 @@ private:
 
 	void Move(const FInputActionValue& Value);
 	void Dodge(const FInputActionValue& Value);
+	void FinishTutorialAttackInput();
 	void ClearMoveInputForDodge(const FInputActionValue& Value);
 
 	// ---- 장착 부품 (서버 전용, 복제 안 함) ----

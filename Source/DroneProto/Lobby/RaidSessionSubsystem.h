@@ -40,6 +40,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Profile")
 	bool TryLoginWithCallsign(const FString& RawCallsign);
 
+	UFUNCTION(BlueprintCallable, Category="Profile")
+	bool TryLoginWithCallsignAndTravel(const FString& RawCallsign);
+
 	UFUNCTION(BlueprintPure, Category="Profile")
 	FString GetCallsign() const { return Callsign; }
 
@@ -47,7 +50,13 @@ public:
 	bool HasCompletedTutorial() const { return bHasCompletedTutorial; }
 
 	UFUNCTION(BlueprintPure, Category="Profile")
+	bool IsCallsignIdentified() const { return bCallsignIdentified; }
+
+	UFUNCTION(BlueprintPure, Category="Profile")
 	FName GetPostLoginMapName() const;
+
+	UFUNCTION(BlueprintPure, Category="Profile")
+	FString GetPostLoginTravelOptions() const;
 
 	UFUNCTION(BlueprintCallable, Category="Profile")
 	bool MarkTutorialCompleted();
@@ -116,6 +125,7 @@ private:
 	FRaidAssignmentResult LastAssignmentResult;
 	FString Callsign = TEXT("AAA");
 	bool bHasCompletedTutorial = false;
+	bool bCallsignIdentified = false;
 	FString ProfileSaveSlotName = TEXT("DroneLocalProfile");
 
 	static constexpr double MatchmakingTimeoutSeconds = 10.0;

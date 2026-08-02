@@ -5,7 +5,9 @@
 #include "TutorialDebris.generated.h"
 
 class APawn;
+class ATutorialPlayerController;
 class USphereComponent;
+class UStaticMeshComponent;
 
 UCLASS()
 class DRONEPROTO_API ATutorialDebris : public AActor
@@ -37,11 +39,17 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tutorial|Debris")
 	TObjectPtr<USphereComponent> CollisionComponent;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tutorial|Debris")
+	TObjectPtr<UStaticMeshComponent> VisualMesh;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial|Debris", meta = (ClampMin = "1"))
 	int32 RequiredHitCount = 3;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial|Debris", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float ApproachSpeed = 150.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Tutorial|Debris", meta = (ClampMin = "0.0", Units = "s"))
+	float DestructionDelaySeconds = 0.45f;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Tutorial|Debris")
 	void BP_OnTutorialDebrisHit(int32 HitCount, int32 RequiredHits);
@@ -50,12 +58,27 @@ protected:
 	void BP_OnTutorialDebrisDestroyed();
 
 private:
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing = OnRep_TutorialHitCount)
 	int32 TutorialHitCount = 0;
 
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing = OnRep_TutorialDebrisDestroyed)
 	bool bTutorialDebrisDestroyed = false;
 
 	UPROPERTY()
 	TObjectPtr<APawn> TargetPawn;
+
+	UPROPERTY()
+	TObjectPtr<ATutorialPlayerController> PendingDestructionController;
+
+	float PendingDestructionTimeRemaining = 0.0f;
+	bool bTutorialDebrisDestructionPending = false;
+
+	UFUNCTION()
+	void OnRep_TutorialHitCount();
+
+	UFUNCTION()
+	void OnRep_TutorialDebrisDestroyed();
+
+	void ApplyDestroyedPresentation();
+	void CompleteTutorialDestructionForServer();
 };

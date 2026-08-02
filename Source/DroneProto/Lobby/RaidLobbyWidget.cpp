@@ -2,11 +2,17 @@
 
 #include "RaidSessionSubsystem.h"
 #include "Components/Button.h"
+#include "Components/EditableTextBox.h"
 #include "Components/PanelWidget.h"
+#include "Components/TextBlock.h"
 #include "Components/Widget.h"
+#include "TimerManager.h"
+#include "Widgets/Input/SEditableTextBox.h"
 
 namespace
 {
+constexpr float CallsignAutoSubmitDelaySeconds = 0.45f;
+
 const TCHAR* ToRaidLobbyVisibilityText(ESlateVisibility Visibility)
 {
 	switch (Visibility)
@@ -30,6 +36,8 @@ const TCHAR* ToRaidLobbyUIStateText(ERaidLobbyUIState State)
 {
 	switch (State)
 	{
+	case ERaidLobbyUIState::Login:
+		return TEXT("Login");
 	case ERaidLobbyUIState::Main:
 		return TEXT("Main");
 	case ERaidLobbyUIState::Waiting:
@@ -41,6 +49,27 @@ const TCHAR* ToRaidLobbyUIStateText(ERaidLobbyUIState State)
 	default:
 		return TEXT("Unknown");
 	}
+}
+
+FString SanitizeCallsignInput(const FString& RawText)
+{
+	FString Result;
+	Result.Reserve(3);
+
+	for (const TCHAR Character : RawText)
+	{
+		const TCHAR UppercaseCharacter = FChar::ToUpper(Character);
+		if (UppercaseCharacter >= TEXT('A') && UppercaseCharacter <= TEXT('Z'))
+		{
+			Result.AppendChar(UppercaseCharacter);
+			if (Result.Len() == 3)
+			{
+				break;
+			}
+		}
+	}
+
+	return Result;
 }
 }
 
@@ -62,6 +91,10 @@ void URaidLobbyWidget::NativeConstruct()
 	{
 		RaidJoinButton->OnClicked.AddUniqueDynamic(this, &URaidLobbyWidget::HandleRaidJoinClicked);
 	}
+
+	BindCallsignInput();
+	SetOptionalWidgetVisibility(CallsignSubmitButton, false);
+	SetOptionalWidgetVisibility(CallsignDescription, false);
 
 	if (CancelMatchmakingButton)
 	{
@@ -92,11 +125,20 @@ void URaidLobbyWidget::NativeConstruct()
 		CancelMatchmakingButton ? 1 : 0,
 		NoServerConfirmButton ? 1 : 0);
 
-	ShowMainLobby();
+	if (CallsignErrorText)
+	{
+		CallsignErrorText->SetVisibility(ESlateVisibility::Hidden);
+	}
+
+	SetLobbyUIState(RaidSubsystem && RaidSubsystem->IsCallsignIdentified()
+		? ERaidLobbyUIState::Main
+		: ERaidLobbyUIState::Login);
 }
 
 void URaidLobbyWidget::NativeDestruct()
 {
+	CancelPendingCallsignAutoSubmit();
+
 	if (RaidSubsystem)
 	{
 		RaidSubsystem->ClearActiveLobbyWidget(this);
@@ -139,6 +181,37 @@ void URaidLobbyWidget::RequestEntry(const FString& SlotId)
 		bRaidEntryRequestInFlight = true;
 		RaidSubsystem->RequestRaidEntry(SlotId);
 	}
+}
+
+bool URaidLobbyWidget::SubmitCallsign(const FString& RawCallsign)
+{
+	if (!RaidSubsystem)
+	{
+		if (UGameInstance* GI = GetGameInstance())
+		{
+			RaidSubsystem = GI->GetSubsystem<URaidSessionSubsystem>();
+		}
+	}
+
+	const bool bTutorialComplete = RaidSubsystem && RaidSubsystem->HasCompletedTutorial();
+	const bool bAccepted = RaidSubsystem
+		&& (bTutorialComplete
+			? RaidSubsystem->TryLoginWithCallsign(RawCallsign)
+			: RaidSubsystem->TryLoginWithCallsignAndTravel(RawCallsign));
+
+	if (CallsignErrorText)
+	{
+		SetCallsignErrorMessage(bAccepted
+			? FText::GetEmpty()
+			: FText::FromString(TEXT("영문 3자를 입력해주세요.")));
+	}
+
+	if (bAccepted && bTutorialComplete)
+	{
+		ShowMainLobby();
+	}
+
+	return bAccepted;
 }
 
 bool URaidLobbyWidget::IsSlotEnabled(const FString& SlotId) const
@@ -214,6 +287,50 @@ void URaidLobbyWidget::HandleRaidJoinClicked()
 	RequestEntry(TEXT("A"));
 }
 
+void URaidLobbyWidget::HandleCallsignTextChanged(const FText& Text)
+{
+	if (!CallsignInput || bUpdatingCallsignText)
+	{
+		return;
+	}
+
+	const FString RawText = Text.ToString();
+	const FString SanitizedText = SanitizeCallsignInput(RawText);
+	if (!RawText.Equals(SanitizedText, ESearchCase::CaseSensitive))
+	{
+		bool bContainsInvalidCharacter = false;
+		int32 LetterCount = 0;
+		for (const TCHAR Character : RawText)
+		{
+			const TCHAR UppercaseCharacter = FChar::ToUpper(Character);
+			if (UppercaseCharacter >= TEXT('A') && UppercaseCharacter <= TEXT('Z'))
+			{
+				++LetterCount;
+			}
+			else
+			{
+				bContainsInvalidCharacter = true;
+			}
+		}
+
+		SetCallsignErrorMessage(FText::FromString(bContainsInvalidCharacter
+			? TEXT("영문만 입력할 수 있습니다.")
+			: LetterCount > 3
+				? TEXT("영문 3자까지만 입력할 수 있습니다.")
+				: TEXT("")));
+
+		bUpdatingCallsignText = true;
+		CallsignInput->SetText(FText::FromString(SanitizedText));
+		bUpdatingCallsignText = false;
+	}
+	else
+	{
+		SetCallsignErrorMessage(FText::GetEmpty());
+	}
+
+	TryAutoSubmitCallsign();
+}
+
 void URaidLobbyWidget::HandleCancelMatchmakingClicked()
 {
 	CancelMatchmakingFromLobby();
@@ -229,6 +346,7 @@ void URaidLobbyWidget::SetLobbyUIState(ERaidLobbyUIState NewState)
 	CurrentUIState = NewState;
 	bRaidEntryRequestInFlight = (NewState == ERaidLobbyUIState::Waiting || NewState == ERaidLobbyUIState::Loading);
 
+	SetOptionalWidgetVisibility(CallsignLoginPanel, NewState == ERaidLobbyUIState::Login);
 	SetOptionalWidgetVisibility(MainLobbyPanel, NewState == ERaidLobbyUIState::Main);
 	SetOptionalWidgetVisibility(WaitingPopupPanel, NewState == ERaidLobbyUIState::Waiting);
 	SetOptionalWidgetVisibility(NoServerPopupPanel, NewState == ERaidLobbyUIState::NoServer);
@@ -251,9 +369,180 @@ void URaidLobbyWidget::SetOptionalWidgetVisibility(UWidget* Widget, bool bShould
 	}
 }
 
+void URaidLobbyWidget::BindCallsignInput()
+{
+	CancelPendingCallsignAutoSubmit();
+
+	if (CallsignInput)
+	{
+		CallsignInput->OnTextChanged.AddUniqueDynamic(this, &URaidLobbyWidget::HandleCallsignTextChanged);
+		bUpdatingCallsignText = true;
+		CallsignInput->SetText(FText::GetEmpty());
+		CallsignInput->SetHintText(FText::FromString(TEXT("AAA")));
+		bUpdatingCallsignText = false;
+		bCallsignAutoSubmitInFlight = false;
+
+		TSharedRef<SEditableTextBox> SlateInput =
+			StaticCastSharedRef<SEditableTextBox>(CallsignInput->TakeWidget());
+		SlateInput->SetOnKeyCharHandler(FOnKeyChar::CreateWeakLambda(
+			this,
+			[this](const FGeometry&, const FCharacterEvent& CharacterEvent)
+			{
+				return HandleCallsignKeyChar(CharacterEvent);
+			}));
+	}
+}
+
+void URaidLobbyWidget::TryAutoSubmitCallsign()
+{
+	const FString CurrentCallsign = CallsignInput
+		? CallsignInput->GetText().ToString()
+		: FString();
+	if (!CallsignInput || !RaidSubsystem || bCallsignAutoSubmitInFlight || CurrentCallsign.Len() != 3)
+	{
+		CancelPendingCallsignAutoSubmit();
+		return;
+	}
+
+	if (PendingCallsign == CurrentCallsign)
+	{
+		return;
+	}
+
+	CancelPendingCallsignAutoSubmit();
+	PendingCallsign = CurrentCallsign;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			CallsignAutoSubmitTimerHandle,
+			this,
+			&URaidLobbyWidget::HandleCallsignAutoSubmitDelayElapsed,
+			CallsignAutoSubmitDelaySeconds,
+			false);
+	}
+}
+
+void URaidLobbyWidget::CancelPendingCallsignAutoSubmit()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(CallsignAutoSubmitTimerHandle);
+	}
+	CallsignAutoSubmitTimerHandle.Invalidate();
+	PendingCallsign.Reset();
+}
+
+void URaidLobbyWidget::HandleCallsignAutoSubmitDelayElapsed()
+{
+	const FString ExpectedCallsign = PendingCallsign;
+	PendingCallsign.Reset();
+	CallsignAutoSubmitTimerHandle.Invalidate();
+
+	if (!CallsignInput
+		|| !RaidSubsystem
+		|| bCallsignAutoSubmitInFlight
+		|| ExpectedCallsign.Len() != 3
+		|| CallsignInput->GetText().ToString() != ExpectedCallsign)
+	{
+		return;
+	}
+
+	bCallsignAutoSubmitInFlight = true;
+	if (!SubmitCallsign(ExpectedCallsign))
+	{
+		bCallsignAutoSubmitInFlight = false;
+	}
+}
+
+FReply URaidLobbyWidget::HandleCallsignKeyChar(const FCharacterEvent& CharacterEvent)
+{
+	const TCHAR Character = CharacterEvent.GetCharacter();
+	if (Character == TCHAR(8))
+	{
+		CancelPendingCallsignAutoSubmit();
+		FString CurrentCallsign = SanitizeCallsignInput(CallsignInput->GetText().ToString());
+		if (!CurrentCallsign.IsEmpty())
+		{
+			CurrentCallsign.LeftChopInline(1);
+			CallsignInput->SetText(FText::FromString(CurrentCallsign));
+		}
+		SetCallsignErrorMessage(FText::GetEmpty());
+		return FReply::Handled();
+	}
+
+	if (FChar::IsControl(Character))
+	{
+		return FReply::Unhandled();
+	}
+
+	const TCHAR UppercaseCharacter = FChar::ToUpper(Character);
+	if (UppercaseCharacter >= TEXT('A') && UppercaseCharacter <= TEXT('Z'))
+	{
+		FString CurrentCallsign = SanitizeCallsignInput(CallsignInput->GetText().ToString());
+		if (CurrentCallsign.Len() < 3)
+		{
+			CurrentCallsign.AppendChar(UppercaseCharacter);
+			CallsignInput->SetText(FText::FromString(CurrentCallsign));
+			SetCallsignErrorMessage(FText::GetEmpty());
+			TryAutoSubmitCallsign();
+		}
+		else
+		{
+			SetCallsignErrorMessage(
+				FText::FromString(TEXT("영문 3자까지만 입력할 수 있습니다.")));
+		}
+	}
+	else
+	{
+		SetCallsignErrorMessage(
+			FText::FromString(TEXT("영문만 입력할 수 있습니다.")));
+	}
+
+	return FReply::Handled();
+}
+
+void URaidLobbyWidget::SetCallsignErrorMessage(const FText& Message)
+{
+	if (CallsignErrorText)
+	{
+		CallsignErrorText->SetText(Message);
+		CallsignErrorText->SetVisibility(
+			Message.IsEmpty()
+				? ESlateVisibility::Hidden
+				: ESlateVisibility::HitTestInvisible);
+	}
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
 void URaidLobbyWidget::SetRaidSubsystemForTest(URaidSessionSubsystem* InSubsystem)
 {
 	RaidSubsystem = InSubsystem;
+}
+
+void URaidLobbyWidget::SetCallsignInputForTest(UEditableTextBox* InInput)
+{
+	CallsignInput = InInput;
+	BindCallsignInput();
+}
+
+void URaidLobbyWidget::SetCallsignErrorTextForTest(UTextBlock* InErrorText)
+{
+	CallsignErrorText = InErrorText;
+}
+
+void URaidLobbyWidget::HandleCallsignKeyCharForTest(
+	const FCharacterEvent& CharacterEvent)
+{
+	HandleCallsignKeyChar(CharacterEvent);
+}
+
+bool URaidLobbyWidget::IsCallsignAutoSubmitPendingForTest() const
+{
+	return !PendingCallsign.IsEmpty();
+}
+
+void URaidLobbyWidget::CompleteCallsignAutoSubmitDelayForTest()
+{
+	HandleCallsignAutoSubmitDelayElapsed();
 }
 #endif

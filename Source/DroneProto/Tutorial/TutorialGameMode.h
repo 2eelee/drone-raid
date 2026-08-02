@@ -32,6 +32,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Tutorial")
 	ATutorialDebris* GetTutorialDebris() const { return TutorialDebris; }
 
+protected:
+	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+
 private:
 	UPROPERTY(EditDefaultsOnly, Category = "Tutorial")
 	TSubclassOf<ATutorialDebris> TutorialDebrisClass;

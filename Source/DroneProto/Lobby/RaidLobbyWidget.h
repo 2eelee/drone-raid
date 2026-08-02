@@ -5,12 +5,17 @@
 #include "RaidLobbyWidget.generated.h"
 
 class UButton;
+class UEditableTextBox;
+class UTextBlock;
 class UWidget;
 class URaidSessionSubsystem;
+class FReply;
+struct FCharacterEvent;
 
 UENUM(BlueprintType)
 enum class ERaidLobbyUIState : uint8
 {
+	Login,
 	Main,
 	Waiting,
 	NoServer,
@@ -25,6 +30,9 @@ class DRONEPROTO_API URaidLobbyWidget : public UUserWidget
 public:
 	UFUNCTION(BlueprintCallable, Category="Raid")
 	void RequestEntry(const FString& SlotId);
+
+	UFUNCTION(BlueprintCallable, Category="Profile")
+	bool SubmitCallsign(const FString& RawCallsign);
 
 	UFUNCTION(BlueprintPure, Category="Raid")
 	bool IsSlotEnabled(const FString& SlotId) const;
@@ -63,6 +71,11 @@ public:
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void SetRaidSubsystemForTest(URaidSessionSubsystem* InSubsystem);
+	void SetCallsignInputForTest(UEditableTextBox* InInput);
+	void SetCallsignErrorTextForTest(UTextBlock* InErrorText);
+	void HandleCallsignKeyCharForTest(const FCharacterEvent& CharacterEvent);
+	bool IsCallsignAutoSubmitPendingForTest() const;
+	void CompleteCallsignAutoSubmitDelayForTest();
 #endif
 
 protected:
@@ -74,12 +87,21 @@ private:
 	void HandleRaidJoinClicked();
 
 	UFUNCTION()
+	void HandleCallsignTextChanged(const FText& Text);
+
+	UFUNCTION()
 	void HandleCancelMatchmakingClicked();
 
 	UFUNCTION()
 	void HandleNoServerConfirmClicked();
 
 	void SetLobbyUIState(ERaidLobbyUIState NewState);
+	void BindCallsignInput();
+	void TryAutoSubmitCallsign();
+	void CancelPendingCallsignAutoSubmit();
+	void HandleCallsignAutoSubmitDelayElapsed();
+	FReply HandleCallsignKeyChar(const FCharacterEvent& CharacterEvent);
+	void SetCallsignErrorMessage(const FText& Message);
 	static void SetOptionalWidgetVisibility(UWidget* Widget, bool bShouldShow);
 
 	UPROPERTY()
@@ -87,6 +109,21 @@ private:
 
 	UPROPERTY(meta=(BindWidgetOptional))
 	TObjectPtr<UWidget> MainLobbyPanel;
+
+	UPROPERTY(meta=(BindWidgetOptional))
+	TObjectPtr<UWidget> CallsignLoginPanel;
+
+	UPROPERTY(meta=(BindWidgetOptional))
+	TObjectPtr<UWidget> CallsignDescription;
+
+	UPROPERTY(meta=(BindWidgetOptional))
+	TObjectPtr<UEditableTextBox> CallsignInput;
+
+	UPROPERTY(meta=(BindWidgetOptional))
+	TObjectPtr<UButton> CallsignSubmitButton;
+
+	UPROPERTY(meta=(BindWidgetOptional))
+	TObjectPtr<UTextBlock> CallsignErrorText;
 
 	UPROPERTY(meta=(BindWidgetOptional))
 	TObjectPtr<UWidget> WaitingPopupPanel;
@@ -108,4 +145,8 @@ private:
 
 	ERaidLobbyUIState CurrentUIState = ERaidLobbyUIState::Main;
 	bool bRaidEntryRequestInFlight = false;
+	bool bUpdatingCallsignText = false;
+	bool bCallsignAutoSubmitInFlight = false;
+	FString PendingCallsign;
+	FTimerHandle CallsignAutoSubmitTimerHandle;
 };
