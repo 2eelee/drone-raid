@@ -376,16 +376,18 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 	{
 		PatternActorClass = AStellarRemnantPatternActor::StaticClass();
 	}
+	FTransform PatternSpawnTransform = Owner->GetActorTransform();
+	PatternSpawnTransform.SetScale3D(FVector::OneVector);
 	ActivePatternActor = World->SpawnActorDeferred<ABossPatternActorBase>(
 		PatternActorClass,
-		Owner->GetActorTransform(),
+		PatternSpawnTransform,
 		Owner,
 		nullptr,
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (ActivePatternActor)
 	{
 		ActivePatternActor->SnapshotResolvedConfig(ResolvedConfig);
-		ActivePatternActor->FinishSpawning(Owner->GetActorTransform());
+		ActivePatternActor->FinishSpawning(PatternSpawnTransform);
 		const int32 InstanceID = ++NextPatternInstanceID;
 		ActivePatternActor->InitializeForServer(CurrentPattern, LifecycleState, InstanceID, GetServerWorldTimeSeconds());
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Spawn Pattern=%s Lifecycle=%s InstanceID=%d Boss=%s"),

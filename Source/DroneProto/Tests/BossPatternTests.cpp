@@ -1562,6 +1562,50 @@ bool FDroneBossPatternIntegrationLoopPopulationTest::RunTest(const FString& Para
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternWorldRadiusIgnoresBossVisualScaleTest,
+	"DroneProto.BossPattern.Transform.WorldRadiusIgnoresBossVisualScale",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternWorldRadiusIgnoresBossVisualScaleTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternWorldRadiusWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component || !Context.PlayerController || !Context.Drone)
+	{
+		TestTrue(TEXT("world radius setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("Corrupted becomes active"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* CorruptedActor = Context.Component->GetActivePatternActorForTest();
+	TestNotNull(TEXT("Corrupted actor exists"), Cast<ACorruptedActinoPatternActor>(CorruptedActor));
+	if (CorruptedActor)
+	{
+		const FVector StartWorld = CorruptedActor->GetActorTransform().TransformPosition(FVector(800.0f, 0.0f, 0.0f));
+		const FVector EndWorld = CorruptedActor->GetActorTransform().TransformPosition(FVector(5000.0f, 0.0f, 0.0f));
+		TestEqual(TEXT("Corrupted starts 800cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), StartWorld), 800.0);
+		TestEqual(TEXT("Corrupted ends 5000cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), EndWorld), 5000.0);
+	}
+
+	TestTrue(TEXT("Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* StellarActor = Context.Component->GetActivePatternActorForTest();
+	TestNotNull(TEXT("Stellar actor exists"), Cast<AStellarRemnantPatternActor>(StellarActor));
+	if (StellarActor)
+	{
+		const FVector StartWorld = StellarActor->GetActorTransform().TransformPosition(FVector(800.0f, 0.0f, 0.0f));
+		const FVector EndWorld = StellarActor->GetActorTransform().TransformPosition(FVector(5000.0f, 0.0f, 0.0f));
+		TestEqual(TEXT("Stellar starts 800cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), StartWorld), 800.0);
+		TestEqual(TEXT("Stellar ends 5000cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), EndWorld), 5000.0);
+	}
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternIntegrationTerminalCleanupTest,
 	"DroneProto.BossPattern.Integration.TerminalCleanup",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
