@@ -980,6 +980,49 @@ bool FDroneBossPatternIdentityAndTimeAuthorityTest::RunTest(const FString& Param
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternDuplicateInstanceKeepsFirstTest,
+	"DroneProto.BossPattern.Replication.DuplicateInstanceKeepsFirst",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternDuplicateInstanceKeepsFirstTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternDuplicateInstanceWorld")));
+	ABossPatternActorBase* FirstActor = World ? World->SpawnActor<ABossPatternActorBase>() : nullptr;
+	ABossPatternActorBase* DuplicateActor = World ? World->SpawnActor<ABossPatternActorBase>() : nullptr;
+	TestNotNull(TEXT("duplicate instance world exists"), World);
+	TestNotNull(TEXT("first pattern actor exists"), FirstActor);
+	TestNotNull(TEXT("duplicate pattern actor exists"), DuplicateActor);
+	if (!World || !FirstActor || !DuplicateActor)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	constexpr int32 DuplicateInstanceID = 77;
+	FirstActor->InitializeForServer(
+		EBossPatternKind::CorruptedActino,
+		EBossPatternLifecycleState::Active,
+		DuplicateInstanceID,
+		1.0f);
+	DuplicateActor->InitializeForServer(
+		EBossPatternKind::StellarRemnant,
+		EBossPatternLifecycleState::Active,
+		DuplicateInstanceID,
+		2.0f);
+
+	TestFalse(TEXT("first instance remains alive"), FirstActor->IsActorBeingDestroyed());
+	TestTrue(TEXT("later duplicate instance is removed"), DuplicateActor->IsActorBeingDestroyed());
+	TestEqual(TEXT("only the first instance remains in the world"), CountPatternActors(World), 1);
+
+	FirstActor->Destroy();
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternLifecycleGuardsTest,
 	"DroneProto.BossPattern.Lifecycle.Guards",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

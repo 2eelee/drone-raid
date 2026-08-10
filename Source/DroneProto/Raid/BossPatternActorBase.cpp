@@ -2,6 +2,7 @@
 
 #include "BossPatternComponent.h"
 #include "DrawDebugHelpers.h"
+#include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
@@ -85,6 +86,20 @@ void ABossPatternActorBase::InitializeForServer(
 	if (!HasAuthority())
 	{
 		return;
+	}
+	if (UWorld* World = GetWorld(); InstanceID > 0 && World)
+	{
+		for (TActorIterator<ABossPatternActorBase> It(World); It; ++It)
+		{
+			ABossPatternActorBase* ExistingActor = *It;
+			if (ExistingActor != this
+				&& !ExistingActor->IsActorBeingDestroyed()
+				&& ExistingActor->PatternState.InstanceID == InstanceID)
+			{
+				Destroy();
+				return;
+			}
+		}
 	}
 
 	PatternState.InstanceID = InstanceID;
