@@ -296,6 +296,56 @@ bool FDroneBossPatternDataCanonicalResolveTest::RunTest(const FString& Parameter
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternCorruptedCollisionWidthsClampToVisualTest,
+	"DroneProto.BossPattern.DataTable.CorruptedCollisionWidthsClampToVisual",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternCorruptedCollisionWidthsClampToVisualTest::RunTest(const FString& Parameters)
+{
+	FCanonicalBossPatternTables Tables;
+	FCorruptedActinoRow* CorruptedRow = Tables.Corrupted->FindRow<FCorruptedActinoRow>(
+		TEXT("PATTERN_001"), TEXT("Automation"));
+	CorruptedRow->InnerHitWidth = 6.0f;
+	CorruptedRow->OuterHitWidth = 13.0f;
+
+	FBossPatternResolvedConfig Resolved;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::MissingBossPatternTable;
+	TestTrue(TEXT("oversized collision widths resolve with safety normalization"),
+		BossPatternData::TryResolve(Tables.AsSet(), Resolved, Reason));
+	TestEqual(TEXT("success clears reason"), Reason, EBossPatternDataFallbackReason::None);
+	TestEqual(TEXT("inner collision width clamps to inner visual width"),
+		Resolved.Corrupted.InnerCollisionFullWidthCm, 500.0f);
+	TestEqual(TEXT("outer collision width clamps to outer visual width"),
+		Resolved.Corrupted.OuterCollisionFullWidthCm, 1200.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternCorruptedEndDistanceClampsToBoundaryTest,
+	"DroneProto.BossPattern.DataTable.CorruptedEndDistanceClampsToBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternCorruptedEndDistanceClampsToBoundaryTest::RunTest(const FString& Parameters)
+{
+	FCanonicalBossPatternTables Tables;
+	FCorruptedActinoRow* CorruptedRow = Tables.Corrupted->FindRow<FCorruptedActinoRow>(
+		TEXT("PATTERN_001"), TEXT("Automation"));
+	CorruptedRow->EndDistance = 60.0f;
+	CorruptedRow->Length = 52.0f;
+
+	FBossPatternResolvedConfig Resolved;
+	EBossPatternDataFallbackReason Reason = EBossPatternDataFallbackReason::MissingBossPatternTable;
+	TestTrue(TEXT("out-of-bounds end distance resolves with boundary normalization"),
+		BossPatternData::TryResolve(Tables.AsSet(), Resolved, Reason));
+	TestEqual(TEXT("success clears reason"), Reason, EBossPatternDataFallbackReason::None);
+	TestEqual(TEXT("Corrupted end distance clamps to the 50m boundary"),
+		Resolved.Corrupted.EndRadiusCm, 5000.0f);
+	TestEqual(TEXT("Corrupted length follows the clamped end distance"),
+		Resolved.Corrupted.LengthCm, 4200.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternDataPresetAtomicFallbackTest,
 	"DroneProto.BossPattern.DataTable.PresetContractAtomicFallback",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

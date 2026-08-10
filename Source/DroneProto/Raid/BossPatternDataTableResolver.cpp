@@ -6,6 +6,7 @@
 namespace
 {
 constexpr float MetersToCentimeters = 100.0f;
+constexpr float CorruptedBoundaryRadiusMeters = 50.0f;
 
 bool IsPositiveFinite(const float Value)
 {
@@ -214,10 +215,13 @@ bool BossPatternData::TryResolve(
 
 	Candidate.Corrupted.LaserCount = CorruptedRow->LaserCount;
 	Candidate.Corrupted.StartRadiusCm = CorruptedRow->StartDistance * MetersToCentimeters;
-	Candidate.Corrupted.EndRadiusCm = CorruptedRow->EndDistance * MetersToCentimeters;
-	Candidate.Corrupted.LengthCm = CorruptedRow->Length * MetersToCentimeters;
-	Candidate.Corrupted.InnerCollisionFullWidthCm = CorruptedRow->InnerHitWidth * MetersToCentimeters;
-	Candidate.Corrupted.OuterCollisionFullWidthCm = CorruptedRow->OuterHitWidth * MetersToCentimeters;
+	const float ClampedEndDistanceMeters = FMath::Min(CorruptedRow->EndDistance, CorruptedBoundaryRadiusMeters);
+	Candidate.Corrupted.EndRadiusCm = ClampedEndDistanceMeters * MetersToCentimeters;
+	Candidate.Corrupted.LengthCm = (ClampedEndDistanceMeters - CorruptedRow->StartDistance) * MetersToCentimeters;
+	Candidate.Corrupted.InnerCollisionFullWidthCm =
+		FMath::Min(CorruptedRow->InnerHitWidth, CorruptedRow->InnerVisualWidth) * MetersToCentimeters;
+	Candidate.Corrupted.OuterCollisionFullWidthCm =
+		FMath::Min(CorruptedRow->OuterHitWidth, CorruptedRow->OuterVisualWidth) * MetersToCentimeters;
 	Candidate.Corrupted.InnerVisualFullWidthCm = CorruptedRow->InnerVisualWidth * MetersToCentimeters;
 	Candidate.Corrupted.OuterVisualFullWidthCm = CorruptedRow->OuterVisualWidth * MetersToCentimeters;
 	Candidate.Corrupted.CollisionFullHeightCm = CorruptedRow->CollisionHeight * MetersToCentimeters;
