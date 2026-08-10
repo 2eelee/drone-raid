@@ -123,7 +123,7 @@ void ARaidGameMode::BeginPlay()
 
 			ExistingBoss = GetWorld()->SpawnActor<ARaidBoss>(
 				ARaidBoss::StaticClass(),
-				FVector(600.0f, 0.0f, 100.0f),
+				FVector::ZeroVector,
 				FRotator::ZeroRotator,
 				SpawnParams);
 		}

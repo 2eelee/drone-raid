@@ -566,15 +566,22 @@ bool FBossPatternArenaBossSpawnTransformTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FVector ExpectedLocation(600.0f, 0.0f, 100.0f);
-	ARaidBoss* Boss = World->SpawnActor<ARaidBoss>(
-		ARaidBoss::StaticClass(),
-		ExpectedLocation,
-		FRotator::ZeroRotator);
-	TestNotNull(TEXT("boss is spawned"), Boss);
-	if (Boss)
+	ARaidGameState* GameState = World->SpawnActor<ARaidGameState>();
+	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
+	TestNotNull(TEXT("raid game state is spawned"), GameState);
+	TestNotNull(TEXT("raid game mode is spawned"), GameMode);
+	if (GameState && GameMode)
 	{
-		TestTrue(TEXT("boss root preserves the requested spawn location"), Boss->GetActorLocation().Equals(ExpectedLocation, 0.01f));
+		World->SetGameState(GameState);
+		GameMode->GameState = GameState;
+		GameMode->DispatchBeginPlay();
+		ARaidBoss* Boss = GameState->GetRaidBoss();
+		TestNotNull(TEXT("RaidGameMode BeginPlay spawns the raid boss"), Boss);
+		if (Boss)
+		{
+			TestTrue(TEXT("RaidGameMode spawns the boss at the world origin"),
+				Boss->GetActorLocation().Equals(FVector::ZeroVector, 0.01f));
+		}
 	}
 
 	World->DestroyWorld(false);
@@ -640,7 +647,9 @@ bool FBossPatternArenaMapScaleContractTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FVector2D BossXY(600.0f, 0.0f);
+	const FVector2D BossXY = FVector2D::ZeroVector;
+	const FVector ExpectedPositiveYStart(-1000.0f, 500.0f, 192.0f);
+	const FVector ExpectedNegativeYStart(-1000.0f, -500.0f, 92.0f);
 	TArray<APlayerStart*> PlayerStarts;
 	AActor* Floor = nullptr;
 	for (AActor* Actor : ArenaWorld->PersistentLevel->Actors)
@@ -663,6 +672,12 @@ bool FBossPatternArenaMapScaleContractTest::RunTest(const FString& Parameters)
 		TestNotEqual(TEXT("PlayerStarts are distinct actors"), PlayerStarts[0], PlayerStarts[1]);
 		const FVector FirstLocation = PlayerStarts[0]->GetActorLocation();
 		const FVector SecondLocation = PlayerStarts[1]->GetActorLocation();
+		TestTrue(TEXT("TestMap has the expected positive-Y PlayerStart"),
+			FirstLocation.Equals(ExpectedPositiveYStart, 0.01f)
+			|| SecondLocation.Equals(ExpectedPositiveYStart, 0.01f));
+		TestTrue(TEXT("TestMap has the expected negative-Y PlayerStart"),
+			FirstLocation.Equals(ExpectedNegativeYStart, 0.01f)
+			|| SecondLocation.Equals(ExpectedNegativeYStart, 0.01f));
 		TestFalse(TEXT("PlayerStarts use different angles around the boss"),
 			FVector2D(FirstLocation.X - BossXY.X, FirstLocation.Y - BossXY.Y).GetSafeNormal().Equals(
 				FVector2D(SecondLocation.X - BossXY.X, SecondLocation.Y - BossXY.Y).GetSafeNormal(), 0.001f));
