@@ -910,6 +910,76 @@ bool FDroneBossPatternLifecycleSequenceTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternIdentityAndTimeAuthorityTest,
+	"DroneProto.BossPattern.Replication.IdentityAndTimeAuthority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternIdentityAndTimeAuthorityTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BossPatternIdentityTimeWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component)
+	{
+		TestTrue(TEXT("identity and time setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted becomes active"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* CorruptedActor = Context.Component->GetActivePatternActorForTest();
+	TestNotNull(TEXT("Corrupted actor exists"), CorruptedActor);
+	const int32 CorruptedInstanceID = CorruptedActor ? CorruptedActor->GetPatternState().InstanceID : 0;
+	TestTrue(TEXT("first instance ID is positive"), CorruptedInstanceID > 0);
+	TestEqual(TEXT("first pattern owns one actor"), CountPatternActors(Context.World), 1);
+
+	TestTrue(TEXT("Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("intermission removes Corrupted actor"), CountPatternActors(Context.World), 0);
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	ABossPatternActorBase* StellarActor = Context.Component->GetActivePatternActorForTest();
+	TestNotNull(TEXT("Stellar actor exists"), StellarActor);
+	const int32 StellarInstanceID = StellarActor ? StellarActor->GetPatternState().InstanceID : 0;
+	const float StellarTelegraphStartTime = StellarActor ? StellarActor->GetPatternState().StartServerTime : 0.0f;
+	TestTrue(TEXT("instance IDs increase monotonically"), StellarInstanceID > CorruptedInstanceID);
+	TestEqual(TEXT("Stellar telegraph owns one actor"), CountPatternActors(Context.World), 1);
+
+	TestTrue(TEXT("Stellar becomes active"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("lifecycle transition reuses the same actor"),
+		Context.Component->GetActivePatternActorForTest(), StellarActor);
+	TestEqual(TEXT("lifecycle transition preserves the instance ID"),
+		StellarActor ? StellarActor->GetPatternState().InstanceID : 0, StellarInstanceID);
+	TestTrue(TEXT("active lifecycle refreshes from server time"),
+		StellarActor && StellarActor->GetPatternState().StartServerTime >= StellarTelegraphStartTime);
+
+	const FString BasePath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/BossPatternActorBase.cpp");
+	const FString CorruptedPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/CorruptedActinoPatternActor.cpp");
+	const FString StellarPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/StellarRemnantPatternActor.cpp");
+	FString BaseSource;
+	FString CorruptedSource;
+	FString StellarSource;
+	TestTrue(TEXT("base actor source loads"), FFileHelper::LoadFileToString(BaseSource, *BasePath));
+	TestTrue(TEXT("Corrupted actor source loads"), FFileHelper::LoadFileToString(CorruptedSource, *CorruptedPath));
+	TestTrue(TEXT("Stellar actor source loads"), FFileHelper::LoadFileToString(StellarSource, *StellarPath));
+	TestTrue(TEXT("pattern state is replicated"),
+		BaseSource.Contains(TEXT("DOREPLIFETIME(ABossPatternActorBase, PatternState)")));
+	TestTrue(TEXT("pattern actor has no divergent movement replication"),
+		BaseSource.Contains(TEXT("SetReplicatingMovement(false)")));
+	TestTrue(TEXT("Corrupted elapsed time uses replicated server start time"),
+		CorruptedSource.Contains(TEXT("GetServerWorldTimeSeconds() - State.StartServerTime")));
+	TestTrue(TEXT("Corrupted server damage and client draw share elapsed time"),
+		CorruptedSource.Contains(TEXT("ApplyDamageForServer(ElapsedSeconds)"))
+		&& CorruptedSource.Contains(TEXT("DrawDebugPattern(ElapsedSeconds)")));
+	TestTrue(TEXT("Stellar elapsed time uses replicated server start time"),
+		StellarSource.Contains(TEXT("GetServerWorldTimeSeconds() - State.StartServerTime")));
+	TestTrue(TEXT("Stellar server damage and client draw share elapsed time"),
+		StellarSource.Contains(TEXT("ApplyDamageForServer(PreviousActiveElapsedSeconds, ElapsedSeconds)"))
+		&& StellarSource.Contains(TEXT("DrawDebugPattern(ElapsedSeconds)")));
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternLifecycleGuardsTest,
 	"DroneProto.BossPattern.Lifecycle.Guards",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
