@@ -172,6 +172,73 @@ bool UDronePartReturnManager::ReturnSinglePart(
 	return bReturned;
 }
 
+EDronePartSelectionCommitResult UDronePartReturnManager::TryCommitSelectedPartChange(
+	ARaidPlayerController* PC,
+	EPartSlot Slot,
+	FName NewPartID,
+	FString& OutFailureReason)
+{
+	OutFailureReason.Reset();
+
+	if (!PC || !PC->HasAuthority())
+	{
+		OutFailureReason = TEXT("Player controller authority is missing.");
+		return EDronePartSelectionCommitResult::ServerError;
+	}
+
+	if (!Inventory || !Inventory->HasAuthority())
+	{
+		OutFailureReason = TEXT("Inventory authority is missing.");
+		return EDronePartSelectionCommitResult::ServerError;
+	}
+
+	if (NewPartID.IsNone())
+	{
+		OutFailureReason = TEXT("New PartID is None.");
+		return EDronePartSelectionCommitResult::ServerError;
+	}
+
+	switch (Slot)
+	{
+	case EPartSlot::Core:
+	case EPartSlot::LeftWeapon:
+	case EPartSlot::RightWeapon:
+		break;
+	default:
+		OutFailureReason = TEXT("Invalid selection slot.");
+		return EDronePartSelectionCommitResult::ServerError;
+	}
+
+	const FName PreviousPartID = PC->GetSelectedPartIDBySlot(Slot);
+	if (PreviousPartID == NewPartID)
+	{
+		return EDronePartSelectionCommitResult::Success;
+	}
+
+	const EDronePartSelectionCommitResult CommitResult = Inventory->TryCommitSelectionExchange(
+		PreviousPartID,
+		NewPartID,
+		OutFailureReason);
+	if (CommitResult != EDronePartSelectionCommitResult::Success)
+	{
+		return CommitResult;
+	}
+
+	PC->SetSelectedPartIDForSlotForServer(Slot, NewPartID);
+	if (!PreviousPartID.IsNone())
+	{
+		SaveReturnLog(PC, PreviousPartID, Slot, EDronePartReturnReason::Replace, true);
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Return PC=%s Part=%s Slot=%s Count=%d/%d Result=Success Reason=Replace"),
+			*BuildPlayerID(PC),
+			*PreviousPartID.ToString(),
+			ToReturnSlotLogString(Slot),
+			Inventory->GetCurrentCount(PreviousPartID),
+			Inventory->GetMaxCount(PreviousPartID));
+	}
+
+	return EDronePartSelectionCommitResult::Success;
+}
+
 bool UDronePartReturnManager::ValidateReturn(
 	ARaidPlayerController* PC,
 	FName PartID,

@@ -2629,6 +2629,140 @@ bool FDronePartReturnManagerTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneSelect06TransactionSuccessTest,
+	"DroneProto.SELECT06.Transaction.SuccessCommitsInventorySelectionAndLog",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneSelect06TransactionSuccessTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("DroneSelect06TransactionSuccessWorld"), ReturnManager);
+	TestNotNull(TEXT("inventory is available"), Context.Inventory);
+	TestNotNull(TEXT("player controller is available"), Context.PC);
+	TestNotNull(TEXT("return manager is available"), ReturnManager);
+	if (!Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName CoreBooster = ADronePartInventory::GetCoreBoosterPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+	TestTrue(TEXT("fixture consumes the previously selected core"), Context.Inventory->TryConsumePart(CoreZenith));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+
+	FString FailureReason;
+	const EDronePartSelectionCommitResult Result = ReturnManager->TryCommitSelectedPartChange(
+		Context.PC,
+		EPartSlot::Core,
+		CoreBooster,
+		FailureReason);
+
+	TestEqual(TEXT("valid request transaction succeeds"), Result, EDronePartSelectionCommitResult::Success);
+	TestEqual(TEXT("old core stock is restored"), Context.Inventory->GetCurrentCount(CoreZenith), 5);
+	TestEqual(TEXT("new core stock is consumed"), Context.Inventory->GetCurrentCount(CoreBooster), 5);
+	TestEqual(TEXT("target slot commits the new core"), Context.PC->GetSelectedCorePartID(), CoreBooster);
+	TestEqual(TEXT("left slot is not touched"), Context.PC->GetSelectedLeftWeaponPartID(), PulseLaser);
+	TestEqual(TEXT("right slot is not touched"), Context.PC->GetSelectedRightWeaponPartID(), VectorCannon);
+	TestEqual(TEXT("successful replacement writes one return log"), ReturnManager->GetReturnLogs().Num(), 1);
+	if (ReturnManager->GetReturnLogs().Num() == 1)
+	{
+		const FReturnedDronePartLog& Log = ReturnManager->GetReturnLogs()[0];
+		TestEqual(TEXT("return log records the replaced old part"), Log.DronePartID, CoreZenith);
+		TestEqual(TEXT("return log records Replace"), Log.ReturnReason, EDronePartReturnReason::Replace);
+		TestTrue(TEXT("return log is processed only after commit"), Log.bIsProcessed);
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneSelect06TransactionServerErrorTest,
+	"DroneProto.SELECT06.Transaction.ServerErrorPreservesSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneSelect06TransactionServerErrorTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("DroneSelect06TransactionServerErrorWorld"), ReturnManager);
+	TestNotNull(TEXT("inventory is available"), Context.Inventory);
+	TestNotNull(TEXT("player controller is available"), Context.PC);
+	TestNotNull(TEXT("return manager is available"), ReturnManager);
+	if (!Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName CoreBooster = ADronePartInventory::GetCoreBoosterPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+
+	const int32 ZenithBefore = Context.Inventory->GetCurrentCount(CoreZenith);
+	const int32 BoosterBefore = Context.Inventory->GetCurrentCount(CoreBooster);
+	const int32 PulseBefore = Context.Inventory->GetCurrentCount(PulseLaser);
+	const int32 VectorBefore = Context.Inventory->GetCurrentCount(VectorCannon);
+
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::Core, CoreBooster);
+
+	TestEqual(TEXT("server error restores authoritative core snapshot"), Context.PC->GetSelectedCorePartID(), CoreZenith);
+	TestEqual(TEXT("server error restores authoritative left snapshot"), Context.PC->GetSelectedLeftWeaponPartID(), PulseLaser);
+	TestEqual(TEXT("server error restores authoritative right snapshot"), Context.PC->GetSelectedRightWeaponPartID(), VectorCannon);
+	TestEqual(TEXT("server error preserves old core stock"), Context.Inventory->GetCurrentCount(CoreZenith), ZenithBefore);
+	TestEqual(TEXT("server error preserves requested core stock"), Context.Inventory->GetCurrentCount(CoreBooster), BoosterBefore);
+	TestEqual(TEXT("server error preserves left stock"), Context.Inventory->GetCurrentCount(PulseLaser), PulseBefore);
+	TestEqual(TEXT("server error preserves right stock"), Context.Inventory->GetCurrentCount(VectorCannon), VectorBefore);
+	TestEqual(TEXT("server error writes no replacement log"), ReturnManager->GetReturnLogs().Num(), 0);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneSelect06ClientSnapshotOverwriteTest,
+	"DroneProto.SELECT06.Client.AuthoritativeSnapshotOverwrite",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneSelect06ClientSnapshotOverwriteTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneSelect06ClientSnapshotWorld"));
+	TestNotNull(TEXT("player controller is available"), Context.PC);
+	if (!Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, ADronePartInventory::GetCoreBoosterPartID());
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, ADronePartInventory::GetFractureBurstPartID());
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, ADronePartInventory::GetVectorCannonPartID());
+
+	const FName AuthoritativeCore = ADronePartInventory::GetCoreZenithPartID();
+	const FName AuthoritativeLeft = ADronePartInventory::GetPulseLaserPartID();
+	const FName AuthoritativeRight = ADronePartInventory::GetFractureBurstPartID();
+	Context.PC->Client_RestorePartSelectionAfterServerError_Implementation(
+		AuthoritativeCore,
+		AuthoritativeLeft,
+		AuthoritativeRight);
+
+	TestEqual(TEXT("client overwrites stale core with authoritative snapshot"), Context.PC->GetSelectedCorePartID(), AuthoritativeCore);
+	TestEqual(TEXT("client overwrites stale left with authoritative snapshot"), Context.PC->GetSelectedLeftWeaponPartID(), AuthoritativeLeft);
+	TestEqual(TEXT("client overwrites stale right with authoritative snapshot"), Context.PC->GetSelectedRightWeaponPartID(), AuthoritativeRight);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartSelectUIGlueTest,
 	"DroneProto.D5.DronePartSelectUI.BlueprintGlue",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

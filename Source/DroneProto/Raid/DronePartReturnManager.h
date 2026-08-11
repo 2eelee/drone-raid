@@ -2,10 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "DronePart.h"
+#include "DronePartInventory.h"
 #include "UObject/Object.h"
 #include "DronePartReturnManager.generated.h"
 
-class ADronePartInventory;
 class ARaidPlayerController;
 
 UENUM(BlueprintType)
@@ -59,6 +59,11 @@ public:
 	bool ReturnSingleSelectedPart(ARaidPlayerController* PC, EPartSlot Slot, EDronePartReturnReason Reason);
 	bool ReturnSingleEquippedPart(ARaidPlayerController* PC, EPartSlot Slot, EDronePartReturnReason Reason);
 	bool ReturnSinglePart(ARaidPlayerController* PC, FName PartID, EPartSlot Slot, EDronePartReturnReason Reason);
+	EDronePartSelectionCommitResult TryCommitSelectedPartChange(
+		ARaidPlayerController* PC,
+		EPartSlot Slot,
+		FName NewPartID,
+		FString& OutFailureReason);
 
 	bool ValidateReturn(ARaidPlayerController* PC, FName PartID, EPartSlot Slot, EDronePartReturnReason Reason) const;
 	bool IsSelectedSlotAlreadyEmpty(const ARaidPlayerController* PC, EPartSlot Slot) const;

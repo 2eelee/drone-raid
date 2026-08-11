@@ -540,6 +540,10 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 		return;
 	}
 
+	const FName SnapshotCorePartID = SelectedCorePartID;
+	const FName SnapshotLeftWeaponPartID = SelectedLeftWeaponPartID;
+	const FName SnapshotRightWeaponPartID = SelectedRightWeaponPartID;
+
 	const FString PlayerLog = BuildControllerLogString(this);
 	if (PlayerSelectionState == EPlayerSelectionState::Selecting)
 	{
@@ -564,6 +568,16 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			GetPartMaxCount(PartID),
 			ToPlayerSelectionStateLogString(PlayerSelectionState),
 			*RaidStateLog);
+	};
+	const auto RestoreSelectionAfterServerError = [this, SnapshotCorePartID, SnapshotLeftWeaponPartID, SnapshotRightWeaponPartID]()
+	{
+		SetSelectedPartIDForSlotForServer(EPartSlot::Core, SnapshotCorePartID);
+		SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, SnapshotLeftWeaponPartID);
+		SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, SnapshotRightWeaponPartID);
+		Client_RestorePartSelectionAfterServerError(
+			SnapshotCorePartID,
+			SnapshotLeftWeaponPartID,
+			SnapshotRightWeaponPartID);
 	};
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] SelectPart Request: Player=%s Slot=%s NewPart=%s PlayerSelectionState=%s RaidState=%s"),
@@ -631,8 +645,8 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString());
-		LogSelectSummary(NewPartID, false, TEXT("Inventory not ready"));
-		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Inventory not ready"));
+		LogSelectSummary(NewPartID, false, TEXT("Server error: Inventory not ready"));
+		RestoreSelectionAfterServerError();
 		return;
 	}
 
@@ -669,12 +683,18 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString());
-		LogSelectSummary(NewPartID, false, TEXT("Return manager not ready"));
-		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Return manager not ready"));
+		LogSelectSummary(NewPartID, false, TEXT("Server error: Return manager not ready"));
+		RestoreSelectionAfterServerError();
 		return;
 	}
 
-	if (!Inventory->IsPartAvailable(NewPartID))
+	FString CommitFailureReason;
+	const EDronePartSelectionCommitResult CommitResult = ReturnManager->TryCommitSelectedPartChange(
+		this,
+		Slot,
+		NewPartID,
+		CommitFailureReason);
+	if (CommitResult == EDronePartSelectionCommitResult::OutOfStock)
 	{
 		UE_LOG(LogTemp, Log, TEXT("Replace Failed: Player=%s Slot=%s PreviousPart=%s NewPart=%s Reason=New part out of stock, keeping old selection Count=%d/%d"),
 			*PlayerLog,
@@ -683,48 +703,23 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 			*NewPartID.ToString(),
 			Inventory->GetCurrentCount(NewPartID),
 			Inventory->GetMaxCount(NewPartID));
-
 		LogSelectSummary(NewPartID, false, TEXT("Out of stock"));
 		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Out of stock"));
 		return;
 	}
 
-	if (!PreviousPartID.IsNone())
+	if (CommitResult == EDronePartSelectionCommitResult::ServerError)
 	{
-		if (!ReturnManager->ReturnSingleSelectedPart(this, Slot, EDronePartReturnReason::Replace))
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Server] SelectPart Failed: Player=%s Slot=%s PreviousPart=%s NewPart=%s Reason=Failed to return previous part"),
-				*PlayerLog,
-				ToSelectionSlotLogString(Slot),
-				*PreviousPartID.ToString(),
-				*NewPartID.ToString());
-			LogSelectSummary(NewPartID, false, TEXT("Failed to return previous part"));
-			Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Failed to return previous part"));
-			return;
-		}
-	}
-
-	if (!Inventory->TryConsumePart(NewPartID))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("Replace Failed: Player=%s Slot=%s PreviousPart=%s NewPart=%s Reason=New part consume failed after return Count=%d/%d"),
+		UE_LOG(LogTemp, Warning, TEXT("[Server] SelectPart Failed: Player=%s Slot=%s PreviousPart=%s NewPart=%s Reason=Atomic commit server error Detail=%s"),
 			*PlayerLog,
 			ToSelectionSlotLogString(Slot),
 			*PreviousPartID.ToString(),
 			*NewPartID.ToString(),
-			Inventory->GetCurrentCount(NewPartID),
-			Inventory->GetMaxCount(NewPartID));
-
-		if (!PreviousPartID.IsNone() && Inventory->TryConsumePart(PreviousPartID))
-		{
-			SetSelectedPartIDForSlotForServer(Slot, PreviousPartID);
-		}
-
-		LogSelectSummary(NewPartID, false, TEXT("Out of stock"));
-		Client_NotifyPartSelectionResult(Slot, NewPartID, false, TEXT("Out of stock"));
+			*CommitFailureReason);
+		LogSelectSummary(NewPartID, false, TEXT("Server error: Atomic commit failed"));
+		RestoreSelectionAfterServerError();
 		return;
 	}
-
-	SetSelectedPartIDForSlotForServer(Slot, NewPartID);
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] SelectPart Success: Player=%s Slot=%s PreviousPart=%s NewPart=%s Count=%d/%d"),
 		*PlayerLog,
@@ -973,6 +968,24 @@ void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 	}
 
 	OnPartSelectionResult.Broadcast(Slot, PartID, bSuccess, Reason);
+}
+
+void ARaidPlayerController::Client_RestorePartSelectionAfterServerError_Implementation(
+	FName AuthoritativeCorePartID,
+	FName AuthoritativeLeftWeaponPartID,
+	FName AuthoritativeRightWeaponPartID)
+{
+	SetSelectedPartIDForSlot(EPartSlot::Core, AuthoritativeCorePartID);
+	SetSelectedPartIDForSlot(EPartSlot::LeftWeapon, AuthoritativeLeftWeaponPartID);
+	SetSelectedPartIDForSlot(EPartSlot::RightWeapon, AuthoritativeRightWeaponPartID);
+
+	UE_LOG(LogTemp, Warning, TEXT("[Client] Part selection restored after server error: Core=%s Left=%s Right=%s"),
+		*AuthoritativeCorePartID.ToString(),
+		*AuthoritativeLeftWeaponPartID.ToString(),
+		*AuthoritativeRightWeaponPartID.ToString());
+	OnSelectedPartsChanged.Broadcast();
+	RefreshSelectionUI();
+	OnPartSelectionServerError.Broadcast();
 }
 
 void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(

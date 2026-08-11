@@ -21,6 +21,7 @@ class UDronePartReturnManager;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnPartSelectionResult, EPartSlot, Slot, FName, PartID, bool, bSuccess, FString, Reason);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSelectedPartsChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPartSelectUIRefreshRequested);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnPartSelectionServerError);
 
 UENUM(BlueprintType)
 enum class EPlayerSelectionState : uint8
@@ -46,6 +47,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "UI")
 	FOnPartSelectUIRefreshRequested OnPartSelectUIRefreshRequested;
+
+	UPROPERTY(BlueprintAssignable, Category = "Drone Parts")
+	FOnPartSelectionServerError OnPartSelectionServerError;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UUserWidget> DronePartSelectWidgetClass;
@@ -278,6 +282,12 @@ public:
 
 	UFUNCTION(Client, Reliable, Category = "Drone Parts")
 	void Client_NotifyPartSelectionResult(EPartSlot Slot, FName PartID, bool bSuccess, const FString& Reason);
+
+	UFUNCTION(Client, Reliable, Category = "Drone Parts")
+	void Client_RestorePartSelectionAfterServerError(
+		FName AuthoritativeCorePartID,
+		FName AuthoritativeLeftWeaponPartID,
+		FName AuthoritativeRightWeaponPartID);
 
 	UFUNCTION(Client, Reliable, Category = "Raid")
 	void Client_NotifyRaidReadyResult(bool bSuccess, const FString& Reason, FName CorePartID, FName LeftWeaponPartID, FName RightWeaponPartID);
