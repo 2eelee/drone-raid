@@ -1415,6 +1415,107 @@ bool FDronePOR25CombatDataTableDroneCacheTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableAssetContractTest,
+	"DroneProto.POR25.CombatDataTable.AssetPathsAndHardReferences",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableAssetContractTest::RunTest(const FString& Parameters)
+{
+	struct FExpectedCombatAsset
+	{
+		const TCHAR* Path;
+		const TCHAR* DroneProperty;
+		UScriptStruct* RowStruct;
+	};
+	const FExpectedCombatAsset ExpectedAssets[] =
+	{
+		{ TEXT("/Game/Data/DroneCombat/DT_DroneCore.DT_DroneCore"), TEXT("DroneCoreDataTable"), FDroneCoreRow::StaticStruct() },
+		{ TEXT("/Game/Data/DroneCombat/DT_DroneWeapon.DT_DroneWeapon"), TEXT("DroneWeaponDataTable"), FDroneWeaponRow::StaticStruct() }
+	};
+
+	const ADrone* DroneCDO = GetDefault<ADrone>();
+	for (const FExpectedCombatAsset& Expected : ExpectedAssets)
+	{
+		const UDataTable* Table = Cast<UDataTable>(FSoftObjectPath(Expected.Path).TryLoad());
+		TestNotNull(FString::Printf(TEXT("asset loads: %s"), Expected.Path), Table);
+		if (Table)
+		{
+			TestEqual(FString::Printf(TEXT("typed row: %s"), Expected.Path), Table->RowStruct.Get(), Expected.RowStruct);
+		}
+
+		const FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(
+			ADrone::StaticClass(), FName(Expected.DroneProperty));
+		TestNotNull(FString::Printf(TEXT("hard reference property: %s"), Expected.DroneProperty), Property);
+		if (Property && DroneCDO)
+		{
+			const UObject* ReferencedObject = Property->GetObjectPropertyValue_InContainer(DroneCDO);
+			TestTrue(FString::Printf(TEXT("CDO hard reference: %s"), Expected.Path), ReferencedObject == Table);
+		}
+	}
+
+	FString DroneSource;
+	const FString DronePath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Drone.cpp");
+	TestTrue(TEXT("drone source loads"), FFileHelper::LoadFileToString(DroneSource, *DronePath));
+	for (const FExpectedCombatAsset& Expected : ExpectedAssets)
+	{
+		TestTrue(FString::Printf(TEXT("hard reference is present: %s"), Expected.Path),
+			DroneSource.Contains(Expected.Path));
+	}
+	TestFalse(TEXT("runtime does not read combat CSV"), DroneSource.Contains(TEXT("FillDataTableFromCSV"))
+		|| DroneSource.Contains(TEXT("DroneCore.csv"))
+		|| DroneSource.Contains(TEXT("DroneWeapon.csv")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableAssetCanonicalEqualityTest,
+	"DroneProto.POR25.CombatDataTable.AssetCanonicalEquality",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableAssetCanonicalEqualityTest::RunTest(const FString& Parameters)
+{
+	const FDroneCombatDataTableSet Tables =
+	{
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/DroneCombat/DT_DroneCore.DT_DroneCore")).TryLoad()),
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/DroneCombat/DT_DroneWeapon.DT_DroneWeapon")).TryLoad())
+	};
+	FDroneCombatResolvedConfig Actual;
+	EDroneCombatDataFallbackReason Reason = EDroneCombatDataFallbackReason::None;
+	TestTrue(TEXT("asset combat tables resolve atomically"), DroneCombatData::TryResolve(Tables, Actual, Reason));
+	TestEqual(TEXT("asset combat tables resolve without fallback"), Reason, EDroneCombatDataFallbackReason::None);
+
+	const FDroneCombatResolvedConfig Expected = FDroneCombatRules::MakeCanonicalConfig();
+	TestEqual(TEXT("asset core row count matches canonical"), Actual.CoreRules.Num(), Expected.CoreRules.Num());
+	for (int32 Index = 0; Index < FMath::Min(Actual.CoreRules.Num(), Expected.CoreRules.Num()); ++Index)
+	{
+		const FDroneCoreRule& ActualRule = Actual.CoreRules[Index];
+		const FDroneCoreRule& ExpectedRule = Expected.CoreRules[Index];
+		const FString Label = FString::Printf(TEXT("core row %d"), Index);
+		TestEqual(Label + TEXT(" type"), ActualRule.Type, ExpectedRule.Type);
+		TestEqual(Label + TEXT(" attack modifier"), ActualRule.AttackModifier, ExpectedRule.AttackModifier);
+		TestEqual(Label + TEXT(" move speed modifier"), ActualRule.MoveSpeedModifier, ExpectedRule.MoveSpeedModifier);
+		TestEqual(Label + TEXT(" effect value 01"), ActualRule.EffectValue01, ExpectedRule.EffectValue01);
+		TestEqual(Label + TEXT(" effect value 02"), ActualRule.EffectValue02, ExpectedRule.EffectValue02);
+		TestEqual(Label + TEXT(" effect max value"), ActualRule.EffectMaxValue, ExpectedRule.EffectMaxValue);
+	}
+
+	TestEqual(TEXT("asset weapon row count matches canonical"), Actual.WeaponRules.Num(), Expected.WeaponRules.Num());
+	for (int32 Index = 0; Index < FMath::Min(Actual.WeaponRules.Num(), Expected.WeaponRules.Num()); ++Index)
+	{
+		const FDroneWeaponRule& ActualRule = Actual.WeaponRules[Index];
+		const FDroneWeaponRule& ExpectedRule = Expected.WeaponRules[Index];
+		const FString Label = FString::Printf(TEXT("weapon row %d"), Index);
+		TestEqual(Label + TEXT(" type"), ActualRule.Type, ExpectedRule.Type);
+		TestEqual(Label + TEXT(" base damage"), ActualRule.BaseDamage, ExpectedRule.BaseDamage);
+		TestEqual(Label + TEXT(" special value 01"), ActualRule.SpecialValue01, ExpectedRule.SpecialValue01);
+		TestEqual(Label + TEXT(" special value 02"), ActualRule.SpecialValue02, ExpectedRule.SpecialValue02);
+		TestEqual(Label + TEXT(" special max value"), ActualRule.SpecialMaxValue, ExpectedRule.SpecialMaxValue);
+		TestEqual(Label + TEXT(" hit count"), ActualRule.HitCount, ExpectedRule.HitCount);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePOR25CombatDataTableResolveTest,
 	"DroneProto.POR25.CombatDataTable.ResolveCanonicalAndOverride",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
