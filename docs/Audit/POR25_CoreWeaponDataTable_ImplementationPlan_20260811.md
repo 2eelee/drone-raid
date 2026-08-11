@@ -35,7 +35,7 @@
 - Produces: `DroneCombatData::TryResolve(const FDroneCombatDataTableSet&, FDroneCombatResolvedConfig&, EDroneCombatDataFallbackReason&)`
 - Produces: `DroneCombatData::ToString(EDroneCombatDataFallbackReason)`
 
-- [ ] **Step 1: resolver compile RED 테스트 작성**
+- [x] **Step 1: resolver compile RED 테스트 작성**
 
 `DronePartInventoryTests.cpp`에 `DroneCombatDataTableResolver.h`를 include하고 `FDroneCoreRow`/`FDroneWeaponRow` transient table fixture를 literal로 만든다. fixture는 `CORE_001`~`003`, `WEAPON_001`~`003` 전 필드를 설계 문서 값으로 넣는다.
 
@@ -64,7 +64,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 첫 테스트는 Zenith `EffectValue01=0.05`, Pulse `BaseDamage=12` override가 resolved rule에 들어가는지 확인한다. 둘째 테스트는 Core가 유효한 상태에서 `WEAPON_003`을 제거하고 `TryResolve=false`, `MissingWeaponRow`를 확인하며 사전에 넣어 둔 `OutConfig` sentinel이 publish되지 않는지 확인한다. 셋째 테스트는 wrong row struct, invalid Core effect type, invalid Weapon ID, non-finite/negative 수치를 각각 고정 reason으로 확인한다.
 
-- [ ] **Step 2: Editor Build로 compile RED 확인**
+- [x] **Step 2: Editor Build로 compile RED 확인**
 
 Run:
 
@@ -74,7 +74,7 @@ Run:
 
 Expected: `DroneCombatDataTableResolver.h` 또는 신규 config symbol 부재 compile 실패. 오탈자나 include path 오류가 아니라 요구 API 부재가 원인인지 확인한다.
 
-- [ ] **Step 3: runtime config와 canonical config 구현**
+- [x] **Step 3: runtime config와 canonical config 구현**
 
 `DroneCombatTypes.h`에 다음 값 타입을 추가한다.
 
@@ -112,7 +112,7 @@ struct FDroneCombatResolvedConfig
 
 `FDroneCombatRules::MakeCanonicalConfig()`는 XLSX와 현재 공식의 정확한 3+3 rules를 만든다. `None`은 rule을 추가하지 않고 기존 default 결과를 유지한다.
 
-- [ ] **Step 4: 원자 resolver 최소 구현**
+- [x] **Step 4: 원자 resolver 최소 구현**
 
 `DroneCombatDataTableResolver.h`에 exact table set과 실패 reason을 선언한다.
 
@@ -147,7 +147,7 @@ struct FDroneCombatDataTableSet
 
 resolver는 `FDroneCoreRow::StaticStruct()`/`FDroneWeaponRow::StaticStruct()`를 요구하고, exact row name·count·numeric ID를 검증한 뒤 expected row table로 runtime enum과 effect type을 고정 매핑한다. local `Candidate`만 채우고 모든 검증이 끝난 뒤 `OutConfig = MoveTemp(Candidate)`로 publish한다.
 
-- [ ] **Step 5: POR25 resolver GREEN 확인**
+- [x] **Step 5: POR25 resolver GREEN 확인**
 
 Build 후 실행:
 
@@ -157,7 +157,7 @@ Build 후 실행:
 
 Expected: 현 단계 3/3 성공, 실패 0.
 
-- [ ] **Step 6: resolver 커밋**
+- [x] **Step 6: resolver 커밋**
 
 ```powershell
 git add Source/DroneProto/Raid/DroneCombatTypes.h Source/DroneProto/Raid/DroneCombatDataTableResolver.h Source/DroneProto/Raid/DroneCombatDataTableResolver.cpp Source/DroneProto/Tests/DronePartInventoryTests.cpp
@@ -178,7 +178,7 @@ git commit -m "feat: POR-25 전투 데이터 원자 resolver 추가"
 - Produces: `CalculateDrainHeal(float, const FDroneCombatResolvedConfig&)`
 - Keeps: 기존 overload 세 개는 `MakeCanonicalConfig()`를 사용해 호출 호환성을 유지
 
-- [ ] **Step 1: 계산 주입 RED 테스트 추가**
+- [x] **Step 1: 계산 주입 RED 테스트 추가**
 
 ```cpp
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -189,11 +189,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 canonical config를 복사해 Pulse `BaseDamage=12`, third-hit damage `30`, Zenith step `0.05`, Drain heal ratio `0.20`, cap `7`로 바꾼다. 새 overload가 Pulse 1회 12, 3회 30, Zenith HP 50%에서 `1.25`, Drain 피해 50에서 heal 7을 반환해야 한다. Fracture와 Vector는 canonical config에서 기존 11/15 결과를 유지하는지 함께 확인한다.
 
-- [ ] **Step 2: Build RED 확인**
+- [x] **Step 2: Build RED 확인**
 
 Task 1과 같은 Build 명령을 실행한다. Expected: config overload 부재 compile 실패. 이미 compile되면 기존 상수 8/18/0.02/0.12 때문에 assertion RED여야 한다.
 
-- [ ] **Step 3: config 기반 계산 최소 구현**
+- [x] **Step 3: config 기반 계산 최소 구현**
 
 각 계산은 runtime type으로 rule을 찾고 없으면 기존 `None` 결과를 반환한다. 공식은 그대로 두고 다음 필드만 대입한다.
 
@@ -216,7 +216,7 @@ return FMath::Min(FMath::Max(0.0f, DamageDealt) * DrainRule->EffectValue01, Drai
 
 Booster 공격 보너스가 speed bonus의 절반인 공식, Vector 공격 후 거리 reset, Pulse 좌우 count 분리는 바꾸지 않는다.
 
-- [ ] **Step 4: 직접·기존 formula GREEN 확인**
+- [x] **Step 4: 직접·기존 formula GREEN 확인**
 
 POR25 direct suite는 4/4가 되어야 한다. 이어서 실행:
 
@@ -227,7 +227,7 @@ POR25 direct suite는 4/4가 되어야 한다. 이어서 실행:
 
 Expected: POR25 4/4, D9 1/1, D13 1/1 성공.
 
-- [ ] **Step 5: 계산 커밋**
+- [x] **Step 5: 계산 커밋**
 
 ```powershell
 git add Source/DroneProto/Raid/DroneCombatTypes.h Source/DroneProto/Tests/DronePartInventoryTests.cpp
@@ -247,7 +247,7 @@ git commit -m "feat: POR-25 전투 계산을 데이터 설정에 연결"
 - Produces: `ADrone::ResolveDroneCombatConfigForServer()`
 - Produces under `WITH_DEV_AUTOMATION_TESTS`: `SetDroneCombatDataTablesForTest(UDataTable*, UDataTable*)`, `GetDroneCombatConfigResolveCountForTest()`
 
-- [ ] **Step 1: 실제 server path RED 테스트 추가**
+- [x] **Step 1: 실제 server path RED 테스트 추가**
 
 ```cpp
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -258,11 +258,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 기존 server drone/boss test context에 transient Core/Weapon fixture를 주입하고 Pulse base 12, Drain heal ratio 0.20/cap 7로 바꾼다. 실제 `ApplyLoadout`과 server attack 경로에서 boss HP delta가 table 값으로 계산되고, 같은 drone의 move-speed refresh와 Drain heal 뒤에도 resolve count가 1인지 확인한다. 잘못된 Weapon table을 다시 주입한 별도 drone은 canonical 전체 fallback을 사용하며 reason이 `MissingWeaponRow`인지 확인한다.
 
-- [ ] **Step 2: Build RED 확인**
+- [x] **Step 2: Build RED 확인**
 
 Task 1 Build 명령을 실행한다. Expected: test setter/cache getter 또는 drone config method 부재 compile 실패.
 
-- [ ] **Step 3: `ADrone` property와 cache 추가**
+- [x] **Step 3: `ADrone` property와 cache 추가**
 
 `Drone.h` private 영역에 다음 상태를 추가한다.
 
@@ -283,11 +283,11 @@ FString DroneCombatConfigFallbackReason;
 
 `ResolveDroneCombatConfigForServer()`는 처음 한 번만 `TryResolve`하고 실패 시 `MakeCanonicalConfig()` 전체를 저장한다. 성공/실패 `[DR_SUMMARY] DroneCombatData ...` 로그도 이 지점에서 한 번만 남긴다.
 
-- [ ] **Step 4: 기존 server 계산 호출을 같은 cache로 연결**
+- [x] **Step 4: 기존 server 계산 호출을 같은 cache로 연결**
 
 `CalculateWeaponDamageForServer`, `CalculateCoreForServer`, `RefreshMoveSpeedForServer`, `ApplyDrainHealForServer`가 모두 `ResolveDroneCombatConfigForServer()` 반환값을 config overload에 전달한다. `CalculateCoreForServer`의 `const`는 캐시를 갱신해야 하므로 제거한다. 공격·이동·회복 authority guard, runtime counters와 combat record 갱신은 그대로 둔다.
 
-- [ ] **Step 5: POR25·실제 전투 GREEN 확인**
+- [x] **Step 5: POR25·실제 전투 GREEN 확인**
 
 Build 후 POR25 direct suite 5/5를 실행한다. 이어서 다음 prefix를 각각 실행한다.
 
@@ -298,7 +298,7 @@ DroneProto.D13.DroneCombat.SpecAlignment => 1/1
 DroneProto.D20.LogSemantics.NoDamageAttack => 1/1
 ```
 
-- [ ] **Step 6: 서버 연결 커밋**
+- [x] **Step 6: 서버 연결 커밋**
 
 ```powershell
 git add Source/DroneProto/Drone.h Source/DroneProto/Drone.cpp Source/DroneProto/Tests/DronePartInventoryTests.cpp
@@ -322,7 +322,7 @@ git commit -m "feat: POR-25 드론 전투 데이터 캐시 연결"
 - Produces: `/Game/Data/DroneCombat/DT_DroneWeapon`
 - Produces: CDO properties `DroneCoreDataTable`, `DroneWeaponDataTable`
 
-- [ ] **Step 1: asset RED 테스트 두 개 추가**
+- [x] **Step 1: asset RED 테스트 두 개 추가**
 
 ```cpp
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -338,11 +338,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 첫 테스트는 두 fixed path load, row struct, `ADrone` CDO reflection property, `Drone.cpp` hard reference 문자열, production runtime CSV read 부재를 확인한다. 둘째 테스트는 shipping tables를 resolver에 전달해 canonical config와 Core/Weapon 모든 필드가 동등한지 확인한다.
 
-- [ ] **Step 2: direct suite asset RED 확인**
+- [x] **Step 2: direct suite asset RED 확인**
 
 Build와 POR25 suite를 실행한다. Expected: 기존 5개는 성공하고 신규 두 테스트가 asset load null로 실패해 총 5/7 성공, 2/7 실패.
 
-- [ ] **Step 3: XLSX read-only 검증과 canonical CSV 생성**
+- [x] **Step 3: XLSX read-only 검증과 canonical CSV 생성**
 
 번들 `@oai/artifact-tool`로 `Core!A1:J4`, `Weapon!A1:J4` 값·computed style을 inspect하고 두 시트를 render/view한다. XLSX는 export하거나 덮어쓰지 않는다.
 
@@ -362,7 +362,7 @@ WEAPON_002,2002,5,FRACTURE_MULTI_HIT,3,2,0,4
 WEAPON_003,2003,7,MOVE_DISTANCE_DAMAGE,5,1,8,1
 ```
 
-- [ ] **Step 4: UE Python commandlet로 typed asset 생성**
+- [x] **Step 4: UE Python commandlet로 typed asset 생성**
 
 conversation temp의 단일 Python script에서 다음 helper를 사용한다. 저장 대상은 프로젝트 `Content/Data/DroneCombat`이다.
 
@@ -391,7 +391,7 @@ Run:
 
 Expected: 두 CSV import `0 Problems`, 두 asset save 성공. Editor process 종료 후 파일 존재를 확인한다.
 
-- [ ] **Step 5: CDO hard reference 연결**
+- [x] **Step 5: CDO hard reference 연결**
 
 `ADrone::ADrone()`에 fixed object finder를 추가한다.
 
@@ -409,11 +409,11 @@ DroneWeaponDataTable = WeaponTableFinder.Object;
 
 runtime에서 `FillDataTableFromCSV`나 CSV 파일 읽기는 추가하지 않는다.
 
-- [ ] **Step 6: shipping asset GREEN 확인**
+- [x] **Step 6: shipping asset GREEN 확인**
 
 Build 후 POR25 direct suite를 실행한다. Expected: 7/7 성공, 두 asset row struct·CDO reference·canonical 전 필드 동등성 성공.
 
-- [ ] **Step 7: data/asset 커밋**
+- [x] **Step 7: data/asset 커밋**
 
 ```powershell
 git add Data/DroneCombat Content/Data/DroneCombat Source/DroneProto/Drone.cpp Source/DroneProto/Tests/DronePartInventoryTests.cpp
@@ -433,7 +433,7 @@ git commit -m "feat: POR-25 코어 무기 데이터테이블 에셋 추가"
 - Consumes: 실제 커밋 hash, 자동화 발견 수/성공 수, Build와 asset 결과
 - Produces: POR-25 Linear-ready 완료 요약; 상태는 `In Progress` 유지
 
-- [ ] **Step 1: 직접·인접 suite 재실행**
+- [x] **Step 1: 직접·인접 suite 재실행**
 
 순서대로 실행하고 실제 발견 수와 성공 수를 기록한다.
 
@@ -445,11 +445,11 @@ DroneProto.D13.DroneCombat.SpecAlignment => expected 1/1
 DroneProto.D20.LogSemantics.NoDamageAttack => expected 1/1
 ```
 
-- [ ] **Step 2: UE 5.7 Editor Build**
+- [x] **Step 2: UE 5.7 Editor Build**
 
 Task 1의 canonical Build 명령을 실행한다. Expected: exit 0.
 
-- [ ] **Step 3: 전체 DroneProto 회귀**
+- [x] **Step 3: 전체 DroneProto 회귀**
 
 Core/Weapon은 공유 피해·이속·회복 계산을 바꾸므로 전체 회귀를 실행한다.
 
@@ -459,15 +459,15 @@ Core/Weapon은 공유 피해·이속·회복 계산을 바꾸므로 전체 회�
 
 Expected: 기존 132개 + 신규 7개를 포함한 실제 발견 수 전부 성공, 실패 0. 숫자가 다르면 로그의 실제 발견 수를 canonical 기록에 사용한다.
 
-- [ ] **Step 4: XLSX/CSV/asset 최종 동등성 확인**
+- [x] **Step 4: XLSX/CSV/asset 최종 동등성 확인**
 
 artifact inspection으로 XLSX Core/Weapon 3+3 rows를 다시 읽고 CSV literal과 대조한다. POR25 `AssetCanonicalEquality` 결과와 `[DR_SUMMARY] DroneCombatData Source=DataTable` 로그를 함께 확인한다. 예상치 못한 fallback 로그는 0건이어야 한다.
 
-- [ ] **Step 5: canonical 문서 갱신**
+- [x] **Step 5: canonical 문서 갱신**
 
 `ImplementationMap_Current.md`의 현재 작업 추적과 `CORE-01`~`CORE-05`, `WEAPON-01`~`WEAPON-05`만 실제 함수·테스트·커밋으로 갱신한다. `DEVLOG.md`에는 scope, RED 원인, GREEN commands/counts, CSV/assets, fallback, GUI PIE 미실행을 append한다. `AGENTS.md`는 POR-25 current state와 다음 DataTable 후보를 실제 결과에 맞춰 갱신한다.
 
-- [ ] **Step 6: 정적 검사와 문서 커밋**
+- [x] **Step 6: 정적 검사와 문서 커밋**
 
 ```powershell
 git diff --check
@@ -480,6 +480,6 @@ git commit -m "docs: POR-25 전투 데이터테이블 검증 기록"
 
 `ImplementationMap_Current.md`와 `DEVLOG.md`는 `docs/*` ignore 정책에 따라 로컬 canonical 문서로 유지하고, Git 정책을 바꾸지 않는다.
 
-- [ ] **Step 7: Linear-ready 요약 준비**
+- [x] **Step 7: Linear-ready 요약 준비**
 
 POR-25에 변경 파일, 직접/인접/전체 테스트 수, Build, asset import와 canonical 동등성, GUI PIE 미실행 이유, 남은 경계를 적을 summary를 준비한다. 상태는 `In Progress`로 유지한다.
