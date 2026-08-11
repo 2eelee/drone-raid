@@ -32,6 +32,7 @@
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/TextBlock.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
 #include "Engine/Engine.h"
@@ -3017,6 +3018,83 @@ bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters
 				*FString::Printf(TEXT("%s arrow is visible guidance without hit testing"), *ArrowName.ToString()),
 				ArrowButton && ArrowButton->GetVisibility() == ESlateVisibility::HitTestInvisible);
 		}
+	}
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneSelect06ServerErrorPopupFallbackTest,
+	"DroneProto.SELECT06.UI.ServerErrorPopupFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneSelect06ServerErrorPopupFallbackTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneSelect06ServerErrorPopupWorld")));
+	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* Widget = World && WidgetClass
+		? NewObject<UDronePartSelectWidget>(World, WidgetClass)
+		: nullptr;
+
+	TestNotNull(TEXT("selection widget asset class loads"), WidgetClass);
+	TestNotNull(TEXT("selection widget asset instance is created"), Widget);
+	if (!World || !Widget)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	TestTrue(TEXT("selection widget asset initializes"), Widget->Initialize());
+	UFunction* ApplyLayoutFunction = Widget->FindFunction(TEXT("ApplyPlanningLayout"));
+	TestNotNull(TEXT("selection widget exposes its planning layout pass"), ApplyLayoutFunction);
+	if (ApplyLayoutFunction)
+	{
+		Widget->ProcessEvent(ApplyLayoutFunction, nullptr);
+	}
+
+	UBorder* PopupPanel = Widget->WidgetTree
+		? Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Planning_ServerErrorPopup")))
+		: nullptr;
+	UTextBlock* PopupText = Widget->WidgetTree
+		? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("Planning_ServerErrorPopupText")))
+		: nullptr;
+	TestNotNull(TEXT("planning layout creates the server error popup fallback"), PopupPanel);
+	TestNotNull(TEXT("planning layout creates the server error popup text fallback"), PopupText);
+	if (PopupPanel)
+	{
+		TestEqual(TEXT("server error popup starts hidden"), PopupPanel->GetVisibility(), ESlateVisibility::Collapsed);
+		const UCanvasPanelSlot* PopupSlot = Cast<UCanvasPanelSlot>(PopupPanel->Slot);
+		TestNotNull(TEXT("server error popup is attached to the selection canvas"), PopupSlot);
+		if (PopupSlot)
+		{
+			TestEqual(TEXT("server error popup is centered"), PopupSlot->GetAlignment(), FVector2D(0.5f, 0.5f));
+			TestTrue(TEXT("server error popup is layered above the planning cards"), PopupSlot->GetZOrder() > 0);
+		}
+	}
+
+	Widget->ShowPartSelectionServerError();
+	if (PopupPanel)
+	{
+		TestEqual(TEXT("server error popup shows without intercepting input"), PopupPanel->GetVisibility(), ESlateVisibility::HitTestInvisible);
+	}
+	if (PopupText)
+	{
+		TestEqual(
+			TEXT("server error popup uses the SELECT-06 wording"),
+			PopupText->GetText().ToString(),
+			FString(TEXT("일시적인 오류가 발생했습니다. 다시 시도해주세요.")));
+	}
+
+	Widget->SelectFocusedPart();
+	if (PopupPanel)
+	{
+		TestEqual(TEXT("next selection attempt hides the server error popup"), PopupPanel->GetVisibility(), ESlateVisibility::Collapsed);
 	}
 
 	World->DestroyWorld(false);

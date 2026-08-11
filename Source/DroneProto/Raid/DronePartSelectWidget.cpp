@@ -39,6 +39,12 @@ void UDronePartSelectWidget::NativeConstruct()
 		CachedRaidPlayerController->OnPartSelectionResult.AddDynamic(
 			this,
 			&UDronePartSelectWidget::HandlePartSelectionResult);
+		CachedRaidPlayerController->OnPartSelectionServerError.RemoveDynamic(
+			this,
+			&UDronePartSelectWidget::ShowPartSelectionServerError);
+		CachedRaidPlayerController->OnPartSelectionServerError.AddDynamic(
+			this,
+			&UDronePartSelectWidget::ShowPartSelectionServerError);
 		CachedRaidPlayerController->RefreshDronePartInventoryBinding();
 	}
 	else
@@ -54,6 +60,7 @@ void UDronePartSelectWidget::NativeConstruct()
 
 void UDronePartSelectWidget::NativeDestruct()
 {
+	HidePartSelectionServerError();
 	StopTimerTextRefresh();
 	UnbindButtonEvents();
 	ClearRefreshRetry();
@@ -66,6 +73,9 @@ void UDronePartSelectWidget::NativeDestruct()
 		CachedRaidPlayerController->OnPartSelectionResult.RemoveDynamic(
 			this,
 			&UDronePartSelectWidget::HandlePartSelectionResult);
+		CachedRaidPlayerController->OnPartSelectionServerError.RemoveDynamic(
+			this,
+			&UDronePartSelectWidget::ShowPartSelectionServerError);
 	}
 
 	CachedRaidPlayerController = nullptr;
@@ -334,6 +344,8 @@ FName UDronePartSelectWidget::GetPreviewPartIDForSlot(EDronePartSlot PartSlot) c
 
 void UDronePartSelectWidget::SelectFocusedPart()
 {
+	HidePartSelectionServerError();
+
 	if (!CachedRaidPlayerController)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Client] SelectFocusedPart skipped: Owning ARaidPlayerController is missing"));
@@ -352,6 +364,8 @@ void UDronePartSelectWidget::SelectFocusedPart()
 
 void UDronePartSelectWidget::CancelFocusedPart()
 {
+	HidePartSelectionServerError();
+
 	if (!CachedRaidPlayerController)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[Client] CancelFocusedPart skipped: Owning ARaidPlayerController is missing"));
@@ -359,6 +373,34 @@ void UDronePartSelectWidget::CancelFocusedPart()
 	}
 
 	CachedRaidPlayerController->RequestCancelPartFromUI(FocusedSlot);
+}
+
+void UDronePartSelectWidget::ShowPartSelectionServerError()
+{
+	static const FText ServerErrorMessage = FText::FromString(
+		TEXT("일시적인 오류가 발생했습니다. 다시 시도해주세요."));
+
+	if (!ServerErrorPopupPanel)
+	{
+		ApplyPlanningLayout();
+	}
+
+	if (ServerErrorPopupText)
+	{
+		ServerErrorPopupText->SetText(ServerErrorMessage);
+	}
+	if (ServerErrorPopupPanel)
+	{
+		ServerErrorPopupPanel->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+}
+
+void UDronePartSelectWidget::HidePartSelectionServerError()
+{
+	if (ServerErrorPopupPanel)
+	{
+		ServerErrorPopupPanel->SetVisibility(ESlateVisibility::Collapsed);
+	}
 }
 
 float UDronePartSelectWidget::GetSelectionRemainingTime() const
@@ -399,6 +441,11 @@ void UDronePartSelectWidget::HandlePartSelectUIRefreshRequested()
 
 void UDronePartSelectWidget::HandlePartSelectionResult(EPartSlot PartSlot, FName PartID, bool bSuccess, FString Reason)
 {
+	if (bSuccess)
+	{
+		HidePartSelectionServerError();
+	}
+
 	if (ResultText)
 	{
 		ResultText->SetText(FText::FromString(FString::Printf(
@@ -545,6 +592,57 @@ void UDronePartSelectWidget::ApplyPlanningLayout()
 		FLinearColor(0.52f, 0.93f, 0.91f, 0.95f), -20);
 	AddPanel(TEXT("Planning_Timer"), FVector2D(-660.0f, 410.0f), FVector2D(420.0f, 120.0f),
 		FLinearColor(0.72f, 0.74f, 0.78f, 0.98f), -20);
+
+	if (!ServerErrorPopupPanel)
+	{
+		ServerErrorPopupPanel = Cast<UBorder>(WidgetTree->FindWidget(TEXT("Planning_ServerErrorPopup")));
+	}
+	if (!ServerErrorPopupPanel)
+	{
+		ServerErrorPopupPanel = WidgetTree->ConstructWidget<UBorder>(
+			UBorder::StaticClass(),
+			TEXT("Planning_ServerErrorPopup"));
+		if (ServerErrorPopupPanel)
+		{
+			Canvas->AddChildToCanvas(ServerErrorPopupPanel);
+		}
+	}
+
+	if (ServerErrorPopupPanel)
+	{
+		ServerErrorPopupPanel->SetBrushColor(FLinearColor(0.10f, 0.12f, 0.16f, 0.96f));
+		ServerErrorPopupPanel->SetPadding(FMargin(24.0f, 18.0f));
+		ServerErrorPopupPanel->SetVisibility(ESlateVisibility::Collapsed);
+		if (UCanvasPanelSlot* PopupSlot = Cast<UCanvasPanelSlot>(ServerErrorPopupPanel->Slot))
+		{
+			PopupSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+			PopupSlot->SetPosition(FVector2D::ZeroVector);
+			PopupSlot->SetSize(FVector2D(760.0f, 100.0f));
+			PopupSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+			PopupSlot->SetZOrder(100);
+		}
+	}
+
+	if (!ServerErrorPopupText)
+	{
+		ServerErrorPopupText = Cast<UTextBlock>(WidgetTree->FindWidget(TEXT("Planning_ServerErrorPopupText")));
+	}
+	if (!ServerErrorPopupText && ServerErrorPopupPanel)
+	{
+		ServerErrorPopupText = WidgetTree->ConstructWidget<UTextBlock>(
+			UTextBlock::StaticClass(),
+			TEXT("Planning_ServerErrorPopupText"));
+		if (ServerErrorPopupText)
+		{
+			ServerErrorPopupPanel->SetContent(ServerErrorPopupText);
+		}
+	}
+	if (ServerErrorPopupText)
+	{
+		ServerErrorPopupText->SetText(FText::FromString(TEXT("일시적인 오류가 발생했습니다. 다시 시도해주세요.")));
+		ServerErrorPopupText->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+		ServerErrorPopupText->SetJustification(ETextJustify::Center);
+	}
 
 	const FSlateColor PrimaryTextColor(FLinearColor(0.05f, 0.08f, 0.12f, 1.0f));
 	for (UTextBlock* TextBlock : {

@@ -8,6 +8,7 @@
 #include "DronePartSelectWidget.generated.h"
 
 class UButton;
+class UBorder;
 class UImage;
 class UTextBlock;
 
@@ -46,6 +47,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void CancelFocusedPart();
+
+	UFUNCTION(BlueprintCallable, Category = "UI")
+	void ShowPartSelectionServerError();
 
 	UFUNCTION(BlueprintPure, Category = "UI")
 	float GetSelectionRemainingTime() const;
@@ -147,6 +151,12 @@ private:
 	TObjectPtr<UTextBlock> ResultText = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UBorder> ServerErrorPopupPanel = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ServerErrorPopupText = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UImage> Image_Core = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
@@ -214,4 +224,5 @@ private:
 	void ScheduleRefreshRetry(const FString& Reason);
 	void ClearRefreshRetry();
 	void SetLoadingText(const FString& Reason);
+	void HidePartSelectionServerError();
 };
