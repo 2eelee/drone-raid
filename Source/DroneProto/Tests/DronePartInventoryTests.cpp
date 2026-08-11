@@ -2108,6 +2108,8 @@ bool FRaidStateDraftingFlowTest::RunTest(const FString& Parameters)
 	}
 
 	Context.World->AddController(Context.PC);
+	GameMode->DispatchBeginPlay();
+	TestNull(TEXT("boss remains absent while the raid is waiting"), Context.GameState->GetRaidBoss());
 	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
 	TestEqual(TEXT("raid starts Waiting before the first selection entry"), Context.GameState->RaidState, ERaidState::Waiting);
 
@@ -2116,6 +2118,7 @@ bool FRaidStateDraftingFlowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("first player selection entry moves the global raid to Drafting"),
 		Context.GameState->RaidState,
 		ERaidState::Drafting);
+	TestNull(TEXT("boss remains absent while the first player is drafting"), Context.GameState->GetRaidBoss());
 
 	Context.PC->Server_RequestReadyForRaid_Implementation();
 
@@ -2125,6 +2128,24 @@ bool FRaidStateDraftingFlowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Ready success moves the global raid from Drafting to Battle"),
 		Context.GameState->RaidState,
 		ERaidState::Battle);
+	ARaidBoss* SpawnedBoss = Context.GameState->GetRaidBoss();
+	TestNotNull(TEXT("first Ready spawns the raid boss before Battle systems start"), SpawnedBoss);
+	if (SpawnedBoss)
+	{
+		TestTrue(TEXT("first Ready spawns the raid boss at the world origin"),
+			SpawnedBoss->GetActorLocation().Equals(FVector::ZeroVector, 0.01f));
+	}
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	int32 BossCountAfterDuplicateReady = 0;
+	for (TActorIterator<ARaidBoss> It(Context.World); It; ++It)
+	{
+		BossCountAfterDuplicateReady++;
+	}
+	TestEqual(TEXT("duplicate Ready keeps exactly one raid boss"), BossCountAfterDuplicateReady, 1);
+	TestEqual(TEXT("duplicate Ready preserves the first raid boss"),
+		Context.GameState->GetRaidBoss(),
+		SpawnedBoss);
 
 	GameMode->ReturnAllEquippedPartsForRaidEnd(FName(TEXT("Automation")));
 	TestEqual(TEXT("RaidEnd keeps the global End transition"),

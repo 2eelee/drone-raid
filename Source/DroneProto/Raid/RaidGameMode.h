@@ -6,6 +6,7 @@
 #include "RaidGameMode.generated.h"
 
 class UDronePartReturnManager;
+class ARaidBoss;
 enum class EBossState : uint8;
 
 struct FDroneBossDamageContribution
@@ -34,6 +35,7 @@ public:
 
 	void HandleBossDefeatedForServer();
 	void StartRaidTimeLimitTimerForServer();
+	ARaidBoss* EnsureRaidBossForServer();
 
 	// Battle 전이 시 모든 보스의 패턴 타이머 시작/정지 오케스트레이션. 개별 타이머는 Boss가 소유한다.
 	void StartBossPatternsForServer();

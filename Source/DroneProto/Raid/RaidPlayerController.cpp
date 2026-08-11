@@ -2221,6 +2221,31 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 	const FName ReadyCorePartID = SelectedCorePartID;
 	const FName ReadyLeftWeaponPartID = SelectedLeftWeaponPartID;
 	const FName ReadyRightWeaponPartID = SelectedRightWeaponPartID;
+	UWorld* World = GetWorld();
+	ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	ARaidGameMode* RaidGameMode = World ? World->GetAuthGameMode<ARaidGameMode>() : nullptr;
+	if (!RaidGameMode && World)
+	{
+		for (TActorIterator<ARaidGameMode> It(World); It; ++It)
+		{
+			RaidGameMode = *It;
+			break;
+		}
+	}
+
+	const bool bStartsBattle = RaidGameState
+		&& (RaidGameState->RaidState == ERaidState::Waiting
+			|| RaidGameState->RaidState == ERaidState::Drafting);
+	if (bStartsBattle && RaidGameMode && !RaidGameMode->EnsureRaidBossForServer())
+	{
+		FailureReason = TEXT("RaidBoss spawn failed");
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RequestReadyForRaid Failed: Player=%s Source=%s Reason=%s"),
+			*PlayerLog,
+			bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"),
+			*FailureReason);
+		Client_NotifyRaidReadyResult(false, FailureReason, ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID);
+		return false;
+	}
 
 	if (!ControlledDrone->ApplyLoadout(ReadyCorePartID, ReadyLeftWeaponPartID, ReadyRightWeaponPartID))
 	{
@@ -2246,7 +2271,7 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 	bDroneReportGenerated = false;
 	LastDroneReportData = FDroneReportData();
 
-	if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+	if (RaidGameState)
 	{
 		if (RaidGameState->RaidState == ERaidState::Waiting
 			|| RaidGameState->RaidState == ERaidState::Drafting)
@@ -2255,23 +2280,11 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		}
 	}
 	AssignBossTargetForServer();
-	if (UWorld* World = GetWorld())
+	if (RaidGameMode)
 	{
-		ARaidGameMode* RaidGameMode = World->GetAuthGameMode<ARaidGameMode>();
-		if (!RaidGameMode)
-		{
-			for (TActorIterator<ARaidGameMode> It(World); It; ++It)
-			{
-				RaidGameMode = *It;
-				break;
-			}
-		}
-		if (RaidGameMode)
-		{
-			RaidGameMode->StartRaidTimeLimitTimerForServer();
-			RaidGameMode->StartBossPatternsForServer();
-			RaidGameMode->ClearDroneReportKeyForServer(this, FName(TEXT("RaidReady")));
-		}
+		RaidGameMode->StartRaidTimeLimitTimerForServer();
+		RaidGameMode->StartBossPatternsForServer();
+		RaidGameMode->ClearDroneReportKeyForServer(this, FName(TEXT("RaidReady")));
 	}
 
 	StopSelectionTimerForServer(bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"), !bAutoReady);

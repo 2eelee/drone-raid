@@ -603,13 +603,13 @@ bool FDroneBossPatternDataValidationReasonsTest::RunTest(const FString& Paramete
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FBossPatternArenaBossSpawnTransformTest,
-	"DroneProto.POR18.Arena.BossSpawnTransform",
+	FBossPatternArenaBossDeferredSpawnTest,
+	"DroneProto.POR18.Arena.BossDeferredUntilBattle",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FBossPatternArenaBossSpawnTransformTest::RunTest(const FString& Parameters)
+bool FBossPatternArenaBossDeferredSpawnTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternArenaBossSpawnTransformWorld")));
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternArenaBossDeferredSpawnWorld")));
 	TestNotNull(TEXT("test world is created"), World);
 	if (!World)
 	{
@@ -625,13 +625,8 @@ bool FBossPatternArenaBossSpawnTransformTest::RunTest(const FString& Parameters)
 		World->SetGameState(GameState);
 		GameMode->GameState = GameState;
 		GameMode->DispatchBeginPlay();
-		ARaidBoss* Boss = GameState->GetRaidBoss();
-		TestNotNull(TEXT("RaidGameMode BeginPlay spawns the raid boss"), Boss);
-		if (Boss)
-		{
-			TestTrue(TEXT("RaidGameMode spawns the boss at the world origin"),
-				Boss->GetActorLocation().Equals(FVector::ZeroVector, 0.01f));
-		}
+		TestNull(TEXT("RaidGameMode BeginPlay keeps the raid boss absent before Battle"),
+			GameState->GetRaidBoss());
 	}
 
 	World->DestroyWorld(false);

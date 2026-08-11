@@ -105,41 +105,59 @@ void ARaidGameMode::BeginPlay()
 	}
 
 	EnsureDronePartReturnManagerForServer();
+}
 
-	if (!GS->GetRaidBoss())
+ARaidBoss* ARaidGameMode::EnsureRaidBossForServer()
+{
+	if (!HasAuthority())
 	{
-		ARaidBoss* ExistingBoss = nullptr;
-		for (TActorIterator<ARaidBoss> It(GetWorld()); It; ++It)
-		{
-			ExistingBoss = *It;
-			break;
-		}
-
-		if (!ExistingBoss)
-		{
-			FActorSpawnParameters SpawnParams;
-			SpawnParams.Owner = GS;
-			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-			ExistingBoss = GetWorld()->SpawnActor<ARaidBoss>(
-				ARaidBoss::StaticClass(),
-				FVector::ZeroVector,
-				FRotator::ZeroRotator,
-				SpawnParams);
-		}
-
-		if (ExistingBoss)
-		{
-			GS->SetRaidBossForServer(ExistingBoss);
-			UE_LOG(LogTemp, Log, TEXT("[Server] RaidBoss ready: Name=%s Replicates=%s"),
-				*ExistingBoss->GetName(),
-				ExistingBoss->GetIsReplicated() ? TEXT("true") : TEXT("false"));
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Server] RaidBoss spawn failed"));
-		}
+		return nullptr;
 	}
+
+	UWorld* World = GetWorld();
+	ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!World || !GS)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RaidBoss spawn failed: RaidGameState is missing"));
+		return nullptr;
+	}
+
+	if (ARaidBoss* RegisteredBoss = GS->GetRaidBoss())
+	{
+		return RegisteredBoss;
+	}
+
+	ARaidBoss* ExistingBoss = nullptr;
+	for (TActorIterator<ARaidBoss> It(World); It; ++It)
+	{
+		ExistingBoss = *It;
+		break;
+	}
+
+	if (!ExistingBoss)
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Owner = GS;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		ExistingBoss = World->SpawnActor<ARaidBoss>(
+			ARaidBoss::StaticClass(),
+			FVector::ZeroVector,
+			FRotator::ZeroRotator,
+			SpawnParams);
+	}
+
+	if (!ExistingBoss)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Server] RaidBoss spawn failed"));
+		return nullptr;
+	}
+
+	GS->SetRaidBossForServer(ExistingBoss);
+	UE_LOG(LogTemp, Log, TEXT("[Server] RaidBoss ready: Source=BattleStart Name=%s Replicates=%s"),
+		*ExistingBoss->GetName(),
+		ExistingBoss->GetIsReplicated() ? TEXT("true") : TEXT("false"));
+	return ExistingBoss;
 }
 
 bool ARaidGameMode::EnsureDronePartReturnManagerForServer()
