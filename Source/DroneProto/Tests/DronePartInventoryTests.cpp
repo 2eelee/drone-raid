@@ -1285,6 +1285,59 @@ bool FDronePOR24ReportDataTableServerPayloadTest::RunTest(const FString& Paramet
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR24ReportDataTableControllerSourceTest,
+	"DroneProto.POR24.ReportDataTable.ControllerUsesResolvedSource",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR24ReportDataTableControllerSourceTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneReportDataTableControllerWorld"));
+	TestNotNull(TEXT("test player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("test drone is spawned"), Context.Drone);
+	if (!Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	FDroneReportTableFixture Fixture = MakeCanonicalReportTableFixture();
+	FDroneBonusRow* NoDamage = Fixture.Bonus->FindRow<FDroneBonusRow>(FName(TEXT("BONUS_003")), TEXT("POR24ControllerSource"));
+	TestNotNull(TEXT("NoDamage fixture row exists"), NoDamage);
+	if (!NoDamage)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	NoDamage->BonusDisplayName = FText::FromString(TEXT("TABLE NO DAMAGE"));
+	NoDamage->BonusScore = 77;
+	NoDamage->MinCombatDuration = 0.0f;
+	NoDamage->MinBossDamageRatio = 0.0f;
+	NoDamage->MaxScore = 77;
+
+	Context.PC->SetDroneReportDataTablesForTest(Fixture.Bonus, Fixture.Settings, Fixture.Grade);
+	TestTrue(TEXT("first server request creates a report from the configured table set"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	const FDroneReportData FirstReport = Context.PC->GetLastDroneReportDataForTest();
+	TestEqual(TEXT("controller report uses table-driven NoDamage score"), FirstReport.BonusScore, 77);
+	TestEqual(TEXT("controller report includes one table-driven display name"), FirstReport.AchievedBonusDisplayNames.Num(), 1);
+	if (FirstReport.AchievedBonusDisplayNames.Num() == 1)
+	{
+		TestEqual(TEXT("controller report preserves the table-driven display name"),
+			FirstReport.AchievedBonusDisplayNames[0].ToString(),
+			FString(TEXT("TABLE NO DAMAGE")));
+	}
+
+	TestFalse(TEXT("second server request remains rejected"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestEqual(TEXT("duplicate rejection preserves the table-driven score"),
+		Context.PC->GetLastDroneReportDataForTest().BonusScore,
+		77);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneQ5DataTableFallbackStockTest,
 	"DroneProto.Q5.DataTable.FallbackStock",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

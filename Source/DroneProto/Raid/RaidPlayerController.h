@@ -14,6 +14,7 @@ class ADrone;
 class ARaidBoss;
 class UBossHUDWidget;
 class UDroneReportWidget;
+class UDataTable;
 class UTexture2D;
 class UDronePartReturnManager;
 
@@ -52,6 +53,15 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UBossHUDWidget> BossHUDWidgetClass;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Drone|Report|Data", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UDataTable> DroneReportBonusDataTable = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Drone|Report|Data", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UDataTable> DroneReportSettingsDataTable = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Drone|Report|Data", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UDataTable> DroneReportGradeDataTable = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "UI", meta = (AllowPrivateAccess = "true"))
 	bool bAutoShowDronePartSelectUI = true;
@@ -230,6 +240,7 @@ public:
 	FDroneReportData GetLastDroneReportDataForTest() const;
 	bool HasDroneReportGeneratedForTest() const;
 	void ResetDroneReportForTest();
+	void SetDroneReportDataTablesForTest(UDataTable* BonusTable, UDataTable* SettingsTable, UDataTable* GradeTable);
 	int32 GetTargetMarkerChangedCountForTest() const;
 	bool WasLastTargetMarkerVisibleForTest() const;
 	ARaidBoss* GetLastTargetMarkerBossForTest() const;
@@ -350,6 +361,11 @@ private:
 	UPROPERTY(Transient)
 	FDroneReportData LastDroneReportData;
 
+	FDroneReportResolvedConfig CachedDroneReportConfig;
+	bool bDroneReportConfigResolved = false;
+	bool bDroneReportConfigUsesDataTables = false;
+	FString DroneReportConfigFallbackReason;
+
 	UPROPERTY(Transient)
 	bool bRaidLoadFailedReturnToLobbyRequested = false;
 
@@ -405,6 +421,7 @@ private:
 	static const TCHAR* ReportGradeToLogString(EDroneReportGrade Grade);
 	static const TCHAR* ReportTriggerToLogString(EDroneReportTrigger Trigger);
 	static bool ReportHasBonus(const FDroneReportData& ReportData, EDroneReportBonusType BonusType);
+	const FDroneReportResolvedConfig& ResolveDroneReportConfigForServer();
 
 	UFUNCTION()
 	void HandleDronePartStocksChanged();

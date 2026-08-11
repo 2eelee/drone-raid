@@ -2,6 +2,7 @@
 #include "BossHUDWidget.h"
 #include "Drone.h"
 #include "DronePartInventory.h"
+#include "DroneReportDataTableResolver.h"
 #include "DroneReportWidget.h"
 #include "Lobby/RaidSessionSubsystem.h"
 #include "RaidBoss.h"
@@ -1449,6 +1450,19 @@ void ARaidPlayerController::ResetDroneReportForTest()
 	bDroneReportGenerated = false;
 	LastDroneReportData = FDroneReportData();
 }
+
+void ARaidPlayerController::SetDroneReportDataTablesForTest(
+	UDataTable* BonusTable,
+	UDataTable* SettingsTable,
+	UDataTable* GradeTable)
+{
+	DroneReportBonusDataTable = BonusTable;
+	DroneReportSettingsDataTable = SettingsTable;
+	DroneReportGradeDataTable = GradeTable;
+	bDroneReportConfigResolved = false;
+	bDroneReportConfigUsesDataTables = false;
+	DroneReportConfigFallbackReason.Reset();
+}
 #endif
 
 bool ARaidPlayerController::RefreshDronePartInventoryBinding()
@@ -2558,7 +2572,7 @@ bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Tr
 	ControlledDrone->CancelDodgeForServer(FName(TEXT("Report")));
 
 	const FDroneCombatRecord CombatRecord = ControlledDrone->GetCombatRecordForServer();
-	LastDroneReportData = FDroneReportRules::BuildReportData(CombatRecord, bBossDefeated);
+	LastDroneReportData = FDroneReportRules::BuildReportData(CombatRecord, bBossDefeated, ResolveDroneReportConfigForServer());
 	bDroneReportGenerated = true;
 
 	const bool bBossSlayer = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::BossSlayer);
@@ -2597,6 +2611,35 @@ bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Tr
 
 	Client_ReceiveDroneReport(LastDroneReportData);
 	return true;
+}
+
+const FDroneReportResolvedConfig& ARaidPlayerController::ResolveDroneReportConfigForServer()
+{
+	if (bDroneReportConfigResolved)
+	{
+		return CachedDroneReportConfig;
+	}
+
+	EDroneReportDataFallbackReason FallbackReason = EDroneReportDataFallbackReason::None;
+	bDroneReportConfigUsesDataTables = DroneReportData::TryResolve(
+		{ DroneReportBonusDataTable, DroneReportSettingsDataTable, DroneReportGradeDataTable },
+		CachedDroneReportConfig,
+		FallbackReason);
+	if (!bDroneReportConfigUsesDataTables)
+	{
+		CachedDroneReportConfig = FDroneReportRules::MakeCanonicalConfig();
+		DroneReportConfigFallbackReason = DroneReportData::ToString(FallbackReason);
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] DroneReportData Source=Fallback Reason=%s"),
+			*DroneReportConfigFallbackReason);
+	}
+	else
+	{
+		DroneReportConfigFallbackReason.Reset();
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneReportData Source=DataTable"));
+	}
+
+	bDroneReportConfigResolved = true;
+	return CachedDroneReportConfig;
 }
 
 bool ARaidPlayerController::IsPartTypeAllowedForSlot(EPartSlot Slot, EDronePartType PartType) const
