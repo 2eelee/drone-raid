@@ -505,12 +505,24 @@ FodyWeavers.xsd
 # 에디터 개인 설정 (로컬 전용)
 Config/DefaultEditorPerProjectUserSettings.ini
 
-# Claude 관련 (로컬 전용)
+# 에이전트 개인 설정 및 도구 상태 (로컬 전용)
 CLAUDE.md
 AGENTS.md
 .claude/
+/.codex/
+/.code-review-graph/
 
-# 로컬 문서
-docs/*
-# Added by code-review-graph
-.code-review-graph/
+# 공유 프로젝트 스킬만 추적
+/.agents/*
+!/.agents/skills/
+!/.agents/skills/**
+
+# 문서는 기본 로컬 전용. 검증 결과와 저장소 정책만 지정 경로에서 추적
+/docs/*
+!/docs/Results/
+!/docs/Results/**
+!/docs/Policies/
+!/docs/Policies/**
+
+# 누적 작업일지와 기획·감사 자료는 로컬 전용
+/docs/DEVLOG.md
