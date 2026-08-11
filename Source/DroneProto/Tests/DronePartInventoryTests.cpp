@@ -11,6 +11,7 @@
 #include "Raid/DronePartSelectWidget.h"
 #include "Raid/DroneDataTableRows.h"
 #include "Raid/DroneCombatTypes.h"
+#include "Raid/DroneReportDataTableResolver.h"
 #include "Raid/DronePartReturnManager.h"
 #include "Raid/BossHUDWidget.h"
 #include "Raid/BossPatternComponent.h"
@@ -44,6 +45,102 @@
 
 namespace
 {
+struct FDroneReportTableFixture
+{
+	UDataTable* Bonus = nullptr;
+	UDataTable* Settings = nullptr;
+	UDataTable* Grade = nullptr;
+};
+
+FDroneBonusRow MakeBonusRow(
+	int32 BonusID,
+	const TCHAR* BonusName,
+	const TCHAR* DisplayName,
+	int32 PrimaryScore,
+	int32 SecondaryScore,
+	float PrimaryDuration,
+	float SecondaryDuration,
+	float PrimaryDamageRatio,
+	float SecondaryDamageRatio,
+	int32 MaxScore)
+{
+	FDroneBonusRow Row;
+	Row.BonusID = BonusID;
+	Row.BonusName = FName(BonusName);
+	Row.BonusDisplayName = FText::FromString(DisplayName);
+	Row.BonusScore = PrimaryScore;
+	Row.SecondaryBonusScore = SecondaryScore;
+	Row.MinCombatDuration = PrimaryDuration;
+	Row.SecondaryMinCombatDuration = SecondaryDuration;
+	Row.MinBossDamageRatio = PrimaryDamageRatio;
+	Row.SecondaryMinBossDamageRatio = SecondaryDamageRatio;
+	Row.MaxScore = MaxScore;
+	return Row;
+}
+
+FDroneReportTableFixture MakeCanonicalReportTableFixture()
+{
+	FDroneReportTableFixture Fixture;
+	Fixture.Bonus = NewObject<UDataTable>();
+	Fixture.Settings = NewObject<UDataTable>();
+	Fixture.Grade = NewObject<UDataTable>();
+	Fixture.Bonus->RowStruct = FDroneBonusRow::StaticStruct();
+	Fixture.Settings->RowStruct = FDroneReportSettingsRow::StaticStruct();
+	Fixture.Grade->RowStruct = FDroneGradeRow::StaticStruct();
+
+	FDroneBonusRow BossSlayer = MakeBonusRow(5001, TEXT("BossSlayer"), TEXT("Boss Slayer"), 80, 40, 60.0f, 30.0f, 0.03f, 0.01f, 80);
+	BossSlayer.LateJoinBossHPThresholdRatio = 0.25f;
+	BossSlayer.bRequiresBossDefeated = true;
+	BossSlayer.bRequiresAlive = true;
+	Fixture.Bonus->AddRow(FName(TEXT("BONUS_001")), BossSlayer);
+
+	FDroneBonusRow HighDPS = MakeBonusRow(5002, TEXT("HighDPS"), TEXT("High DPS"), 70, 40, 30.0f, 30.0f, 0.015f, 0.015f, 70);
+	HighDPS.PrimaryMinDamagePerMinute = 0.03f;
+	HighDPS.SecondaryMinDamagePerMinute = 0.02f;
+	Fixture.Bonus->AddRow(FName(TEXT("BONUS_002")), HighDPS);
+
+	FDroneBonusRow NoDamage = MakeBonusRow(5003, TEXT("NoDamage"), TEXT("NO DAMAGE"), 50, 0, 60.0f, 0.0f, 0.02f, 0.0f, 50);
+	NoDamage.MaxDamageTakenCount = 0;
+	Fixture.Bonus->AddRow(FName(TEXT("BONUS_003")), NoDamage);
+
+	FDroneBonusRow KeepMoving = MakeBonusRow(5004, TEXT("KeepMoving"), TEXT("Keep Moving"), 50, 40, 60.0f, 30.0f, 0.02f, 0.015f, 50);
+	KeepMoving.PrimaryMinMoveDistance = 500.0f;
+	KeepMoving.SecondaryMinMovePerMinute = 150.0f;
+	Fixture.Bonus->AddRow(FName(TEXT("BONUS_004")), KeepMoving);
+
+	FDroneBonusRow HighRecovery = MakeBonusRow(5005, TEXT("HighRecovery"), TEXT("High Recovery"), 50, 30, 60.0f, 60.0f, 0.015f, 0.015f, 50);
+	HighRecovery.PrimaryMinHealAmount = 40.0f;
+	HighRecovery.SecondaryMinHealAmount = 25.0f;
+	HighRecovery.bRequiresAlive = true;
+	Fixture.Bonus->AddRow(FName(TEXT("BONUS_005")), HighRecovery);
+
+	FDroneReportSettingsRow Settings;
+	Settings.BonusScoreCap = 250;
+	Fixture.Settings->AddRow(FName(TEXT("REPORT_SETTINGS")), Settings);
+
+	FDroneGradeRow GradeS;
+	GradeS.Grade = EDroneReportGrade::S;
+	GradeS.MinScore = 850.0f;
+	GradeS.MaxScore = 1000.0f;
+	Fixture.Grade->AddRow(FName(TEXT("GRADE_S")), GradeS);
+	FDroneGradeRow GradeA;
+	GradeA.Grade = EDroneReportGrade::A;
+	GradeA.MinScore = 650.0f;
+	GradeA.MaxScore = 849.0f;
+	Fixture.Grade->AddRow(FName(TEXT("GRADE_A")), GradeA);
+	FDroneGradeRow GradeB;
+	GradeB.Grade = EDroneReportGrade::B;
+	GradeB.MinScore = 400.0f;
+	GradeB.MaxScore = 649.0f;
+	Fixture.Grade->AddRow(FName(TEXT("GRADE_B")), GradeB);
+	FDroneGradeRow GradeC;
+	GradeC.Grade = EDroneReportGrade::C;
+	GradeC.MinScore = 0.0f;
+	GradeC.MaxScore = 399.0f;
+	Fixture.Grade->AddRow(FName(TEXT("GRADE_C")), GradeC);
+	return Fixture;
+}
+
 struct FDroneSelectionTestContext
 {
 	UWorld* World = nullptr;
@@ -1041,14 +1138,14 @@ bool FDroneQ5DataTableSchemaRowsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("weapon row exposes HitCount"), WeaponRow.HitCount, 4);
 
 	FDroneBonusRow BonusRow;
-	BonusRow.BonusID = FName(TEXT("BONUS_001"));
+	BonusRow.BonusID = 5001;
 	BonusRow.BonusName = FName(TEXT("BossSlayer"));
 	BonusRow.BonusDisplayName = FText::FromString(TEXT("Boss Slayer"));
 	BonusRow.BonusScore = 80;
 	BonusRow.MinCombatDuration = 60.0f;
 	BonusRow.MinBossDamageRatio = 0.03f;
 	BonusRow.MaxScore = 80;
-	TestEqual(TEXT("bonus row exposes BonusID"), BonusRow.BonusID, FName(TEXT("BONUS_001")));
+	TestEqual(TEXT("bonus row exposes BonusID"), BonusRow.BonusID, 5001);
 	TestEqual(TEXT("bonus row exposes BonusName"), BonusRow.BonusName, FName(TEXT("BossSlayer")));
 	TestEqual(TEXT("bonus row exposes BonusDisplayName"), BonusRow.BonusDisplayName.ToString(), FString(TEXT("Boss Slayer")));
 	TestEqual(TEXT("bonus row exposes BonusScore"), BonusRow.BonusScore, 80);
@@ -1064,6 +1161,71 @@ bool FDroneQ5DataTableSchemaRowsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("grade row exposes MinScore"), GradeRow.MinScore, 850.0f);
 	TestEqual(TEXT("grade row exposes MaxScore"), GradeRow.MaxScore, 1000.0f);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR24ReportDataTableResolveTest,
+	"DroneProto.POR24.ReportDataTable.ResolveCanonicalAndOverride",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR24ReportDataTableResolveTest::RunTest(const FString& Parameters)
+{
+	FDroneReportTableFixture Fixture = MakeCanonicalReportTableFixture();
+	FDroneBonusRow* BossSlayer = Fixture.Bonus->FindRow<FDroneBonusRow>(FName(TEXT("BONUS_001")), TEXT("POR24Override"));
+	TestNotNull(TEXT("BossSlayer fixture row exists"), BossSlayer);
+	if (!BossSlayer)
+	{
+		return false;
+	}
+	BossSlayer->BonusScore = 81;
+	BossSlayer->MaxScore = 81;
+	BossSlayer->BonusDisplayName = FText::FromString(TEXT("TABLE BOSS"));
+
+	FDroneGradeRow* GradeS = Fixture.Grade->FindRow<FDroneGradeRow>(FName(TEXT("GRADE_S")), TEXT("POR24Override"));
+	TestNotNull(TEXT("S grade fixture row exists"), GradeS);
+	if (!GradeS)
+	{
+		return false;
+	}
+	GradeS->MinScore = 900.0f;
+
+	FDroneReportResolvedConfig Resolved;
+	EDroneReportDataFallbackReason Reason = EDroneReportDataFallbackReason::MissingBonusTable;
+	const bool bResolved = DroneReportData::TryResolve(
+		{ Fixture.Bonus, Fixture.Settings, Fixture.Grade },
+		Resolved,
+		Reason);
+	TestTrue(TEXT("valid report tables resolve atomically"), bResolved);
+	TestEqual(TEXT("valid report tables have no fallback reason"), Reason, EDroneReportDataFallbackReason::None);
+	const FDroneReportBonusRule* BossSlayerRule = Resolved.FindBonusRule(EDroneReportBonusType::BossSlayer);
+	TestNotNull(TEXT("resolved config contains BossSlayer"), BossSlayerRule);
+	if (BossSlayerRule)
+	{
+		TestEqual(TEXT("resolved BossSlayer score comes from table"), BossSlayerRule->PrimaryScore, 81);
+		TestEqual(TEXT("resolved BossSlayer display name comes from table"), BossSlayerRule->DisplayName.ToString(), FString(TEXT("TABLE BOSS")));
+	}
+	TestEqual(TEXT("resolved bonus cap comes from settings table"), Resolved.BonusScoreCap, 250);
+	TestEqual(TEXT("resolved first grade remains S"), Resolved.GradeRules[0].Grade, EDroneReportGrade::S);
+	TestEqual(TEXT("resolved S threshold comes from table"), Resolved.GradeRules[0].MinScore, 900.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR24ReportDataTableAtomicFallbackTest,
+	"DroneProto.POR24.ReportDataTable.AtomicFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR24ReportDataTableAtomicFallbackTest::RunTest(const FString& Parameters)
+{
+	FDroneReportTableFixture Fixture = MakeCanonicalReportTableFixture();
+	Fixture.Grade->RemoveRow(FName(TEXT("GRADE_C")));
+	FDroneReportResolvedConfig Resolved = FDroneReportRules::MakeCanonicalConfig();
+	EDroneReportDataFallbackReason Reason = EDroneReportDataFallbackReason::None;
+	TestFalse(TEXT("missing grade row rejects the complete table set"),
+		DroneReportData::TryResolve({ Fixture.Bonus, Fixture.Settings, Fixture.Grade }, Resolved, Reason));
+	TestEqual(TEXT("missing grade row reports deterministic reason"), Reason, EDroneReportDataFallbackReason::MissingGradeRow);
+	TestEqual(TEXT("failed resolve does not publish a partial bonus cap"), Resolved.BonusScoreCap, 250);
 	return true;
 }
 

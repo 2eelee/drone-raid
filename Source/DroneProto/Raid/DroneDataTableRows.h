@@ -87,7 +87,7 @@ struct DRONEPROTO_API FDroneBonusRow : public FTableRowBase
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
-	FName BonusID = NAME_None;
+	int32 BonusID = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
 	FName BonusName = NAME_None;
@@ -99,13 +99,61 @@ struct DRONEPROTO_API FDroneBonusRow : public FTableRowBase
 	int32 BonusScore = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	int32 SecondaryBonusScore = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
 	float MinCombatDuration = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float SecondaryMinCombatDuration = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
 	float MinBossDamageRatio = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float SecondaryMinBossDamageRatio = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float PrimaryMinDamagePerMinute = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float SecondaryMinDamagePerMinute = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float PrimaryMinMoveDistance = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float SecondaryMinMovePerMinute = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float PrimaryMinHealAmount = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float SecondaryMinHealAmount = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	float LateJoinBossHPThresholdRatio = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	int32 MaxDamageTakenCount = -1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	bool bRequiresBossDefeated = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
+	bool bRequiresAlive = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Bonus")
 	int32 MaxScore = 0;
+};
+
+USTRUCT(BlueprintType)
+struct DRONEPROTO_API FDroneReportSettingsRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Report")
+	int32 BonusScoreCap = 0;
 };
 
 USTRUCT(BlueprintType)

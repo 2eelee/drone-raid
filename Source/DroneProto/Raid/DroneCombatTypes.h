@@ -232,6 +232,51 @@ struct DRONEPROTO_API FDroneReportData
 	bool bIsReportGenerated = false;
 };
 
+struct FDroneReportBonusRule
+{
+	EDroneReportBonusType Type = EDroneReportBonusType::BossSlayer;
+	FText DisplayName;
+	int32 PrimaryScore = 0;
+	int32 SecondaryScore = 0;
+	float PrimaryMinCombatDuration = 0.0f;
+	float SecondaryMinCombatDuration = 0.0f;
+	float PrimaryMinBossDamageRatio = 0.0f;
+	float SecondaryMinBossDamageRatio = 0.0f;
+	float PrimaryMinDamagePerMinute = 0.0f;
+	float SecondaryMinDamagePerMinute = 0.0f;
+	float PrimaryMinMoveDistance = 0.0f;
+	float SecondaryMinMovePerMinute = 0.0f;
+	float PrimaryMinHealAmount = 0.0f;
+	float SecondaryMinHealAmount = 0.0f;
+	float LateJoinBossHPThresholdRatio = 0.0f;
+	int32 MaxDamageTakenCount = -1;
+	int32 MaxScore = 0;
+	bool bRequiresBossDefeated = false;
+	bool bRequiresAlive = false;
+};
+
+struct FDroneReportGradeRule
+{
+	EDroneReportGrade Grade = EDroneReportGrade::C;
+	float MinScore = 0.0f;
+	float MaxScore = 0.0f;
+};
+
+struct FDroneReportResolvedConfig
+{
+	TArray<FDroneReportBonusRule> BonusRules;
+	TArray<FDroneReportGradeRule> GradeRules;
+	int32 BonusScoreCap = 250;
+
+	const FDroneReportBonusRule* FindBonusRule(EDroneReportBonusType BonusType) const
+	{
+		return BonusRules.FindByPredicate([BonusType](const FDroneReportBonusRule& Rule)
+		{
+			return Rule.Type == BonusType;
+		});
+	}
+};
+
 struct DRONEPROTO_API FDroneCombatRules
 {
 	static FDroneWeaponCalculationResult CalculateWeaponDamage(const FDroneWeaponCalculationInput& Input)
@@ -326,6 +371,72 @@ struct DRONEPROTO_API FDroneCombatRules
 
 struct DRONEPROTO_API FDroneReportRules
 {
+	static FDroneReportResolvedConfig MakeCanonicalConfig()
+	{
+		FDroneReportResolvedConfig Config;
+		Config.BonusScoreCap = 250;
+
+		auto AddBonus = [&Config](
+			EDroneReportBonusType Type,
+			const TCHAR* DisplayName,
+			int32 PrimaryScore,
+			int32 SecondaryScore,
+			float PrimaryDuration,
+			float SecondaryDuration,
+			float PrimaryDamageRatio,
+			float SecondaryDamageRatio,
+			int32 MaxScore)
+		{
+			FDroneReportBonusRule Rule;
+			Rule.Type = Type;
+			Rule.DisplayName = FText::FromString(DisplayName);
+			Rule.PrimaryScore = PrimaryScore;
+			Rule.SecondaryScore = SecondaryScore;
+			Rule.PrimaryMinCombatDuration = PrimaryDuration;
+			Rule.SecondaryMinCombatDuration = SecondaryDuration;
+			Rule.PrimaryMinBossDamageRatio = PrimaryDamageRatio;
+			Rule.SecondaryMinBossDamageRatio = SecondaryDamageRatio;
+			Rule.MaxScore = MaxScore;
+			Config.BonusRules.Add(Rule);
+			return Config.BonusRules.Num() - 1;
+		};
+
+		FDroneReportBonusRule& BossSlayer = Config.BonusRules[
+			AddBonus(EDroneReportBonusType::BossSlayer, TEXT("Boss Slayer"), 80, 40, 60.0f, 30.0f, 0.03f, 0.01f, 80)];
+		BossSlayer.LateJoinBossHPThresholdRatio = 0.25f;
+		BossSlayer.bRequiresBossDefeated = true;
+		BossSlayer.bRequiresAlive = true;
+
+		FDroneReportBonusRule& HighDPS = Config.BonusRules[
+			AddBonus(EDroneReportBonusType::HighDPS, TEXT("High DPS"), 70, 40, 30.0f, 30.0f, 0.015f, 0.015f, 70)];
+		HighDPS.PrimaryMinDamagePerMinute = 0.03f;
+		HighDPS.SecondaryMinDamagePerMinute = 0.02f;
+
+		FDroneReportBonusRule& NoDamage = Config.BonusRules[
+			AddBonus(EDroneReportBonusType::NoDamage, TEXT("NO DAMAGE"), 50, 0, 60.0f, 0.0f, 0.02f, 0.0f, 50)];
+		NoDamage.MaxDamageTakenCount = 0;
+
+		FDroneReportBonusRule& KeepMoving = Config.BonusRules[
+			AddBonus(EDroneReportBonusType::KeepMoving, TEXT("Keep Moving"), 50, 40, 60.0f, 30.0f, 0.02f, 0.015f, 50)];
+		KeepMoving.PrimaryMinMoveDistance = 500.0f;
+		KeepMoving.SecondaryMinMovePerMinute = 150.0f;
+
+		FDroneReportBonusRule& HighRecovery = Config.BonusRules[
+			AddBonus(EDroneReportBonusType::HighRecovery, TEXT("High Recovery"), 50, 30, 60.0f, 60.0f, 0.015f, 0.015f, 50)];
+		HighRecovery.PrimaryMinHealAmount = 40.0f;
+		HighRecovery.SecondaryMinHealAmount = 25.0f;
+		HighRecovery.bRequiresAlive = true;
+
+		Config.GradeRules =
+		{
+			{ EDroneReportGrade::S, 850.0f, 1000.0f },
+			{ EDroneReportGrade::A, 650.0f, 849.0f },
+			{ EDroneReportGrade::B, 400.0f, 649.0f },
+			{ EDroneReportGrade::C, 0.0f, 399.0f }
+		};
+		return Config;
+	}
+
 	static float CalculateCombatDuration(const FDroneCombatRecord& Record)
 	{
 		if (Record.CombatEndTime > Record.CombatStartTime)
