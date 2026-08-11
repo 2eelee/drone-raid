@@ -782,47 +782,15 @@ bool FBossPatternArenaMapScaleContractTest::RunTest(const FString& Parameters)
 	}
 
 	const FVector2D BossXY = FVector2D::ZeroVector;
-	const FVector ExpectedPositiveYStart(-1000.0f, 500.0f, 192.0f);
-	const FVector ExpectedNegativeYStart(-1000.0f, -500.0f, 92.0f);
-	TArray<APlayerStart*> PlayerStarts;
 	AActor* Floor = nullptr;
 	for (AActor* Actor : ArenaWorld->PersistentLevel->Actors)
 	{
-		if (APlayerStart* PlayerStart = Cast<APlayerStart>(Actor))
-		{
-			PlayerStarts.Add(PlayerStart);
-		}
 #if WITH_EDITOR
-		else if (Actor && Actor->GetActorLabel() == TEXT("Floor"))
+		if (Actor && Actor->GetActorLabel() == TEXT("Floor"))
 		{
 			Floor = Actor;
 		}
 #endif
-	}
-
-	TestEqual(TEXT("TestMap has two PlayerStarts"), PlayerStarts.Num(), 2);
-	if (PlayerStarts.Num() == 2)
-	{
-		TestNotEqual(TEXT("PlayerStarts are distinct actors"), PlayerStarts[0], PlayerStarts[1]);
-		const FVector FirstLocation = PlayerStarts[0]->GetActorLocation();
-		const FVector SecondLocation = PlayerStarts[1]->GetActorLocation();
-		TestTrue(TEXT("TestMap has the expected positive-Y PlayerStart"),
-			FirstLocation.Equals(ExpectedPositiveYStart, 0.01f)
-			|| SecondLocation.Equals(ExpectedPositiveYStart, 0.01f));
-		TestTrue(TEXT("TestMap has the expected negative-Y PlayerStart"),
-			FirstLocation.Equals(ExpectedNegativeYStart, 0.01f)
-			|| SecondLocation.Equals(ExpectedNegativeYStart, 0.01f));
-		TestFalse(TEXT("PlayerStarts use different angles around the boss"),
-			FVector2D(FirstLocation.X - BossXY.X, FirstLocation.Y - BossXY.Y).GetSafeNormal().Equals(
-				FVector2D(SecondLocation.X - BossXY.X, SecondLocation.Y - BossXY.Y).GetSafeNormal(), 0.001f));
-		for (int32 Index = 0; Index < PlayerStarts.Num(); ++Index)
-		{
-			const FVector Location = PlayerStarts[Index]->GetActorLocation();
-			const float DistanceCm = FVector2D(Location.X - BossXY.X, Location.Y - BossXY.Y).Size();
-			TestTrue(
-				*FString::Printf(TEXT("PlayerStart %d is 10m to 12m from the boss"), Index + 1),
-				DistanceCm >= 1000.0f && DistanceCm <= 1200.0f);
-		}
 	}
 
 	TestNotNull(TEXT("TestMap Floor exists"), Floor);
@@ -849,6 +817,63 @@ bool FBossPatternArenaMapScaleContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Drone source loads"), FFileHelper::LoadFileToString(DroneSource, *DroneSourcePath));
 	TestTrue(TEXT("MoveClamp center remains the boss location"),
 		DroneSource.Contains(TEXT("MovementBoundaryCenter = Boss->GetActorLocation();")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPop04ArenaFourTaggedStartsTest,
+	"DroneProto.POP04.Arena.FourTaggedStarts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPop04ArenaFourTaggedStartsTest::RunTest(const FString& Parameters)
+{
+	UWorld* ArenaWorld = LoadObject<UWorld>(nullptr, TEXT("/Game/TestMap.TestMap"));
+	TestNotNull(TEXT("TestMap loads"), ArenaWorld);
+	if (!ArenaWorld || !ArenaWorld->PersistentLevel)
+	{
+		return false;
+	}
+
+	TArray<APlayerStart*> PlayerStarts;
+	for (AActor* Actor : ArenaWorld->PersistentLevel->Actors)
+	{
+		if (APlayerStart* PlayerStart = Cast<APlayerStart>(Actor))
+		{
+			PlayerStarts.Add(PlayerStart);
+		}
+	}
+
+	TArray<FVector> UnmatchedExpectedLocations = {
+		FVector(3500.0f, 0.0f, 92.0f),
+		FVector(0.0f, 3500.0f, 92.0f),
+		FVector(-3500.0f, 0.0f, 92.0f),
+		FVector(0.0f, -3500.0f, 92.0f),
+	};
+	TestEqual(TEXT("TestMap has exactly four PlayerStarts"), PlayerStarts.Num(), 4);
+	for (int32 Index = 0; Index < PlayerStarts.Num(); ++Index)
+	{
+		const APlayerStart* Start = PlayerStarts[Index];
+		const FVector Location = Start->GetActorLocation();
+		TestTrue(*FString::Printf(TEXT("PlayerStart %d carries RaidEntrySpawn"), Index + 1),
+			Start->ActorHasTag(FName(TEXT("RaidEntrySpawn"))));
+
+		const int32 MatchIndex = UnmatchedExpectedLocations.IndexOfByPredicate(
+			[&Location](const FVector& Expected) { return Location.Equals(Expected, 0.01f); });
+		TestTrue(*FString::Printf(TEXT("PlayerStart %d uses an approved cardinal transform"), Index + 1),
+			MatchIndex != INDEX_NONE);
+		if (MatchIndex != INDEX_NONE)
+		{
+			UnmatchedExpectedLocations.RemoveAt(MatchIndex);
+		}
+
+		const FVector2D LocationXY(Location.X, Location.Y);
+		TestTrue(*FString::Printf(TEXT("PlayerStart %d is 35m from the boss"), Index + 1),
+			FMath::IsNearlyEqual(LocationXY.Size(), 3500.0f, 0.01f));
+		const FVector2D ForwardXY(Start->GetActorForwardVector().X, Start->GetActorForwardVector().Y);
+		TestTrue(*FString::Printf(TEXT("PlayerStart %d faces the boss"), Index + 1),
+			FVector2D::DotProduct(ForwardXY.GetSafeNormal(), (-LocationXY).GetSafeNormal()) >= 0.999f);
+	}
+	TestEqual(TEXT("all four approved positions are present"), UnmatchedExpectedLocations.Num(), 0);
 	return true;
 }
 
