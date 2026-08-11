@@ -280,8 +280,68 @@ struct FDroneReportResolvedConfig
 	}
 };
 
+struct FDroneCoreRule
+{
+	EDroneCombatCoreType Type = EDroneCombatCoreType::None;
+	float AttackModifier = 1.0f;
+	float MoveSpeedModifier = 1.0f;
+	float EffectValue01 = 0.0f;
+	float EffectValue02 = 0.0f;
+	float EffectMaxValue = 0.0f;
+};
+
+struct FDroneWeaponRule
+{
+	EDroneCombatWeaponType Type = EDroneCombatWeaponType::None;
+	float BaseDamage = 0.0f;
+	float SpecialValue01 = 0.0f;
+	float SpecialValue02 = 0.0f;
+	float SpecialMaxValue = 0.0f;
+	int32 HitCount = 0;
+};
+
+struct FDroneCombatResolvedConfig
+{
+	TArray<FDroneCoreRule> CoreRules;
+	TArray<FDroneWeaponRule> WeaponRules;
+
+	const FDroneCoreRule* FindCoreRule(EDroneCombatCoreType CoreType) const
+	{
+		return CoreRules.FindByPredicate([CoreType](const FDroneCoreRule& Rule)
+		{
+			return Rule.Type == CoreType;
+		});
+	}
+
+	const FDroneWeaponRule* FindWeaponRule(EDroneCombatWeaponType WeaponType) const
+	{
+		return WeaponRules.FindByPredicate([WeaponType](const FDroneWeaponRule& Rule)
+		{
+			return Rule.Type == WeaponType;
+		});
+	}
+};
+
 struct DRONEPROTO_API FDroneCombatRules
 {
+	static FDroneCombatResolvedConfig MakeCanonicalConfig()
+	{
+		FDroneCombatResolvedConfig Config;
+		Config.CoreRules =
+		{
+			{ EDroneCombatCoreType::Zenith, 1.0f, 1.0f, 0.02f, 0.10f, 0.20f },
+			{ EDroneCombatCoreType::Booster, 0.95f, 1.0f, 0.03f, 20.0f, 0.30f },
+			{ EDroneCombatCoreType::Drain, 0.85f, 0.90f, 0.12f, 3.0f, 0.0f }
+		};
+		Config.WeaponRules =
+		{
+			{ EDroneCombatWeaponType::PulseLaser, 8.0f, 3.0f, 18.0f, 0.0f, 1 },
+			{ EDroneCombatWeaponType::FractureBurst, 5.0f, 3.0f, 2.0f, 0.0f, 4 },
+			{ EDroneCombatWeaponType::VectorCannon, 7.0f, 5.0f, 1.0f, 8.0f, 1 }
+		};
+		return Config;
+	}
+
 	static FDroneWeaponCalculationResult CalculateWeaponDamage(const FDroneWeaponCalculationInput& Input)
 	{
 		FDroneWeaponCalculationResult Result;

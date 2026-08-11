@@ -11,6 +11,7 @@
 #include "Raid/DronePartSelectWidget.h"
 #include "Raid/DroneDataTableRows.h"
 #include "Raid/DroneCombatTypes.h"
+#include "Raid/DroneCombatDataTableResolver.h"
 #include "Raid/DroneReportDataTableResolver.h"
 #include "Raid/DronePartReturnManager.h"
 #include "Raid/BossHUDWidget.h"
@@ -51,6 +52,83 @@ struct FDroneReportTableFixture
 	UDataTable* Settings = nullptr;
 	UDataTable* Grade = nullptr;
 };
+
+struct FDroneCombatTableFixture
+{
+	UDataTable* Core = nullptr;
+	UDataTable* Weapon = nullptr;
+};
+
+FDroneCombatTableFixture MakeCanonicalCombatTableFixture()
+{
+	FDroneCombatTableFixture Fixture;
+	Fixture.Core = NewObject<UDataTable>();
+	Fixture.Weapon = NewObject<UDataTable>();
+	Fixture.Core->RowStruct = FDroneCoreRow::StaticStruct();
+	Fixture.Weapon->RowStruct = FDroneWeaponRow::StaticStruct();
+
+	FDroneCoreRow Zenith;
+	Zenith.CoreID = FName(TEXT("1001"));
+	Zenith.AttackModifier = 1.0f;
+	Zenith.MoveSpeedModifier = 1.0f;
+	Zenith.EffectType = FName(TEXT("HP_TO_ATTACK"));
+	Zenith.EffectValue01 = 0.02f;
+	Zenith.EffectValue02 = 0.10f;
+	Zenith.EffectMaxValue = 0.20f;
+	Fixture.Core->AddRow(FName(TEXT("CORE_001")), Zenith);
+
+	FDroneCoreRow Booster;
+	Booster.CoreID = FName(TEXT("1002"));
+	Booster.AttackModifier = 0.95f;
+	Booster.MoveSpeedModifier = 1.0f;
+	Booster.EffectType = FName(TEXT("MOVE_TO_SPEED_ATTACK"));
+	Booster.EffectValue01 = 0.03f;
+	Booster.EffectValue02 = 20.0f;
+	Booster.EffectMaxValue = 0.30f;
+	Fixture.Core->AddRow(FName(TEXT("CORE_002")), Booster);
+
+	FDroneCoreRow Drain;
+	Drain.CoreID = FName(TEXT("1003"));
+	Drain.AttackModifier = 0.85f;
+	Drain.MoveSpeedModifier = 0.90f;
+	Drain.EffectType = FName(TEXT("DAMAGE_TO_HEAL"));
+	Drain.EffectValue01 = 0.12f;
+	Drain.EffectValue02 = 3.0f;
+	Drain.EffectMaxValue = 0.0f;
+	Fixture.Core->AddRow(FName(TEXT("CORE_003")), Drain);
+
+	FDroneWeaponRow Pulse;
+	Pulse.WeaponID = FName(TEXT("2001"));
+	Pulse.BaseDamage = 8.0f;
+	Pulse.SpecialEffectType = FName(TEXT("THIRD_HIT_STRONG"));
+	Pulse.SpecialValue01 = 3.0f;
+	Pulse.SpecialValue02 = 18.0f;
+	Pulse.SpecialMaxValue = 0.0f;
+	Pulse.HitCount = 1;
+	Fixture.Weapon->AddRow(FName(TEXT("WEAPON_001")), Pulse);
+
+	FDroneWeaponRow Fracture;
+	Fracture.WeaponID = FName(TEXT("2002"));
+	Fracture.BaseDamage = 5.0f;
+	Fracture.SpecialEffectType = FName(TEXT("FRACTURE_MULTI_HIT"));
+	Fracture.SpecialValue01 = 3.0f;
+	Fracture.SpecialValue02 = 2.0f;
+	Fracture.SpecialMaxValue = 0.0f;
+	Fracture.HitCount = 4;
+	Fixture.Weapon->AddRow(FName(TEXT("WEAPON_002")), Fracture);
+
+	FDroneWeaponRow Vector;
+	Vector.WeaponID = FName(TEXT("2003"));
+	Vector.BaseDamage = 7.0f;
+	Vector.SpecialEffectType = FName(TEXT("MOVE_DISTANCE_DAMAGE"));
+	Vector.SpecialValue01 = 5.0f;
+	Vector.SpecialValue02 = 1.0f;
+	Vector.SpecialMaxValue = 8.0f;
+	Vector.HitCount = 1;
+	Fixture.Weapon->AddRow(FName(TEXT("WEAPON_003")), Vector);
+
+	return Fixture;
+}
 
 FDroneBonusRow MakeBonusRow(
 	int32 BonusID,
@@ -1161,6 +1239,123 @@ bool FDroneQ5DataTableSchemaRowsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("grade row exposes MinScore"), GradeRow.MinScore, 850.0f);
 	TestEqual(TEXT("grade row exposes MaxScore"), GradeRow.MaxScore, 1000.0f);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableResolveTest,
+	"DroneProto.POR25.CombatDataTable.ResolveCanonicalAndOverride",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableResolveTest::RunTest(const FString& Parameters)
+{
+	FDroneCombatTableFixture Fixture = MakeCanonicalCombatTableFixture();
+	FDroneCoreRow* Zenith = Fixture.Core->FindRow<FDroneCoreRow>(FName(TEXT("CORE_001")), TEXT("POR25Override"));
+	FDroneWeaponRow* Pulse = Fixture.Weapon->FindRow<FDroneWeaponRow>(FName(TEXT("WEAPON_001")), TEXT("POR25Override"));
+	TestNotNull(TEXT("Zenith fixture row exists"), Zenith);
+	TestNotNull(TEXT("Pulse fixture row exists"), Pulse);
+	if (!Zenith || !Pulse)
+	{
+		return false;
+	}
+	Zenith->EffectValue01 = 0.05f;
+	Pulse->BaseDamage = 12.0f;
+
+	FDroneCombatResolvedConfig Resolved;
+	EDroneCombatDataFallbackReason Reason = EDroneCombatDataFallbackReason::MissingCoreTable;
+	const bool bResolved = DroneCombatData::TryResolve({ Fixture.Core, Fixture.Weapon }, Resolved, Reason);
+	TestTrue(TEXT("valid combat tables resolve atomically"), bResolved);
+	TestEqual(TEXT("valid combat tables have no fallback reason"), Reason, EDroneCombatDataFallbackReason::None);
+
+	const FDroneCoreRule* ZenithRule = Resolved.FindCoreRule(EDroneCombatCoreType::Zenith);
+	const FDroneWeaponRule* PulseRule = Resolved.FindWeaponRule(EDroneCombatWeaponType::PulseLaser);
+	TestNotNull(TEXT("resolved config contains Zenith"), ZenithRule);
+	TestNotNull(TEXT("resolved config contains PulseLaser"), PulseRule);
+	if (ZenithRule)
+	{
+		TestEqual(TEXT("Zenith effect value comes from table"), ZenithRule->EffectValue01, 0.05f);
+	}
+	if (PulseRule)
+	{
+		TestEqual(TEXT("Pulse base damage comes from table"), PulseRule->BaseDamage, 12.0f);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableAtomicFallbackTest,
+	"DroneProto.POR25.CombatDataTable.AtomicFallback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableAtomicFallbackTest::RunTest(const FString& Parameters)
+{
+	FDroneCombatTableFixture Fixture = MakeCanonicalCombatTableFixture();
+	Fixture.Weapon->RemoveRow(FName(TEXT("WEAPON_003")));
+
+	FDroneCombatResolvedConfig Resolved;
+	FDroneCoreRule Sentinel;
+	Sentinel.Type = EDroneCombatCoreType::Drain;
+	Sentinel.AttackModifier = 99.0f;
+	Resolved.CoreRules.Add(Sentinel);
+	EDroneCombatDataFallbackReason Reason = EDroneCombatDataFallbackReason::None;
+
+	TestFalse(TEXT("missing weapon row rejects the complete table set"),
+		DroneCombatData::TryResolve({ Fixture.Core, Fixture.Weapon }, Resolved, Reason));
+	TestEqual(TEXT("missing weapon row reports deterministic reason"), Reason, EDroneCombatDataFallbackReason::MissingWeaponRow);
+	TestEqual(TEXT("failed resolve preserves caller core rule count"), Resolved.CoreRules.Num(), 1);
+	TestEqual(TEXT("failed resolve does not publish partial core rules"), Resolved.CoreRules[0].AttackModifier, 99.0f);
+	TestEqual(TEXT("failed resolve does not publish partial weapon rules"), Resolved.WeaponRules.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableDeterministicReasonsTest,
+	"DroneProto.POR25.CombatDataTable.DeterministicReasons",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableDeterministicReasonsTest::RunTest(const FString& Parameters)
+{
+	FDroneCombatResolvedConfig Resolved;
+	EDroneCombatDataFallbackReason Reason = EDroneCombatDataFallbackReason::None;
+
+	FDroneCombatTableFixture WrongStruct = MakeCanonicalCombatTableFixture();
+	WrongStruct.Core->RowStruct = FDroneWeaponRow::StaticStruct();
+	TestFalse(TEXT("wrong core row struct is rejected"),
+		DroneCombatData::TryResolve({ WrongStruct.Core, WrongStruct.Weapon }, Resolved, Reason));
+	TestEqual(TEXT("wrong core row struct has deterministic reason"), Reason, EDroneCombatDataFallbackReason::InvalidCoreRowStruct);
+
+	FDroneCombatTableFixture InvalidEffect = MakeCanonicalCombatTableFixture();
+	FDroneCoreRow* Zenith = InvalidEffect.Core->FindRow<FDroneCoreRow>(FName(TEXT("CORE_001")), TEXT("POR25InvalidEffect"));
+	TestNotNull(TEXT("invalid-effect fixture row exists"), Zenith);
+	if (Zenith)
+	{
+		Zenith->EffectType = FName(TEXT("UNKNOWN_EFFECT"));
+	}
+	TestFalse(TEXT("invalid core effect is rejected"),
+		DroneCombatData::TryResolve({ InvalidEffect.Core, InvalidEffect.Weapon }, Resolved, Reason));
+	TestEqual(TEXT("invalid core effect has deterministic reason"), Reason, EDroneCombatDataFallbackReason::InvalidCoreEffectType);
+
+	FDroneCombatTableFixture InvalidIdentity = MakeCanonicalCombatTableFixture();
+	FDroneWeaponRow* Pulse = InvalidIdentity.Weapon->FindRow<FDroneWeaponRow>(FName(TEXT("WEAPON_001")), TEXT("POR25InvalidIdentity"));
+	TestNotNull(TEXT("invalid-identity fixture row exists"), Pulse);
+	if (Pulse)
+	{
+		Pulse->WeaponID = FName(TEXT("9999"));
+	}
+	TestFalse(TEXT("invalid weapon identity is rejected"),
+		DroneCombatData::TryResolve({ InvalidIdentity.Core, InvalidIdentity.Weapon }, Resolved, Reason));
+	TestEqual(TEXT("invalid weapon identity has deterministic reason"), Reason, EDroneCombatDataFallbackReason::InvalidWeaponIdentity);
+
+	FDroneCombatTableFixture InvalidRange = MakeCanonicalCombatTableFixture();
+	FDroneWeaponRow* Vector = InvalidRange.Weapon->FindRow<FDroneWeaponRow>(FName(TEXT("WEAPON_003")), TEXT("POR25InvalidRange"));
+	TestNotNull(TEXT("invalid-range fixture row exists"), Vector);
+	if (Vector)
+	{
+		Vector->SpecialValue01 = -1.0f;
+	}
+	TestFalse(TEXT("invalid weapon range is rejected"),
+		DroneCombatData::TryResolve({ InvalidRange.Core, InvalidRange.Weapon }, Resolved, Reason));
+	TestEqual(TEXT("invalid weapon range has deterministic reason"), Reason, EDroneCombatDataFallbackReason::InvalidWeaponRange);
 	return true;
 }
 
