@@ -354,10 +354,16 @@ struct DRONEPROTO_API FDroneCombatRules
 		FDroneWeaponCalculationResult Result;
 		Result.PulseAttackCount = FMath::Max(0, Input.PulseAttackCount);
 		Result.VectorDistance = FMath::Max(0.0f, Input.VectorAccumulatedMoveDistanceMeters);
+		FDroneCombatResolvedConfig FallbackConfig;
 		const FDroneWeaponRule* Rule = Config.FindWeaponRule(Input.WeaponType);
 		if (!Rule)
 		{
-			return CalculateWeaponDamage(Input, MakeCanonicalConfig());
+			FallbackConfig = MakeCanonicalConfig();
+			Rule = FallbackConfig.FindWeaponRule(Input.WeaponType);
+		}
+		if (!Rule)
+		{
+			return Result;
 		}
 
 		switch (Input.WeaponType)
@@ -413,10 +419,16 @@ struct DRONEPROTO_API FDroneCombatRules
 		const FDroneCombatResolvedConfig& Config)
 	{
 		FDroneCoreCalculationResult Result;
+		FDroneCombatResolvedConfig FallbackConfig;
 		const FDroneCoreRule* Rule = Config.FindCoreRule(Input.CoreType);
 		if (!Rule)
 		{
-			return CalculateCoreBonus(Input, MakeCanonicalConfig());
+			FallbackConfig = MakeCanonicalConfig();
+			Rule = FallbackConfig.FindCoreRule(Input.CoreType);
+		}
+		if (!Rule)
+		{
+			return Result;
 		}
 
 		switch (Input.CoreType)
@@ -465,12 +477,16 @@ struct DRONEPROTO_API FDroneCombatRules
 
 	static float CalculateDrainHeal(float DamageDealt, const FDroneCombatResolvedConfig& Config)
 	{
+		FDroneCombatResolvedConfig FallbackConfig;
 		const FDroneCoreRule* Rule = Config.FindCoreRule(EDroneCombatCoreType::Drain);
 		if (!Rule)
 		{
-			return CalculateDrainHeal(DamageDealt, MakeCanonicalConfig());
+			FallbackConfig = MakeCanonicalConfig();
+			Rule = FallbackConfig.FindCoreRule(EDroneCombatCoreType::Drain);
 		}
-		return FMath::Min(FMath::Max(0.0f, DamageDealt) * Rule->EffectValue01, Rule->EffectValue02);
+		return Rule
+			? FMath::Min(FMath::Max(0.0f, DamageDealt) * Rule->EffectValue01, Rule->EffectValue02)
+			: 0.0f;
 	}
 };
 

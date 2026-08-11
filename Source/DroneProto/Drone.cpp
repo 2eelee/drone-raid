@@ -20,6 +20,7 @@
 #include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "Raid/DronePartInventory.h"
+#include "Raid/DroneCombatDataTableResolver.h"
 #include "Raid/RaidBoss.h"
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
@@ -1529,6 +1530,32 @@ bool ADrone::HasEquippedLoadoutForTest() const
 		|| !EquippedLeftWeaponPartID.IsNone()
 		|| !EquippedRightWeaponPartID.IsNone()
 		|| EquippedParts.Num() > 0;
+}
+
+void ADrone::SetCombatDataTablesForTest(UDataTable* CoreTable, UDataTable* WeaponTable)
+{
+	DroneCoreDataTable = CoreTable;
+	DroneWeaponDataTable = WeaponTable;
+	CachedDroneCombatConfig = FDroneCombatResolvedConfig();
+	bDroneCombatConfigResolved = false;
+	DroneCombatDataFallbackReason = EDroneCombatDataFallbackReason::MissingCoreTable;
+	CombatDataResolveCountForTest = 0;
+	ResolveDroneCombatConfigForServer();
+}
+
+int32 ADrone::GetCombatDataResolveCountForTest() const
+{
+	return CombatDataResolveCountForTest;
+}
+
+EDroneCombatDataFallbackReason ADrone::GetCombatDataFallbackReasonForTest() const
+{
+	return DroneCombatDataFallbackReason;
+}
+
+FDroneWeaponCalculationResult ADrone::CalculateWeaponDamageForServerForTest(FName WeaponPartID, bool bIsLeftWeapon)
+{
+	return CalculateWeaponDamageForServer(WeaponPartID, bIsLeftWeapon);
 }
 #endif
 
@@ -3548,15 +3575,50 @@ void ADrone::LogMoveDistanceIgnored(FName Reason)
 		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString());
 }
 
+const FDroneCombatResolvedConfig& ADrone::ResolveDroneCombatConfigForServer()
+{
+	if (bDroneCombatConfigResolved)
+	{
+		return CachedDroneCombatConfig;
+	}
+
+	FDroneCombatResolvedConfig ResolvedConfig;
+	EDroneCombatDataFallbackReason FallbackReason = EDroneCombatDataFallbackReason::None;
+	const bool bResolvedFromDataTables = DroneCombatData::TryResolve(
+		{ DroneCoreDataTable, DroneWeaponDataTable },
+		ResolvedConfig,
+		FallbackReason);
+	if (bResolvedFromDataTables)
+	{
+		CachedDroneCombatConfig = MoveTemp(ResolvedConfig);
+		DroneCombatDataFallbackReason = EDroneCombatDataFallbackReason::None;
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneCombatData Source=DataTable"));
+	}
+	else
+	{
+		CachedDroneCombatConfig = FDroneCombatRules::MakeCanonicalConfig();
+		DroneCombatDataFallbackReason = FallbackReason;
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] DroneCombatData Source=Fallback Reason=%s"),
+			DroneCombatData::ToString(FallbackReason));
+	}
+
+	bDroneCombatConfigResolved = true;
+#if WITH_DEV_AUTOMATION_TESTS
+	CombatDataResolveCountForTest++;
+#endif
+	return CachedDroneCombatConfig;
+}
+
 FDroneWeaponCalculationResult ADrone::CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon)
 {
+	const FDroneCombatResolvedConfig& CombatConfig = ResolveDroneCombatConfigForServer();
 	FDroneWeaponCalculationInput Input;
 	Input.WeaponType = ResolveWeaponTypeForServer(WeaponPartID);
 	Input.Slot = bIsLeftWeapon ? EDroneCombatWeaponSlot::Left : EDroneCombatWeaponSlot::Right;
 	Input.PulseAttackCount = bIsLeftWeapon ? LeftPulseAttackCount : RightPulseAttackCount;
 	Input.VectorAccumulatedMoveDistanceMeters = VectorAccumulatedMoveDistanceMeters;
 
-	FDroneWeaponCalculationResult Result = FDroneCombatRules::CalculateWeaponDamage(Input);
+	FDroneWeaponCalculationResult Result = FDroneCombatRules::CalculateWeaponDamage(Input, CombatConfig);
 	if (Input.WeaponType == EDroneCombatWeaponType::PulseLaser)
 	{
 		if (bIsLeftWeapon)
@@ -3585,15 +3647,16 @@ FDroneWeaponCalculationResult ADrone::CalculateWeaponDamageForServer(FName Weapo
 	return Result;
 }
 
-FDroneCoreCalculationResult ADrone::CalculateCoreForServer(FName CorePartID) const
+FDroneCoreCalculationResult ADrone::CalculateCoreForServer(FName CorePartID)
 {
+	const FDroneCombatResolvedConfig& CombatConfig = ResolveDroneCombatConfigForServer();
 	FDroneCoreCalculationInput Input;
 	Input.CoreType = ResolveCoreTypeForServer(CorePartID);
 	Input.CurrentHP = Health;
 	Input.MaxHP = static_cast<float>(MaxHealth);
 	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
 
-	const FDroneCoreCalculationResult Result = FDroneCombatRules::CalculateCoreBonus(Input);
+	const FDroneCoreCalculationResult Result = FDroneCombatRules::CalculateCoreBonus(Input, CombatConfig);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=%s HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreAttackModifier=%.2f CoreMoveSpeedModifier=%.2f CoreBonusAttackModifier=%.2f MoveSpeedBonus=%.2f HealAmount=0.00"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
 		ToCombatCoreTypeLogString(Input.CoreType),
@@ -3677,13 +3740,16 @@ float ADrone::ApplyDrainHealForServer(float DamageDealt)
 		return 0.0f;
 	}
 
+	const FDroneCombatResolvedConfig& CombatConfig = ResolveDroneCombatConfigForServer();
 	const float SafeDamageDealt = FMath::Max(0.0f, DamageDealt);
-	const float CappedHealAmount = FDroneCombatRules::CalculateDrainHeal(SafeDamageDealt);
+	const FDroneCoreRule* DrainRule = CombatConfig.FindCoreRule(EDroneCombatCoreType::Drain);
+	const float RequestedHealAmount = DrainRule ? SafeDamageDealt * DrainRule->EffectValue01 : 0.0f;
+	const float CappedHealAmount = FDroneCombatRules::CalculateDrainHeal(SafeDamageDealt, CombatConfig);
 	const float PreviousHealth = Health;
 	Health = FMath::Clamp(Health + CappedHealAmount, 0.0f, static_cast<float>(MaxHealth));
 	const float AppliedHealAmount = FMath::Max(0.0f, Health - PreviousHealth);
-	const bool bCapped = SafeDamageDealt * 0.12f > CappedHealAmount + KINDA_SMALL_NUMBER
-		|| AppliedHealAmount + KINDA_SMALL_NUMBER < SafeDamageDealt * 0.12f;
+	const bool bCapped = RequestedHealAmount > CappedHealAmount + KINDA_SMALL_NUMBER
+		|| AppliedHealAmount + KINDA_SMALL_NUMBER < RequestedHealAmount;
 	AddHealToCombatRecordForServer(AppliedHealAmount);
 
 	if (AppliedHealAmount > KINDA_SMALL_NUMBER)
@@ -3696,7 +3762,7 @@ float ADrone::ApplyDrainHealForServer(float DamageDealt)
 	DrainCoreInput.CurrentHP = Health;
 	DrainCoreInput.MaxHP = static_cast<float>(MaxHealth);
 	DrainCoreInput.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
-	const FDroneCoreCalculationResult DrainCoreResult = FDroneCombatRules::CalculateCoreBonus(DrainCoreInput);
+	const FDroneCoreCalculationResult DrainCoreResult = FDroneCombatRules::CalculateCoreBonus(DrainCoreInput, CombatConfig);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CoreCalc Player=%s CoreType=Drain HPRatio=%.2f AccumulatedMoveDistance=%.2f CoreAttackModifier=%.2f CoreMoveSpeedModifier=%.2f CoreBonusAttackModifier=%.2f MoveSpeedBonus=%.2f HealAmount=%.2f"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())),
 		DrainCoreResult.HPRatio,
@@ -3833,12 +3899,13 @@ void ADrone::RefreshMoveSpeedForServer()
 		BaseMoveSpeedCmPerSecond = DefaultBaseMoveSpeedCmPerSecond;
 	}
 
+	const FDroneCombatResolvedConfig& CombatConfig = ResolveDroneCombatConfigForServer();
 	FDroneCoreCalculationInput Input;
 	Input.CoreType = ResolveCoreTypeForServer(EquippedCorePartID);
 	Input.CurrentHP = Health;
 	Input.MaxHP = static_cast<float>(MaxHealth);
 	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
-	const FDroneCoreCalculationResult CoreResult = FDroneCombatRules::CalculateCoreBonus(Input);
+	const FDroneCoreCalculationResult CoreResult = FDroneCombatRules::CalculateCoreBonus(Input, CombatConfig);
 	FloatingMovement->MaxSpeed = BaseMoveSpeedCmPerSecond * CoreResult.CoreMoveSpeedModifier * (1.0f + CoreResult.MoveSpeedBonus);
 }
 

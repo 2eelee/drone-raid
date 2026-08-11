@@ -4,6 +4,7 @@
 #include "GameFramework/Pawn.h"
 #include "InputActionValue.h"
 #include "Raid/DroneCombatTypes.h"
+#include "Raid/DroneCombatDataTableResolver.h"
 #include "TimerManager.h"
 #include "Drone.generated.h"
 
@@ -16,6 +17,7 @@ class UDronePart;
 class ARaidBoss;
 class UWorld;
 class UPrimitiveComponent;
+class UDataTable;
 
 USTRUCT(BlueprintType)
 struct FDroneCombatCameraView
@@ -242,6 +244,10 @@ public:
 	FName GetEquippedLeftWeaponPartIDForTest() const;
 	FName GetEquippedRightWeaponPartIDForTest() const;
 	bool HasEquippedLoadoutForTest() const;
+	void SetCombatDataTablesForTest(UDataTable* CoreTable, UDataTable* WeaponTable);
+	int32 GetCombatDataResolveCountForTest() const;
+	EDroneCombatDataFallbackReason GetCombatDataFallbackReasonForTest() const;
+	FDroneWeaponCalculationResult CalculateWeaponDamageForServerForTest(FName WeaponPartID, bool bIsLeftWeapon);
 #endif
 
 protected:
@@ -586,6 +592,16 @@ private:
 	UPROPERTY(Transient)
 	bool bCombatRecordActive = false;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Combat|Data", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UDataTable> DroneCoreDataTable = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Combat|Data", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UDataTable> DroneWeaponDataTable = nullptr;
+
+	FDroneCombatResolvedConfig CachedDroneCombatConfig;
+	bool bDroneCombatConfigResolved = false;
+	EDroneCombatDataFallbackReason DroneCombatDataFallbackReason = EDroneCombatDataFallbackReason::MissingCoreTable;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Movement", meta = (ClampMin = "0.0", Units = "cm/s", AllowPrivateAccess = "true"))
 	float BaseMoveSpeedCmPerSecond = 450.0f;
 
@@ -663,8 +679,9 @@ private:
 	FVector ClampFinalMovementPositionForServer(FVector RequestedPosition);
 	bool CanAccumulateMoveDistanceForServer(FName& OutIgnoreReason) const;
 	void LogMoveDistanceIgnored(FName Reason);
+	const FDroneCombatResolvedConfig& ResolveDroneCombatConfigForServer();
 	FDroneWeaponCalculationResult CalculateWeaponDamageForServer(FName WeaponPartID, bool bIsLeftWeapon);
-	FDroneCoreCalculationResult CalculateCoreForServer(FName CorePartID) const;
+	FDroneCoreCalculationResult CalculateCoreForServer(FName CorePartID);
 	EDroneCombatWeaponType ResolveWeaponTypeForServer(FName WeaponPartID) const;
 	EDroneCombatCoreType ResolveCoreTypeForServer(FName CorePartID) const;
 	ARaidBoss* FindRaidBossForServer() const;
@@ -693,5 +710,6 @@ private:
 	FName LastAttackNoDamageReasonForTest = NAME_None;
 	FName LastAttackIgnoredReasonForTest = NAME_None;
 	FName LastDodgeIgnoredReasonForTest = NAME_None;
+	int32 CombatDataResolveCountForTest = 0;
 #endif
 };

@@ -1359,6 +1359,62 @@ bool FDronePOR25CombatDataTableConfigDrivenCalculationsTest::RunTest(const FStri
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableDroneCacheTest,
+	"DroneProto.POR25.CombatDataTable.DroneCachesResolvedConfigOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableDroneCacheTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("POR25CombatDataTableDroneCacheWorld"));
+	TestNotNull(TEXT("cache test drone is spawned"), Context.Drone);
+	if (!Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	FDroneCombatTableFixture Fixture = MakeCanonicalCombatTableFixture();
+	FDroneCoreRow* Booster = Fixture.Core->FindRow<FDroneCoreRow>(FName(TEXT("CORE_002")), TEXT("POR25DroneCache"));
+	FDroneWeaponRow* Pulse = Fixture.Weapon->FindRow<FDroneWeaponRow>(FName(TEXT("WEAPON_001")), TEXT("POR25DroneCache"));
+	TestNotNull(TEXT("cache fixture Booster exists"), Booster);
+	TestNotNull(TEXT("cache fixture Pulse exists"), Pulse);
+	if (!Booster || !Pulse)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	Booster->MoveSpeedModifier = 1.10f;
+	Pulse->BaseDamage = 12.0f;
+
+	Context.Drone->SetCombatDataTablesForTest(Fixture.Core, Fixture.Weapon);
+	TestEqual(TEXT("test table set resolves exactly once"), Context.Drone->GetCombatDataResolveCountForTest(), 1);
+	TestEqual(TEXT("valid test tables do not use fallback"),
+		Context.Drone->GetCombatDataFallbackReasonForTest(),
+		EDroneCombatDataFallbackReason::None);
+	TestTrue(TEXT("custom Booster and Pulse loadout applies"),
+		Context.Drone->ApplyLoadout(
+			ADronePartInventory::GetCoreBoosterPartID(),
+			ADronePartInventory::GetPulseLaserPartID(),
+			NAME_None));
+	TestTrue(TEXT("actual server movement path uses cached Booster speed"),
+		FMath::IsNearlyEqual(Context.Drone->GetCurrentMoveSpeed(), 4.95f, 0.001f));
+
+	const FDroneWeaponCalculationResult FirstPulse = Context.Drone->CalculateWeaponDamageForServerForTest(
+		ADronePartInventory::GetPulseLaserPartID(), true);
+	TestEqual(TEXT("actual server weapon path uses cached Pulse damage"), FirstPulse.WeaponDamage, 12.0f);
+
+	Pulse->BaseDamage = 99.0f;
+	const FDroneWeaponCalculationResult SecondPulse = Context.Drone->CalculateWeaponDamageForServerForTest(
+		ADronePartInventory::GetPulseLaserPartID(), true);
+	TestEqual(TEXT("source table mutation does not replace the cached config"), SecondPulse.WeaponDamage, 12.0f);
+	TestEqual(TEXT("loadout and repeated calculations do not re-resolve tables"),
+		Context.Drone->GetCombatDataResolveCountForTest(), 1);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePOR25CombatDataTableResolveTest,
 	"DroneProto.POR25.CombatDataTable.ResolveCanonicalAndOverride",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

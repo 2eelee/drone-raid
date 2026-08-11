@@ -36,12 +36,12 @@ constexpr FExpectedWeaponRow ExpectedWeaponRows[] =
 };
 
 template <typename RowType>
-const RowType* FindRow(const UDataTable* Table, const TCHAR* RowName)
+const RowType* FindCombatRow(const UDataTable* Table, const TCHAR* RowName)
 {
 	return Table ? Table->FindRow<RowType>(FName(RowName), TEXT("DroneCombatDataResolve"), false) : nullptr;
 }
 
-bool IsNonNegative(float Value)
+bool IsCombatNonNegative(float Value)
 {
 	return FMath::IsFinite(Value) && Value >= 0.0f;
 }
@@ -53,16 +53,16 @@ bool IsPositive(float Value)
 
 bool IsNonNegativeInteger(float Value)
 {
-	return IsNonNegative(Value) && FMath::IsNearlyEqual(Value, FMath::RoundToFloat(Value));
+	return IsCombatNonNegative(Value) && FMath::IsNearlyEqual(Value, FMath::RoundToFloat(Value));
 }
 
 bool IsValidCoreRange(const FDroneCoreRow& Row, EDroneCombatCoreType Type)
 {
 	if (!IsPositive(Row.AttackModifier)
 		|| !IsPositive(Row.MoveSpeedModifier)
-		|| !IsNonNegative(Row.EffectValue01)
-		|| !IsNonNegative(Row.EffectValue02)
-		|| !IsNonNegative(Row.EffectMaxValue))
+		|| !IsCombatNonNegative(Row.EffectValue01)
+		|| !IsCombatNonNegative(Row.EffectValue02)
+		|| !IsCombatNonNegative(Row.EffectMaxValue))
 	{
 		return false;
 	}
@@ -81,10 +81,10 @@ bool IsValidCoreRange(const FDroneCoreRow& Row, EDroneCombatCoreType Type)
 
 bool IsValidWeaponRange(const FDroneWeaponRow& Row, EDroneCombatWeaponType Type)
 {
-	if (!IsNonNegative(Row.BaseDamage)
-		|| !IsNonNegative(Row.SpecialValue01)
-		|| !IsNonNegative(Row.SpecialValue02)
-		|| !IsNonNegative(Row.SpecialMaxValue)
+	if (!IsCombatNonNegative(Row.BaseDamage)
+		|| !IsCombatNonNegative(Row.SpecialValue01)
+		|| !IsCombatNonNegative(Row.SpecialValue02)
+		|| !IsCombatNonNegative(Row.SpecialMaxValue)
 		|| Row.HitCount <= 0)
 	{
 		return false;
@@ -135,7 +135,7 @@ bool DroneCombatData::TryResolve(
 	TSet<EDroneCombatCoreType> SeenCoreTypes;
 	for (const FExpectedCoreRow& Expected : ExpectedCoreRows)
 	{
-		const FDroneCoreRow* Row = FindRow<FDroneCoreRow>(Tables.Core, Expected.RowName);
+		const FDroneCoreRow* Row = FindCombatRow<FDroneCoreRow>(Tables.Core, Expected.RowName);
 		if (!Row) return Fail(EDroneCombatDataFallbackReason::MissingCoreRow);
 		if (Row->CoreID != FName(Expected.CoreID)) return Fail(EDroneCombatDataFallbackReason::InvalidCoreIdentity);
 		if (Row->EffectType != FName(Expected.EffectType)) return Fail(EDroneCombatDataFallbackReason::InvalidCoreEffectType);
@@ -149,7 +149,7 @@ bool DroneCombatData::TryResolve(
 	TSet<EDroneCombatWeaponType> SeenWeaponTypes;
 	for (const FExpectedWeaponRow& Expected : ExpectedWeaponRows)
 	{
-		const FDroneWeaponRow* Row = FindRow<FDroneWeaponRow>(Tables.Weapon, Expected.RowName);
+		const FDroneWeaponRow* Row = FindCombatRow<FDroneWeaponRow>(Tables.Weapon, Expected.RowName);
 		if (!Row) return Fail(EDroneCombatDataFallbackReason::MissingWeaponRow);
 		if (Row->WeaponID != FName(Expected.WeaponID)) return Fail(EDroneCombatDataFallbackReason::InvalidWeaponIdentity);
 		if (Row->SpecialEffectType != FName(Expected.EffectType)) return Fail(EDroneCombatDataFallbackReason::InvalidWeaponEffectType);
