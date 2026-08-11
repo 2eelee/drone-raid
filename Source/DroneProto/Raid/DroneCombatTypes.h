@@ -344,20 +344,32 @@ struct DRONEPROTO_API FDroneCombatRules
 
 	static FDroneWeaponCalculationResult CalculateWeaponDamage(const FDroneWeaponCalculationInput& Input)
 	{
+		return CalculateWeaponDamage(Input, MakeCanonicalConfig());
+	}
+
+	static FDroneWeaponCalculationResult CalculateWeaponDamage(
+		const FDroneWeaponCalculationInput& Input,
+		const FDroneCombatResolvedConfig& Config)
+	{
 		FDroneWeaponCalculationResult Result;
 		Result.PulseAttackCount = FMath::Max(0, Input.PulseAttackCount);
 		Result.VectorDistance = FMath::Max(0.0f, Input.VectorAccumulatedMoveDistanceMeters);
+		const FDroneWeaponRule* Rule = Config.FindWeaponRule(Input.WeaponType);
+		if (!Rule)
+		{
+			return CalculateWeaponDamage(Input, MakeCanonicalConfig());
+		}
 
 		switch (Input.WeaponType)
 		{
 		case EDroneCombatWeaponType::PulseLaser:
-			Result.BaseDamage = 8.0f;
-			Result.HitCount = 1;
+			Result.BaseDamage = Rule->BaseDamage;
+			Result.HitCount = Rule->HitCount;
 			Result.PulseAttackCount++;
-			if (Result.PulseAttackCount >= 3)
+			if (Result.PulseAttackCount >= FMath::RoundToInt(Rule->SpecialValue01))
 			{
-				Result.WeaponDamage = 18.0f;
-				Result.BonusDamage = 10.0f;
+				Result.WeaponDamage = Rule->SpecialValue02;
+				Result.BonusDamage = Result.WeaponDamage - Result.BaseDamage;
 				Result.PulseAttackCount = 0;
 			}
 			else
@@ -367,17 +379,19 @@ struct DRONEPROTO_API FDroneCombatRules
 			break;
 
 		case EDroneCombatWeaponType::FractureBurst:
-			Result.BaseDamage = 5.0f;
-			Result.AdditionalHitCount = 3;
-			Result.BonusDamage = static_cast<float>(Result.AdditionalHitCount) * 2.0f;
-			Result.HitCount = 4;
+			Result.BaseDamage = Rule->BaseDamage;
+			Result.AdditionalHitCount = FMath::RoundToInt(Rule->SpecialValue01);
+			Result.BonusDamage = static_cast<float>(Result.AdditionalHitCount) * Rule->SpecialValue02;
+			Result.HitCount = Rule->HitCount;
 			Result.WeaponDamage = Result.BaseDamage + Result.BonusDamage;
 			break;
 
 		case EDroneCombatWeaponType::VectorCannon:
-			Result.BaseDamage = 7.0f;
-			Result.BonusDamage = FMath::Min(FMath::FloorToFloat(Result.VectorDistance / 5.0f), 8.0f);
-			Result.HitCount = 1;
+			Result.BaseDamage = Rule->BaseDamage;
+			Result.BonusDamage = FMath::Min(
+				FMath::FloorToFloat(Result.VectorDistance / Rule->SpecialValue01) * Rule->SpecialValue02,
+				Rule->SpecialMaxValue);
+			Result.HitCount = Rule->HitCount;
 			Result.WeaponDamage = Result.BaseDamage + Result.BonusDamage;
 			Result.bResetVectorDistance = true;
 			break;
@@ -391,32 +405,50 @@ struct DRONEPROTO_API FDroneCombatRules
 
 	static FDroneCoreCalculationResult CalculateCoreBonus(const FDroneCoreCalculationInput& Input)
 	{
+		return CalculateCoreBonus(Input, MakeCanonicalConfig());
+	}
+
+	static FDroneCoreCalculationResult CalculateCoreBonus(
+		const FDroneCoreCalculationInput& Input,
+		const FDroneCombatResolvedConfig& Config)
+	{
 		FDroneCoreCalculationResult Result;
+		const FDroneCoreRule* Rule = Config.FindCoreRule(Input.CoreType);
+		if (!Rule)
+		{
+			return CalculateCoreBonus(Input, MakeCanonicalConfig());
+		}
 
 		switch (Input.CoreType)
 		{
 		case EDroneCombatCoreType::Zenith:
-			Result.CoreAttackModifier = 1.0f;
-			Result.CoreMoveSpeedModifier = 1.0f;
+			Result.CoreAttackModifier = Rule->AttackModifier;
+			Result.CoreMoveSpeedModifier = Rule->MoveSpeedModifier;
 			Result.HPRatio = Input.MaxHP > KINDA_SMALL_NUMBER
 				? FMath::Clamp(Input.CurrentHP / Input.MaxHP, 0.0f, 1.0f)
 				: 0.0f;
-			Result.CoreBonusAttackModifier = 1.0f + FMath::Min(FMath::FloorToFloat(Result.HPRatio / 0.1f) * 0.02f, 0.20f);
+			Result.CoreBonusAttackModifier = 1.0f + FMath::Min(
+				FMath::FloorToFloat(Result.HPRatio / Rule->EffectValue02) * Rule->EffectValue01,
+				Rule->EffectMaxValue);
 			break;
 
 		case EDroneCombatCoreType::Booster:
 		{
-			Result.CoreAttackModifier = 0.95f;
-			Result.CoreMoveSpeedModifier = 1.0f;
-			const int32 MoveStackCount = FMath::Max(0, FMath::FloorToInt(FMath::Max(0.0f, Input.AccumulatedMoveDistanceMeters) / 20.0f));
-			Result.MoveSpeedBonus = FMath::Min(static_cast<float>(MoveStackCount) * 0.03f, 0.30f);
+			Result.CoreAttackModifier = Rule->AttackModifier;
+			Result.CoreMoveSpeedModifier = Rule->MoveSpeedModifier;
+			const int32 MoveStackCount = FMath::Max(
+				0,
+				FMath::FloorToInt(FMath::Max(0.0f, Input.AccumulatedMoveDistanceMeters) / Rule->EffectValue02));
+			Result.MoveSpeedBonus = FMath::Min(
+				static_cast<float>(MoveStackCount) * Rule->EffectValue01,
+				Rule->EffectMaxValue);
 			Result.CoreBonusAttackModifier = 1.0f + (Result.MoveSpeedBonus * 0.5f);
 			break;
 		}
 
 		case EDroneCombatCoreType::Drain:
-			Result.CoreAttackModifier = 0.85f;
-			Result.CoreMoveSpeedModifier = 0.9f;
+			Result.CoreAttackModifier = Rule->AttackModifier;
+			Result.CoreMoveSpeedModifier = Rule->MoveSpeedModifier;
 			break;
 
 		default:
@@ -428,7 +460,17 @@ struct DRONEPROTO_API FDroneCombatRules
 
 	static float CalculateDrainHeal(float DamageDealt)
 	{
-		return FMath::Min(FMath::Max(0.0f, DamageDealt) * 0.12f, 3.0f);
+		return CalculateDrainHeal(DamageDealt, MakeCanonicalConfig());
+	}
+
+	static float CalculateDrainHeal(float DamageDealt, const FDroneCombatResolvedConfig& Config)
+	{
+		const FDroneCoreRule* Rule = Config.FindCoreRule(EDroneCombatCoreType::Drain);
+		if (!Rule)
+		{
+			return CalculateDrainHeal(DamageDealt, MakeCanonicalConfig());
+		}
+		return FMath::Min(FMath::Max(0.0f, DamageDealt) * Rule->EffectValue01, Rule->EffectValue02);
 	}
 };
 

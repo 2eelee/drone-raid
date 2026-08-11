@@ -1243,6 +1243,122 @@ bool FDroneQ5DataTableSchemaRowsTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR25CombatDataTableConfigDrivenCalculationsTest,
+	"DroneProto.POR25.CombatDataTable.ConfigDrivenCalculations",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR25CombatDataTableConfigDrivenCalculationsTest::RunTest(const FString& Parameters)
+{
+	FDroneCombatResolvedConfig Config = FDroneCombatRules::MakeCanonicalConfig();
+	FDroneCoreRule* Zenith = Config.CoreRules.FindByPredicate([](const FDroneCoreRule& Rule)
+	{
+		return Rule.Type == EDroneCombatCoreType::Zenith;
+	});
+	FDroneCoreRule* Booster = Config.CoreRules.FindByPredicate([](const FDroneCoreRule& Rule)
+	{
+		return Rule.Type == EDroneCombatCoreType::Booster;
+	});
+	FDroneCoreRule* Drain = Config.CoreRules.FindByPredicate([](const FDroneCoreRule& Rule)
+	{
+		return Rule.Type == EDroneCombatCoreType::Drain;
+	});
+	FDroneWeaponRule* Pulse = Config.WeaponRules.FindByPredicate([](const FDroneWeaponRule& Rule)
+	{
+		return Rule.Type == EDroneCombatWeaponType::PulseLaser;
+	});
+	FDroneWeaponRule* Fracture = Config.WeaponRules.FindByPredicate([](const FDroneWeaponRule& Rule)
+	{
+		return Rule.Type == EDroneCombatWeaponType::FractureBurst;
+	});
+	FDroneWeaponRule* Vector = Config.WeaponRules.FindByPredicate([](const FDroneWeaponRule& Rule)
+	{
+		return Rule.Type == EDroneCombatWeaponType::VectorCannon;
+	});
+	TestNotNull(TEXT("config contains Zenith"), Zenith);
+	TestNotNull(TEXT("config contains Booster"), Booster);
+	TestNotNull(TEXT("config contains Drain"), Drain);
+	TestNotNull(TEXT("config contains Pulse"), Pulse);
+	TestNotNull(TEXT("config contains Fracture"), Fracture);
+	TestNotNull(TEXT("config contains Vector"), Vector);
+	if (!Zenith || !Booster || !Drain || !Pulse || !Fracture || !Vector)
+	{
+		return false;
+	}
+
+	Zenith->AttackModifier = 1.10f;
+	Zenith->MoveSpeedModifier = 1.20f;
+	Zenith->EffectValue01 = 0.04f;
+	Zenith->EffectValue02 = 0.25f;
+	Zenith->EffectMaxValue = 0.16f;
+	Booster->AttackModifier = 0.80f;
+	Booster->MoveSpeedModifier = 1.10f;
+	Booster->EffectValue01 = 0.05f;
+	Booster->EffectValue02 = 10.0f;
+	Booster->EffectMaxValue = 0.20f;
+	Drain->AttackModifier = 0.70f;
+	Drain->MoveSpeedModifier = 0.80f;
+	Drain->EffectValue01 = 0.25f;
+	Drain->EffectValue02 = 4.0f;
+
+	Pulse->BaseDamage = 12.0f;
+	Pulse->SpecialValue01 = 2.0f;
+	Pulse->SpecialValue02 = 30.0f;
+	Fracture->BaseDamage = 6.0f;
+	Fracture->SpecialValue01 = 2.0f;
+	Fracture->SpecialValue02 = 4.0f;
+	Fracture->HitCount = 3;
+	Vector->BaseDamage = 9.0f;
+	Vector->SpecialValue01 = 10.0f;
+	Vector->SpecialValue02 = 3.0f;
+	Vector->SpecialMaxValue = 6.0f;
+
+	FDroneWeaponCalculationInput PulseInput;
+	PulseInput.WeaponType = EDroneCombatWeaponType::PulseLaser;
+	PulseInput.PulseAttackCount = 1;
+	const FDroneWeaponCalculationResult PulseResult = FDroneCombatRules::CalculateWeaponDamage(PulseInput, Config);
+	TestEqual(TEXT("Pulse trigger and strong damage come from config"), PulseResult.WeaponDamage, 30.0f);
+	TestEqual(TEXT("Pulse trigger resets config-driven count"), PulseResult.PulseAttackCount, 0);
+
+	FDroneWeaponCalculationInput FractureInput;
+	FractureInput.WeaponType = EDroneCombatWeaponType::FractureBurst;
+	const FDroneWeaponCalculationResult FractureResult = FDroneCombatRules::CalculateWeaponDamage(FractureInput, Config);
+	TestEqual(TEXT("Fracture damage comes from config"), FractureResult.WeaponDamage, 14.0f);
+	TestEqual(TEXT("Fracture hit count comes from config"), FractureResult.HitCount, 3);
+
+	FDroneWeaponCalculationInput VectorInput;
+	VectorInput.WeaponType = EDroneCombatWeaponType::VectorCannon;
+	VectorInput.VectorAccumulatedMoveDistanceMeters = 30.0f;
+	const FDroneWeaponCalculationResult VectorResult = FDroneCombatRules::CalculateWeaponDamage(VectorInput, Config);
+	TestEqual(TEXT("Vector step, bonus, cap, and base come from config"), VectorResult.WeaponDamage, 15.0f);
+
+	FDroneCoreCalculationInput ZenithInput;
+	ZenithInput.CoreType = EDroneCombatCoreType::Zenith;
+	ZenithInput.CurrentHP = 50.0f;
+	ZenithInput.MaxHP = 100.0f;
+	const FDroneCoreCalculationResult ZenithResult = FDroneCombatRules::CalculateCoreBonus(ZenithInput, Config);
+	TestEqual(TEXT("Zenith base attack comes from config"), ZenithResult.CoreAttackModifier, 1.10f);
+	TestEqual(TEXT("Zenith base speed comes from config"), ZenithResult.CoreMoveSpeedModifier, 1.20f);
+	TestEqual(TEXT("Zenith step bonus comes from config"), ZenithResult.CoreBonusAttackModifier, 1.08f);
+
+	FDroneCoreCalculationInput BoosterInput;
+	BoosterInput.CoreType = EDroneCombatCoreType::Booster;
+	BoosterInput.AccumulatedMoveDistanceMeters = 30.0f;
+	const FDroneCoreCalculationResult BoosterResult = FDroneCombatRules::CalculateCoreBonus(BoosterInput, Config);
+	TestEqual(TEXT("Booster base attack comes from config"), BoosterResult.CoreAttackModifier, 0.80f);
+	TestEqual(TEXT("Booster base speed comes from config"), BoosterResult.CoreMoveSpeedModifier, 1.10f);
+	TestEqual(TEXT("Booster stack comes from config"), BoosterResult.MoveSpeedBonus, 0.15f);
+	TestEqual(TEXT("Booster attack bonus follows config-driven speed bonus"), BoosterResult.CoreBonusAttackModifier, 1.075f);
+
+	FDroneCoreCalculationInput DrainInput;
+	DrainInput.CoreType = EDroneCombatCoreType::Drain;
+	const FDroneCoreCalculationResult DrainResult = FDroneCombatRules::CalculateCoreBonus(DrainInput, Config);
+	TestEqual(TEXT("Drain base attack comes from config"), DrainResult.CoreAttackModifier, 0.70f);
+	TestEqual(TEXT("Drain base speed comes from config"), DrainResult.CoreMoveSpeedModifier, 0.80f);
+	TestEqual(TEXT("Drain heal ratio and cap come from config"), FDroneCombatRules::CalculateDrainHeal(20.0f, Config), 4.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePOR25CombatDataTableResolveTest,
 	"DroneProto.POR25.CombatDataTable.ResolveCanonicalAndOverride",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
