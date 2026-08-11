@@ -60,6 +60,63 @@ bool ADronePartInventory::TryConsumePart(FName PartID)
 	return true;
 }
 
+EDronePartSelectionCommitResult ADronePartInventory::TryCommitSelectionExchange(
+	FName PreviousPartID,
+	FName NewPartID,
+	FString& OutFailureReason)
+{
+	OutFailureReason.Reset();
+
+	if (!HasAuthority())
+	{
+		OutFailureReason = TEXT("Inventory has no authority.");
+		return EDronePartSelectionCommitResult::ServerError;
+	}
+
+	FDronePartStock* NewStock = FindStock(NewPartID);
+	if (!NewStock)
+	{
+		OutFailureReason = FString::Printf(TEXT("Unknown new PartID: %s"), *NewPartID.ToString());
+		return EDronePartSelectionCommitResult::ServerError;
+	}
+
+	if (NewStock->CurrentCount <= 0)
+	{
+		OutFailureReason = FString::Printf(TEXT("Out of stock: %s"), *NewPartID.ToString());
+		return EDronePartSelectionCommitResult::OutOfStock;
+	}
+
+	FDronePartStock* PreviousStock = nullptr;
+	if (!PreviousPartID.IsNone())
+	{
+		PreviousStock = FindStock(PreviousPartID);
+		if (!PreviousStock)
+		{
+			OutFailureReason = FString::Printf(TEXT("Unknown previous PartID: %s"), *PreviousPartID.ToString());
+			return EDronePartSelectionCommitResult::ServerError;
+		}
+
+		if (PreviousStock->CurrentCount >= PreviousStock->MaxCount)
+		{
+			OutFailureReason = FString::Printf(TEXT("Previous part stock is already full: %s"), *PreviousPartID.ToString());
+			return EDronePartSelectionCommitResult::ServerError;
+		}
+	}
+
+	if (PreviousStock)
+	{
+		++PreviousStock->CurrentCount;
+	}
+	--NewStock->CurrentCount;
+
+	UE_LOG(LogTemp, Log, TEXT("[Server] Atomic selection exchange committed. Previous=%s New=%s"),
+		*PreviousPartID.ToString(),
+		*NewPartID.ToString());
+	OnPartStocksChanged.Broadcast();
+	ForceNetUpdate();
+	return EDronePartSelectionCommitResult::Success;
+}
+
 bool ADronePartInventory::ReturnDronePart(FName PartID)
 {
 	if (!HasAuthority())

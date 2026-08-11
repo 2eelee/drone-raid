@@ -1165,6 +1165,91 @@ bool FDronePartInventoryStockTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneSelect06InventoryAtomicExchangeTest,
+	"DroneProto.SELECT06.Inventory.AtomicExchange",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneSelect06InventoryAtomicExchangeTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneSelect06InventoryAtomicExchangeWorld")));
+	TestNotNull(TEXT("test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName CoreBooster = ADronePartInventory::GetCoreBoosterPartID();
+	FString FailureReason;
+
+	ADronePartInventory* InitialSelectionInventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("initial selection inventory is spawned"), InitialSelectionInventory);
+	if (InitialSelectionInventory)
+	{
+		const EDronePartSelectionCommitResult Result = InitialSelectionInventory->TryCommitSelectionExchange(
+			NAME_None,
+			CoreZenith,
+			FailureReason);
+		TestEqual(TEXT("initial selection succeeds"), Result, EDronePartSelectionCommitResult::Success);
+		TestEqual(TEXT("initial selection consumes only the new stock"), InitialSelectionInventory->GetCurrentCount(CoreZenith), 4);
+		TestEqual(TEXT("initial selection leaves unrelated stock unchanged"), InitialSelectionInventory->GetCurrentCount(CoreBooster), 6);
+	}
+
+	ADronePartInventory* ReplacementInventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("replacement inventory is spawned"), ReplacementInventory);
+	if (ReplacementInventory)
+	{
+		TestTrue(TEXT("replacement fixture consumes the selected old part"), ReplacementInventory->TryConsumePart(CoreZenith));
+		const EDronePartSelectionCommitResult Result = ReplacementInventory->TryCommitSelectionExchange(
+			CoreZenith,
+			CoreBooster,
+			FailureReason);
+		TestEqual(TEXT("valid replacement succeeds"), Result, EDronePartSelectionCommitResult::Success);
+		TestEqual(TEXT("valid replacement restores the old stock"), ReplacementInventory->GetCurrentCount(CoreZenith), 5);
+		TestEqual(TEXT("valid replacement consumes the new stock"), ReplacementInventory->GetCurrentCount(CoreBooster), 5);
+	}
+
+	ADronePartInventory* OutOfStockInventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("out-of-stock inventory is spawned"), OutOfStockInventory);
+	if (OutOfStockInventory)
+	{
+		TestTrue(TEXT("out-of-stock fixture consumes the selected old part"), OutOfStockInventory->TryConsumePart(CoreZenith));
+		for (int32 Index = 0; Index < 6; ++Index)
+		{
+			TestTrue(FString::Printf(TEXT("out-of-stock fixture consumes new part %d"), Index + 1),
+				OutOfStockInventory->TryConsumePart(CoreBooster));
+		}
+		const int32 OldCountBefore = OutOfStockInventory->GetCurrentCount(CoreZenith);
+		const int32 NewCountBefore = OutOfStockInventory->GetCurrentCount(CoreBooster);
+		const EDronePartSelectionCommitResult Result = OutOfStockInventory->TryCommitSelectionExchange(
+			CoreZenith,
+			CoreBooster,
+			FailureReason);
+		TestEqual(TEXT("out-of-stock replacement is a normal rejection"), Result, EDronePartSelectionCommitResult::OutOfStock);
+		TestEqual(TEXT("out-of-stock rejection preserves old stock"), OutOfStockInventory->GetCurrentCount(CoreZenith), OldCountBefore);
+		TestEqual(TEXT("out-of-stock rejection preserves new stock"), OutOfStockInventory->GetCurrentCount(CoreBooster), NewCountBefore);
+	}
+
+	ADronePartInventory* MismatchedInventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("mismatched inventory is spawned"), MismatchedInventory);
+	if (MismatchedInventory)
+	{
+		const int32 OldCountBefore = MismatchedInventory->GetCurrentCount(CoreZenith);
+		const int32 NewCountBefore = MismatchedInventory->GetCurrentCount(CoreBooster);
+		const EDronePartSelectionCommitResult Result = MismatchedInventory->TryCommitSelectionExchange(
+			CoreZenith,
+			CoreBooster,
+			FailureReason);
+		TestEqual(TEXT("old stock already at max is a server error"), Result, EDronePartSelectionCommitResult::ServerError);
+		TestEqual(TEXT("server error preserves old stock"), MismatchedInventory->GetCurrentCount(CoreZenith), OldCountBefore);
+		TestEqual(TEXT("server error preserves new stock"), MismatchedInventory->GetCurrentCount(CoreBooster), NewCountBefore);
+	}
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneQ5DataTableSchemaRowsTest,
 	"DroneProto.Q5.DataTable.SchemaRows",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

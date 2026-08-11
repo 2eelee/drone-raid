@@ -9,6 +9,13 @@ class UDataTable;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDronePartStocksChanged);
 
+enum class EDronePartSelectionCommitResult : uint8
+{
+	Success,
+	OutOfStock,
+	ServerError
+};
+
 USTRUCT(BlueprintType)
 struct DRONEPROTO_API FDronePartStock
 {
@@ -41,6 +48,11 @@ public:
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone Parts|Server")
 	bool TryConsumePart(FName PartID);
+
+	EDronePartSelectionCommitResult TryCommitSelectionExchange(
+		FName PreviousPartID,
+		FName NewPartID,
+		FString& OutFailureReason);
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone Parts|Server")
 	bool ReturnDronePart(FName PartID);
