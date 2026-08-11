@@ -634,13 +634,13 @@ bool FBossPatternArenaBossDeferredSpawnTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FBossPatternArenaPlayerStartAssignmentTest,
-	"DroneProto.POR18.Arena.PlayerStartAssignment",
+	FPop04RaidEntryRandomWithReplacementTest,
+	"DroneProto.POP04.Entry.RandomWithReplacement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FBossPatternArenaPlayerStartAssignmentTest::RunTest(const FString& Parameters)
+bool FPop04RaidEntryRandomWithReplacementTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternArenaPlayerStartAssignmentWorld")));
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Pop04RandomEntryWorld")));
 	TestNotNull(TEXT("test world is created"), World);
 	if (!World)
 	{
@@ -648,31 +648,120 @@ bool FBossPatternArenaPlayerStartAssignmentTest::RunTest(const FString& Paramete
 	}
 
 	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
-	APlayerStart* FirstStart = World->SpawnActor<APlayerStart>(FVector(-720.0f, 170.0f, 192.0f), FRotator::ZeroRotator);
-	APlayerStart* SecondStart = World->SpawnActor<APlayerStart>(FVector(-660.0f, -500.0f, 92.0f), FRotator::ZeroRotator);
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		APlayerStart* Start = World->SpawnActor<APlayerStart>(
+			FVector(3500.0f, 0.0f, 92.0f).RotateAngleAxis(90.0f * Index, FVector::UpVector),
+			FRotator::ZeroRotator);
+		if (Start)
+		{
+			Start->Tags.Add(FName(TEXT("RaidEntrySpawn")));
+		}
+	}
+	APlayerStart* UntaggedStart = World->SpawnActor<APlayerStart>(FVector::ZeroVector, FRotator::ZeroRotator);
 	ARaidPlayerController* FirstController = World->SpawnActor<ARaidPlayerController>();
 	ARaidPlayerController* SecondController = World->SpawnActor<ARaidPlayerController>();
 	TestNotNull(TEXT("game mode is spawned"), GameMode);
-	TestNotNull(TEXT("first player start is spawned"), FirstStart);
-	TestNotNull(TEXT("second player start is spawned"), SecondStart);
+	TestNotNull(TEXT("untagged decoy is spawned"), UntaggedStart);
 	TestNotNull(TEXT("first controller is spawned"), FirstController);
 	TestNotNull(TEXT("second controller is spawned"), SecondController);
-	if (!GameMode || !FirstStart || !SecondStart || !FirstController || !SecondController)
+	if (!GameMode || !UntaggedStart || !FirstController || !SecondController)
 	{
 		World->DestroyWorld(false);
 		return false;
 	}
 
-	FMath::RandInit(20260720);
+	FMath::RandInit(20260812);
 	AActor* FirstAssignment = GameMode->ChoosePlayerStart(FirstController);
-	FMath::RandInit(20260720);
+	FMath::RandInit(20260812);
 	AActor* SecondAssignment = GameMode->ChoosePlayerStart(SecondController);
 	AActor* FirstAssignmentAgain = GameMode->ChoosePlayerStart(FirstController);
 
-	TestNotNull(TEXT("first controller receives a player start"), FirstAssignment);
-	TestNotNull(TEXT("second controller receives a player start"), SecondAssignment);
-	TestNotEqual(TEXT("controllers receive different player starts"), FirstAssignment, SecondAssignment);
-	TestEqual(TEXT("the same controller keeps its player start"), FirstAssignmentAgain, FirstAssignment);
+	TestNotNull(TEXT("first controller receives a tagged start"), FirstAssignment);
+	TestTrue(TEXT("selected start carries RaidEntrySpawn"),
+		FirstAssignment && FirstAssignment->ActorHasTag(FName(TEXT("RaidEntrySpawn"))));
+	TestTrue(TEXT("untagged start is excluded"), FirstAssignment != UntaggedStart);
+	TestEqual(TEXT("same seed permits duplicate assignment across controllers"), SecondAssignment, FirstAssignment);
+	TestEqual(TEXT("same controller keeps its assignment"), FirstAssignmentAgain, FirstAssignment);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPop04SpawnCompletionRestartsEmptyRaidTest,
+	"DroneProto.POP04.Entry.SpawnCompletionRestartsEmptyRaid",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPop04SpawnCompletionRestartsEmptyRaidTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Pop04SpawnCompletionWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidGameMode* GameMode = World ? World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	TestNotNull(TEXT("spawn-completion world exists"), World);
+	TestNotNull(TEXT("spawn-completion game state exists"), GameState);
+	TestNotNull(TEXT("spawn-completion game mode exists"), GameMode);
+	TestNotNull(TEXT("spawn-completion boss exists"), Boss);
+	TestNotNull(TEXT("spawn-completion pattern component exists"), Component);
+	if (!World || !GameState || !GameMode || !Boss || !Component)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameMode->DefaultPawnClass = ADrone::StaticClass();
+	GameState->SetRaidBossForServer(Boss);
+	GameState->SetRaidStateForServer(ERaidState::Battle);
+	Component->ResolvePatternDataForTest();
+	TestTrue(TEXT("zero-player pattern start succeeds"), Boss->StartBossPatternForServer());
+	TestEqual(TEXT("pattern waits while raid is empty"), Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		APlayerStart* Start = World->SpawnActor<APlayerStart>(
+			FVector(3500.0f, 0.0f, 92.0f).RotateAngleAxis(90.0f * Index, FVector::UpVector),
+			FRotator::ZeroRotator);
+		if (Start)
+		{
+			Start->Tags.Add(FName(TEXT("RaidEntrySpawn")));
+		}
+	}
+	ARaidPlayerController* Controller = World->SpawnActor<ARaidPlayerController>();
+	TestNotNull(TEXT("spawn-completion controller exists"), Controller);
+	if (!Controller)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	ADrone* PreviousDrone = World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("previous combat drone exists"), PreviousDrone);
+	if (!PreviousDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	Controller->Possess(PreviousDrone);
+	Controller->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("ready puts controller in battle"), Controller->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+	PreviousDrone->ApplyDamageForServer(PreviousDrone->GetMaxHealth() + 1, FName(TEXT("Pop04PreviousDroneDeath")));
+	TickBossPatternTimers(World, KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("last combatant death pauses the pattern"), Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+	Controller->UnPossess();
+	TestTrue(TEXT("controller has no Pawn before RestartPlayer"), Controller->GetPawn() == nullptr);
+
+	GameMode->RestartPlayer(Controller);
+	TestTrue(TEXT("RestartPlayer creates an ADrone"), Controller->GetPawn() && Controller->GetPawn()->IsA<ADrone>());
+	TestEqual(TEXT("spawn completion recounts one active player"), Component->GetActivePlayerCountForTest(), 1);
+	TestEqual(TEXT("spawn completion enters first delay"), Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestEqual(TEXT("restart delay remains canonical"), Component->GetPendingDelayForTest(), 0.5f);
+	TestTrue(TEXT("spawn completion schedules Corrupted restart"), Component->IsTransitionTimerActiveForTest());
 
 	World->DestroyWorld(false);
 	return true;

@@ -14,6 +14,9 @@
 
 namespace
 {
+const FName RaidEntrySpawnTag(TEXT("RaidEntrySpawn"));
+constexpr int32 RequiredRaidEntrySpawnCount = 4;
+
 FString BuildRaidGameModeControllerLogString(const AController* Controller)
 {
 	return ARaidPlayerController::BuildStableControllerLogString(Controller);
@@ -226,6 +229,17 @@ void ARaidGameMode::RestartPlayer(AController* NewPlayer)
 		Pawn ? *Pawn->GetName() : TEXT("None"),
 		Pawn ? *Pawn->GetClass()->GetName() : TEXT("None"),
 		Pawn && Pawn->IsA<ADrone>() ? TEXT("true") : TEXT("false"));
+
+	if (HasAuthority() && Pawn && Pawn->IsA<ADrone>())
+	{
+		if (ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr)
+		{
+			if (ARaidBoss* Boss = RaidGameState->GetRaidBoss())
+			{
+				Boss->NotifyPatternPopulationChangedForServer(FName(TEXT("PlayerSpawnCompleted")));
+			}
+		}
+	}
 }
 
 AActor* ARaidGameMode::ChoosePlayerStart_Implementation(AController* Player)
@@ -244,35 +258,40 @@ AActor* ARaidGameMode::ChoosePlayerStart_Implementation(AController* Player)
 		PlayerStartAssignments.Remove(Player);
 	}
 
-	TSet<const AActor*> ClaimedStarts;
 	for (auto It = PlayerStartAssignments.CreateIterator(); It; ++It)
 	{
 		if (!It.Key().IsValid() || !It.Value().IsValid())
 		{
 			It.RemoveCurrent();
-			continue;
 		}
-		ClaimedStarts.Add(It.Value().Get());
 	}
 
 	TArray<APlayerStart*> Starts;
 	for (TActorIterator<APlayerStart> It(GetWorld()); It; ++It)
 	{
-		Starts.Add(*It);
+		APlayerStart* Start = *It;
+		if (Start && Start->ActorHasTag(RaidEntrySpawnTag))
+		{
+			Starts.Add(Start);
+		}
 	}
 	Starts.Sort([](const APlayerStart& Left, const APlayerStart& Right)
 	{
 		return Left.GetFName().LexicalLess(Right.GetFName());
 	});
 
-	for (APlayerStart* Start : Starts)
+	if (Starts.Num() == RequiredRaidEntrySpawnCount)
 	{
-		if (Start && !ClaimedStarts.Contains(Start))
-		{
-			PlayerStartAssignments.Add(Player, Start);
-			return Start;
-		}
+		APlayerStart* SelectedStart = Starts[FMath::RandRange(0, Starts.Num() - 1)];
+		PlayerStartAssignments.Add(Player, SelectedStart);
+		return SelectedStart;
 	}
+
+	UE_LOG(LogTemp, Error,
+		TEXT("[DR_SUMMARY] RaidEntrySpawn Result=Fallback Reason=InvalidTaggedStartCount Count=%d Required=%d Player=%s"),
+		Starts.Num(),
+		RequiredRaidEntrySpawnCount,
+		*BuildRaidGameModeControllerLogString(Player));
 
 	AActor* FallbackStart = Super::ChoosePlayerStart_Implementation(Player);
 	if (FallbackStart)
