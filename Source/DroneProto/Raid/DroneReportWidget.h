@@ -118,5 +118,8 @@ private:
 #endif
 
 	static FText BuildAchievedBonusText(const TArray<EDroneReportBonusType>& AchievedBonusList);
+	static FText BuildAchievedBonusText(
+		const TArray<EDroneReportBonusType>& AchievedBonusList,
+		const TArray<FText>& AchievedBonusDisplayNames);
 	static void SetOptionalText(UTextBlock* TextBlock, const FText& Text);
 };

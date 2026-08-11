@@ -34,7 +34,9 @@ void UDroneReportWidget::RefreshReport(const FDroneReportData& InReportData)
 	CachedMoveDistanceText = FText::FromString(FString::Printf(TEXT("%.1f m"), InReportData.MoveDistance));
 	CachedHealAmountText = FText::FromString(FString::Printf(TEXT("%.1f"), InReportData.HealAmount));
 	CachedBonusScoreText = FText::FromString(FString::Printf(TEXT("%d"), InReportData.BonusScore));
-	CachedAchievedBonusText = BuildAchievedBonusText(InReportData.AchievedBonusList);
+	CachedAchievedBonusText = BuildAchievedBonusText(
+		InReportData.AchievedBonusList,
+		InReportData.AchievedBonusDisplayNames);
 	CachedGradeText = GetGradeDisplayText(InReportData.Grade);
 
 	SetOptionalText(CallsignText, CachedCallsignText);
@@ -202,6 +204,29 @@ FText UDroneReportWidget::BuildAchievedBonusText(const TArray<EDroneReportBonusT
 		BonusNames.Add(GetBonusTypeDisplayText(BonusType).ToString());
 	}
 
+	return FText::FromString(FString::Join(BonusNames, TEXT(", ")));
+}
+
+FText UDroneReportWidget::BuildAchievedBonusText(
+	const TArray<EDroneReportBonusType>& AchievedBonusList,
+	const TArray<FText>& AchievedBonusDisplayNames)
+{
+	if (AchievedBonusList.IsEmpty())
+	{
+		return FText::GetEmpty();
+	}
+
+	if (AchievedBonusDisplayNames.Num() != AchievedBonusList.Num())
+	{
+		return BuildAchievedBonusText(AchievedBonusList);
+	}
+
+	TArray<FString> BonusNames;
+	BonusNames.Reserve(AchievedBonusDisplayNames.Num());
+	for (const FText& DisplayName : AchievedBonusDisplayNames)
+	{
+		BonusNames.Add(DisplayName.ToString());
+	}
 	return FText::FromString(FString::Join(BonusNames, TEXT(", ")));
 }
 

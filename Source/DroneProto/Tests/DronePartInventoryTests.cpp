@@ -1230,6 +1230,61 @@ bool FDronePOR24ReportDataTableAtomicFallbackTest::RunTest(const FString& Parame
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR24ReportDataTableServerPayloadTest,
+	"DroneProto.POR24.ReportDataTable.ServerPayloadDisplayNames",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR24ReportDataTableServerPayloadTest::RunTest(const FString& Parameters)
+{
+	FDroneReportResolvedConfig Config = FDroneReportRules::MakeCanonicalConfig();
+	for (FDroneReportBonusRule& Rule : Config.BonusRules)
+	{
+		if (Rule.Type == EDroneReportBonusType::BossSlayer)
+		{
+			Rule.PrimaryScore = 81;
+			Rule.MaxScore = 81;
+			Rule.DisplayName = FText::FromString(TEXT("TABLE BOSS"));
+		}
+		else
+		{
+			Rule.PrimaryScore = 0;
+			Rule.SecondaryScore = 0;
+		}
+	}
+	Config.GradeRules[0].MinScore = 900.0f;
+	Config.GradeRules[1].MinScore = 600.0f;
+
+	FDroneCombatRecord Record;
+	Record.SurvivalTime = 240.0f;
+	Record.BossDamage = 4800.0f;
+	Record.BossMaxHP = 60000.0f;
+	Record.BossHPOnJoin = 60000.0f;
+	Record.DamageTakenCount = 1;
+	Record.CombatStartTime = 0.0f;
+	Record.CombatEndTime = 180.0f;
+	Record.bIsAliveAtReport = true;
+
+	const FDroneReportData Report = FDroneReportRules::BuildReportData(Record, true, Config);
+	TestEqual(TEXT("custom config supplies BossSlayer score"), Report.BonusScore, 81);
+	TestEqual(TEXT("only configured positive bonus is achieved"), Report.AchievedBonusList.Num(), 1);
+	TestEqual(TEXT("custom grade threshold maps report to A"), Report.Grade, EDroneReportGrade::A);
+	TestEqual(TEXT("server report includes one display name"), Report.AchievedBonusDisplayNames.Num(), 1);
+	if (Report.AchievedBonusDisplayNames.Num() == 1)
+	{
+		TestEqual(TEXT("server report display name comes from resolved config"),
+			Report.AchievedBonusDisplayNames[0].ToString(),
+			FString(TEXT("TABLE BOSS")));
+	}
+
+	UDroneReportWidget* Widget = NewObject<UDroneReportWidget>();
+	Widget->RefreshReport(Report);
+	TestEqual(TEXT("widget renders server-provided bonus display name"),
+		Widget->GetAchievedBonusText().ToString(),
+		FString(TEXT("TABLE BOSS")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneQ5DataTableFallbackStockTest,
 	"DroneProto.Q5.DataTable.FallbackStock",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

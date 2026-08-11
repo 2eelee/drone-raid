@@ -211,6 +211,9 @@ struct DRONEPROTO_API FDroneReportData
 	TArray<EDroneReportBonusType> AchievedBonusList;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Report")
+	TArray<FText> AchievedBonusDisplayNames;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Report")
 	EDroneReportGrade Grade = EDroneReportGrade::C;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Report")
@@ -447,26 +450,58 @@ struct DRONEPROTO_API FDroneReportRules
 		return FMath::Max(0.0f, Record.SurvivalTime);
 	}
 
+	static bool IsCompleteConfig(const FDroneReportResolvedConfig& Config)
+	{
+		return Config.BonusRules.Num() == 5
+			&& Config.GradeRules.Num() == 4
+			&& Config.FindBonusRule(EDroneReportBonusType::BossSlayer)
+			&& Config.FindBonusRule(EDroneReportBonusType::HighDPS)
+			&& Config.FindBonusRule(EDroneReportBonusType::NoDamage)
+			&& Config.FindBonusRule(EDroneReportBonusType::KeepMoving)
+			&& Config.FindBonusRule(EDroneReportBonusType::HighRecovery);
+	}
+
+	static EDroneReportGrade CalculateGrade(float ReportScore, const FDroneReportResolvedConfig& Config)
+	{
+		for (const FDroneReportGradeRule& Rule : Config.GradeRules)
+		{
+			if (ReportScore >= Rule.MinScore)
+			{
+				return Rule.Grade;
+			}
+		}
+		return EDroneReportGrade::C;
+	}
+
 	static EDroneReportGrade CalculateGrade(float ReportScore)
 	{
-		if (ReportScore >= 850.0f)
-		{
-			return EDroneReportGrade::S;
-		}
-		if (ReportScore >= 650.0f)
-		{
-			return EDroneReportGrade::A;
-		}
-		if (ReportScore >= 400.0f)
-		{
-			return EDroneReportGrade::B;
-		}
-
-		return EDroneReportGrade::C;
+		return CalculateGrade(ReportScore, MakeCanonicalConfig());
 	}
 
 	static FDroneReportData BuildReportData(const FDroneCombatRecord& Record, bool bBossDefeated)
 	{
+		return BuildReportData(Record, bBossDefeated, MakeCanonicalConfig());
+	}
+
+	static FDroneReportData BuildReportData(
+		const FDroneCombatRecord& Record,
+		bool bBossDefeated,
+		const FDroneReportResolvedConfig& Config)
+	{
+		FDroneReportResolvedConfig FallbackConfig;
+		const FDroneReportResolvedConfig* ActiveConfig = &Config;
+		if (!IsCompleteConfig(Config))
+		{
+			FallbackConfig = MakeCanonicalConfig();
+			ActiveConfig = &FallbackConfig;
+		}
+
+		const FDroneReportBonusRule* BossSlayerRule = ActiveConfig->FindBonusRule(EDroneReportBonusType::BossSlayer);
+		const FDroneReportBonusRule* HighDPSRule = ActiveConfig->FindBonusRule(EDroneReportBonusType::HighDPS);
+		const FDroneReportBonusRule* NoDamageRule = ActiveConfig->FindBonusRule(EDroneReportBonusType::NoDamage);
+		const FDroneReportBonusRule* KeepMovingRule = ActiveConfig->FindBonusRule(EDroneReportBonusType::KeepMoving);
+		const FDroneReportBonusRule* HighRecoveryRule = ActiveConfig->FindBonusRule(EDroneReportBonusType::HighRecovery);
+
 		FDroneReportData Report;
 		Report.SurvivalTime = FMath::Max(0.0f, Record.SurvivalTime);
 		Report.BossDamage = FMath::Max(0.0f, Record.BossDamage);
@@ -496,82 +531,107 @@ struct DRONEPROTO_API FDroneReportRules
 			: 0.0f;
 
 		int32 RawBonusScore = 0;
-		const auto AddBonus = [&Report, &RawBonusScore](EDroneReportBonusType BonusType, int32 Score)
+		const auto AddBonus = [&Report, &RawBonusScore](const FDroneReportBonusRule& Rule, int32 Score)
 		{
-			if (Score <= 0)
+			const int32 AppliedScore = FMath::Min(Score, Rule.MaxScore);
+			if (AppliedScore <= 0)
 			{
 				return;
 			}
 
-			Report.AchievedBonusList.Add(BonusType);
-			RawBonusScore += Score;
+			Report.AchievedBonusList.Add(Rule.Type);
+			Report.AchievedBonusDisplayNames.Add(Rule.DisplayName);
+			RawBonusScore += AppliedScore;
 		};
 
 		const float DurationMinutes = Report.CombatDuration > KINDA_SMALL_NUMBER ? Report.CombatDuration / 60.0f : 0.0f;
-
-		if (bBossDefeated && Report.bIsAliveAtReport)
+		const auto MeetsCommon = [&Report, bBossDefeated](
+			const FDroneReportBonusRule& Rule,
+			float MinDuration,
+			float MinDamageRatio)
 		{
-			const bool bLateJoin = BossMaxHP > KINDA_SMALL_NUMBER && Report.BossHPOnJoin <= BossMaxHP * 0.25f;
+			return (!Rule.bRequiresBossDefeated || bBossDefeated)
+				&& (!Rule.bRequiresAlive || Report.bIsAliveAtReport)
+				&& Report.CombatDuration >= MinDuration
+				&& Report.BossDamageRatio >= MinDamageRatio;
+		};
+
+		if (BossSlayerRule)
+		{
+			const bool bLateJoin = BossSlayerRule->LateJoinBossHPThresholdRatio > 0.0f
+				&& BossMaxHP > KINDA_SMALL_NUMBER
+				&& Report.BossHPOnJoin <= BossMaxHP * BossSlayerRule->LateJoinBossHPThresholdRatio;
 			if (bLateJoin)
 			{
-				if (Report.CombatDuration >= 30.0f && Report.BossDamageRatio >= 0.01f)
+				if (MeetsCommon(*BossSlayerRule, BossSlayerRule->SecondaryMinCombatDuration, BossSlayerRule->SecondaryMinBossDamageRatio))
 				{
-					AddBonus(EDroneReportBonusType::BossSlayer, 40);
+					AddBonus(*BossSlayerRule, BossSlayerRule->SecondaryScore);
 				}
 			}
-			else if (Report.CombatDuration >= 60.0f && Report.BossDamageRatio >= 0.03f)
+			else if (MeetsCommon(*BossSlayerRule, BossSlayerRule->PrimaryMinCombatDuration, BossSlayerRule->PrimaryMinBossDamageRatio))
 			{
-				AddBonus(EDroneReportBonusType::BossSlayer, 80);
+				AddBonus(*BossSlayerRule, BossSlayerRule->PrimaryScore);
 			}
 		}
 
-		if (Report.CombatDuration >= 30.0f && Report.BossDamageRatio >= 0.015f && DurationMinutes > KINDA_SMALL_NUMBER)
+		if (HighDPSRule && DurationMinutes > KINDA_SMALL_NUMBER)
 		{
 			const float DamagePerMinute = Report.BossDamageRatio / DurationMinutes;
-			if (DamagePerMinute >= 0.03f)
+			if (MeetsCommon(*HighDPSRule, HighDPSRule->PrimaryMinCombatDuration, HighDPSRule->PrimaryMinBossDamageRatio)
+				&& DamagePerMinute >= HighDPSRule->PrimaryMinDamagePerMinute)
 			{
-				AddBonus(EDroneReportBonusType::HighDPS, 70);
+				AddBonus(*HighDPSRule, HighDPSRule->PrimaryScore);
 			}
-			else if (DamagePerMinute >= 0.02f)
+			else if (MeetsCommon(*HighDPSRule, HighDPSRule->SecondaryMinCombatDuration, HighDPSRule->SecondaryMinBossDamageRatio)
+				&& DamagePerMinute >= HighDPSRule->SecondaryMinDamagePerMinute)
 			{
-				AddBonus(EDroneReportBonusType::HighDPS, 40);
+				AddBonus(*HighDPSRule, HighDPSRule->SecondaryScore);
 			}
 		}
 
-		if (Report.DamageTakenCount == 0 && Report.CombatDuration >= 60.0f && Report.BossDamageRatio >= 0.02f)
+		if (NoDamageRule
+			&& NoDamageRule->MaxDamageTakenCount >= 0
+			&& Report.DamageTakenCount <= NoDamageRule->MaxDamageTakenCount
+			&& MeetsCommon(*NoDamageRule, NoDamageRule->PrimaryMinCombatDuration, NoDamageRule->PrimaryMinBossDamageRatio))
 		{
-			AddBonus(EDroneReportBonusType::NoDamage, 50);
+			AddBonus(*NoDamageRule, NoDamageRule->PrimaryScore);
 		}
 
-		if (Report.CombatDuration >= 60.0f && Report.MoveDistance >= 500.0f && Report.BossDamageRatio >= 0.02f)
+		if (KeepMovingRule
+			&& MeetsCommon(*KeepMovingRule, KeepMovingRule->PrimaryMinCombatDuration, KeepMovingRule->PrimaryMinBossDamageRatio)
+			&& Report.MoveDistance >= KeepMovingRule->PrimaryMinMoveDistance)
 		{
-			AddBonus(EDroneReportBonusType::KeepMoving, 50);
+			AddBonus(*KeepMovingRule, KeepMovingRule->PrimaryScore);
 		}
-		else if (Report.CombatDuration >= 30.0f && Report.BossDamageRatio >= 0.015f && DurationMinutes > KINDA_SMALL_NUMBER)
+		else if (KeepMovingRule
+			&& MeetsCommon(*KeepMovingRule, KeepMovingRule->SecondaryMinCombatDuration, KeepMovingRule->SecondaryMinBossDamageRatio)
+			&& DurationMinutes > KINDA_SMALL_NUMBER)
 		{
 			const float MovePerMinute = Report.MoveDistance / DurationMinutes;
-			if (MovePerMinute >= 150.0f)
+			if (MovePerMinute >= KeepMovingRule->SecondaryMinMovePerMinute)
 			{
-				AddBonus(EDroneReportBonusType::KeepMoving, 40);
+				AddBonus(*KeepMovingRule, KeepMovingRule->SecondaryScore);
 			}
 		}
 
-		if (Report.bIsAliveAtReport && Report.CombatDuration >= 60.0f && Report.BossDamageRatio >= 0.015f)
+		if (HighRecoveryRule)
 		{
-			if (Report.HealAmount >= 40.0f)
+			if (MeetsCommon(*HighRecoveryRule, HighRecoveryRule->PrimaryMinCombatDuration, HighRecoveryRule->PrimaryMinBossDamageRatio)
+				&& Report.HealAmount >= HighRecoveryRule->PrimaryMinHealAmount)
 			{
-				AddBonus(EDroneReportBonusType::HighRecovery, 50);
+				AddBonus(*HighRecoveryRule, HighRecoveryRule->PrimaryScore);
 			}
-			else if (Report.HealAmount >= 25.0f)
+			else if (MeetsCommon(*HighRecoveryRule, HighRecoveryRule->SecondaryMinCombatDuration, HighRecoveryRule->SecondaryMinBossDamageRatio)
+				&& Report.HealAmount >= HighRecoveryRule->SecondaryMinHealAmount)
 			{
-				AddBonus(EDroneReportBonusType::HighRecovery, 30);
+				AddBonus(*HighRecoveryRule, HighRecoveryRule->SecondaryScore);
 			}
 		}
 
-		Report.BonusScore = FMath::Min(RawBonusScore, 250);
+		Report.BonusScore = FMath::Min(RawBonusScore, ActiveConfig->BonusScoreCap);
 		const float BasePerformanceScore = SurvivalScore + BossDamageScore + MoveScore + HealScore;
 		Report.ReportScore = BasePerformanceScore + static_cast<float>(Report.BonusScore);
-		Report.Grade = CalculateGrade(Report.ReportScore);
+		Report.Grade = CalculateGrade(Report.ReportScore, *ActiveConfig);
 		return Report;
 	}
 };
