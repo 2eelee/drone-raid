@@ -14,6 +14,7 @@
 #include "GameFramework/PlayerState.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -197,6 +198,19 @@ FText GetFallbackPartDescription(FName PartID)
 
 	return PartID.IsNone() ? FText::GetEmpty() : FText::FromString(TEXT("No description registered."));
 }
+}
+
+ARaidPlayerController::ARaidPlayerController()
+{
+	static ConstructorHelpers::FObjectFinder<UDataTable> BonusTableFinder(
+		TEXT("/Game/Data/DroneReport/DT_DroneReportBonus.DT_DroneReportBonus"));
+	static ConstructorHelpers::FObjectFinder<UDataTable> SettingsTableFinder(
+		TEXT("/Game/Data/DroneReport/DT_DroneReportSettings.DT_DroneReportSettings"));
+	static ConstructorHelpers::FObjectFinder<UDataTable> GradeTableFinder(
+		TEXT("/Game/Data/DroneReport/DT_DroneReportGrade.DT_DroneReportGrade"));
+	DroneReportBonusDataTable = BonusTableFinder.Object;
+	DroneReportSettingsDataTable = SettingsTableFinder.Object;
+	DroneReportGradeDataTable = GradeTableFinder.Object;
 }
 
 void ARaidPlayerController::BeginPlay()

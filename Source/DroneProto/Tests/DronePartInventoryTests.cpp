@@ -1338,6 +1338,117 @@ bool FDronePOR24ReportDataTableControllerSourceTest::RunTest(const FString& Para
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR24ReportDataTableAssetContractTest,
+	"DroneProto.POR24.ReportDataTable.AssetPathsAndHardReferences",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR24ReportDataTableAssetContractTest::RunTest(const FString& Parameters)
+{
+	struct FExpectedAsset
+	{
+		const TCHAR* Path;
+		const TCHAR* ControllerProperty;
+		UScriptStruct* RowStruct;
+	};
+	const FExpectedAsset ExpectedAssets[] =
+	{
+		{ TEXT("/Game/Data/DroneReport/DT_DroneReportBonus.DT_DroneReportBonus"), TEXT("DroneReportBonusDataTable"), FDroneBonusRow::StaticStruct() },
+		{ TEXT("/Game/Data/DroneReport/DT_DroneReportSettings.DT_DroneReportSettings"), TEXT("DroneReportSettingsDataTable"), FDroneReportSettingsRow::StaticStruct() },
+		{ TEXT("/Game/Data/DroneReport/DT_DroneReportGrade.DT_DroneReportGrade"), TEXT("DroneReportGradeDataTable"), FDroneGradeRow::StaticStruct() }
+	};
+
+	const ARaidPlayerController* ControllerCDO = GetDefault<ARaidPlayerController>();
+	for (const FExpectedAsset& Expected : ExpectedAssets)
+	{
+		const UDataTable* Table = Cast<UDataTable>(FSoftObjectPath(Expected.Path).TryLoad());
+		TestNotNull(FString::Printf(TEXT("asset loads: %s"), Expected.Path), Table);
+		if (Table)
+		{
+			TestEqual(FString::Printf(TEXT("typed row: %s"), Expected.Path), Table->RowStruct.Get(), Expected.RowStruct);
+		}
+
+		const FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(
+			ARaidPlayerController::StaticClass(), FName(Expected.ControllerProperty));
+		TestNotNull(FString::Printf(TEXT("hard reference property: %s"), Expected.ControllerProperty), Property);
+		if (Property && ControllerCDO)
+		{
+			const UObject* ReferencedObject = Property->GetObjectPropertyValue_InContainer(ControllerCDO);
+			TestTrue(FString::Printf(TEXT("CDO hard reference: %s"), Expected.Path), ReferencedObject == Table);
+		}
+	}
+
+	FString ControllerSource;
+	const FString ControllerPath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/RaidPlayerController.cpp");
+	TestTrue(TEXT("controller source loads"), FFileHelper::LoadFileToString(ControllerSource, *ControllerPath));
+	for (const FExpectedAsset& Expected : ExpectedAssets)
+	{
+		TestTrue(FString::Printf(TEXT("hard reference is present: %s"), Expected.Path),
+			ControllerSource.Contains(Expected.Path));
+	}
+	TestFalse(TEXT("runtime does not read CSV"), ControllerSource.Contains(TEXT("FillDataTableFromCSV"))
+		|| ControllerSource.Contains(TEXT("LoadFileToString")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePOR24ReportDataTableAssetCanonicalEqualityTest,
+	"DroneProto.POR24.ReportDataTable.AssetCanonicalEquality",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePOR24ReportDataTableAssetCanonicalEqualityTest::RunTest(const FString& Parameters)
+{
+	const FDroneReportDataTableSet Tables =
+	{
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/DroneReport/DT_DroneReportBonus.DT_DroneReportBonus")).TryLoad()),
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/DroneReport/DT_DroneReportSettings.DT_DroneReportSettings")).TryLoad()),
+		Cast<UDataTable>(FSoftObjectPath(TEXT("/Game/Data/DroneReport/DT_DroneReportGrade.DT_DroneReportGrade")).TryLoad())
+	};
+	FDroneReportResolvedConfig Actual;
+	EDroneReportDataFallbackReason Reason = EDroneReportDataFallbackReason::None;
+	TestTrue(TEXT("asset tables resolve atomically"), DroneReportData::TryResolve(Tables, Actual, Reason));
+	TestEqual(TEXT("asset tables resolve without fallback"), Reason, EDroneReportDataFallbackReason::None);
+
+	const FDroneReportResolvedConfig Expected = FDroneReportRules::MakeCanonicalConfig();
+	TestEqual(TEXT("asset bonus cap matches canonical"), Actual.BonusScoreCap, Expected.BonusScoreCap);
+	TestEqual(TEXT("asset bonus row count matches canonical"), Actual.BonusRules.Num(), Expected.BonusRules.Num());
+	for (int32 Index = 0; Index < FMath::Min(Actual.BonusRules.Num(), Expected.BonusRules.Num()); ++Index)
+	{
+		const FDroneReportBonusRule& ActualRule = Actual.BonusRules[Index];
+		const FDroneReportBonusRule& ExpectedRule = Expected.BonusRules[Index];
+		const FString Label = FString::Printf(TEXT("bonus row %d"), Index);
+		TestEqual(Label + TEXT(" type"), ActualRule.Type, ExpectedRule.Type);
+		TestEqual(Label + TEXT(" display name"), ActualRule.DisplayName.ToString(), ExpectedRule.DisplayName.ToString());
+		TestEqual(Label + TEXT(" primary score"), ActualRule.PrimaryScore, ExpectedRule.PrimaryScore);
+		TestEqual(Label + TEXT(" secondary score"), ActualRule.SecondaryScore, ExpectedRule.SecondaryScore);
+		TestEqual(Label + TEXT(" primary duration"), ActualRule.PrimaryMinCombatDuration, ExpectedRule.PrimaryMinCombatDuration);
+		TestEqual(Label + TEXT(" secondary duration"), ActualRule.SecondaryMinCombatDuration, ExpectedRule.SecondaryMinCombatDuration);
+		TestEqual(Label + TEXT(" primary damage ratio"), ActualRule.PrimaryMinBossDamageRatio, ExpectedRule.PrimaryMinBossDamageRatio);
+		TestEqual(Label + TEXT(" secondary damage ratio"), ActualRule.SecondaryMinBossDamageRatio, ExpectedRule.SecondaryMinBossDamageRatio);
+		TestEqual(Label + TEXT(" primary damage per minute"), ActualRule.PrimaryMinDamagePerMinute, ExpectedRule.PrimaryMinDamagePerMinute);
+		TestEqual(Label + TEXT(" secondary damage per minute"), ActualRule.SecondaryMinDamagePerMinute, ExpectedRule.SecondaryMinDamagePerMinute);
+		TestEqual(Label + TEXT(" primary move distance"), ActualRule.PrimaryMinMoveDistance, ExpectedRule.PrimaryMinMoveDistance);
+		TestEqual(Label + TEXT(" secondary move per minute"), ActualRule.SecondaryMinMovePerMinute, ExpectedRule.SecondaryMinMovePerMinute);
+		TestEqual(Label + TEXT(" primary heal"), ActualRule.PrimaryMinHealAmount, ExpectedRule.PrimaryMinHealAmount);
+		TestEqual(Label + TEXT(" secondary heal"), ActualRule.SecondaryMinHealAmount, ExpectedRule.SecondaryMinHealAmount);
+		TestEqual(Label + TEXT(" late-join HP threshold"), ActualRule.LateJoinBossHPThresholdRatio, ExpectedRule.LateJoinBossHPThresholdRatio);
+		TestEqual(Label + TEXT(" max damage count"), ActualRule.MaxDamageTakenCount, ExpectedRule.MaxDamageTakenCount);
+		TestEqual(Label + TEXT(" max score"), ActualRule.MaxScore, ExpectedRule.MaxScore);
+		TestEqual(Label + TEXT(" requires boss defeated"), ActualRule.bRequiresBossDefeated, ExpectedRule.bRequiresBossDefeated);
+		TestEqual(Label + TEXT(" requires alive"), ActualRule.bRequiresAlive, ExpectedRule.bRequiresAlive);
+	}
+
+	TestEqual(TEXT("asset grade row count matches canonical"), Actual.GradeRules.Num(), Expected.GradeRules.Num());
+	for (int32 Index = 0; Index < FMath::Min(Actual.GradeRules.Num(), Expected.GradeRules.Num()); ++Index)
+	{
+		const FString Label = FString::Printf(TEXT("grade row %d"), Index);
+		TestEqual(Label + TEXT(" grade"), Actual.GradeRules[Index].Grade, Expected.GradeRules[Index].Grade);
+		TestEqual(Label + TEXT(" min score"), Actual.GradeRules[Index].MinScore, Expected.GradeRules[Index].MinScore);
+		TestEqual(Label + TEXT(" max score"), Actual.GradeRules[Index].MaxScore, Expected.GradeRules[Index].MaxScore);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneQ5DataTableFallbackStockTest,
 	"DroneProto.Q5.DataTable.FallbackStock",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

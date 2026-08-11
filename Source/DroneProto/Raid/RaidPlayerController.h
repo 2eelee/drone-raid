@@ -36,6 +36,8 @@ class DRONEPROTO_API ARaidPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	ARaidPlayerController();
+
 	UPROPERTY(BlueprintAssignable, Category = "Drone Parts")
 	FOnPartSelectionResult OnPartSelectionResult;
 

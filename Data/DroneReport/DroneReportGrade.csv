@@ -1,0 +1,5 @@
+---,Grade,MinScore,MaxScore
+GRADE_S,S,850,1000
+GRADE_A,A,650,849
+GRADE_B,B,400,649
+GRADE_C,C,0,399
