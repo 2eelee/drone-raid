@@ -653,6 +653,71 @@ bool FRaidEntrySessionWaitRetryCancelTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEntrySessionLoadWatchdogLifecycleTest,
+	"DroneProto.RaidEntry.Session.LoadWatchdogLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEntrySessionLoadWatchdogLifecycleTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* Session = NewObject<URaidSessionSubsystem>(GameInstance);
+	ULocalAssignment* Assignment = NewObject<ULocalAssignment>(Session);
+	URaidLobbyWidget* Widget = NewObject<URaidLobbyWidget>();
+	TestNotNull(TEXT("load watchdog game instance is created"), GameInstance);
+	TestNotNull(TEXT("load watchdog session is created"), Session);
+	TestNotNull(TEXT("load watchdog assignment is created"), Assignment);
+	TestNotNull(TEXT("load watchdog lobby widget is created"), Widget);
+	if (!GameInstance || !Session || !Assignment || !Widget)
+	{
+		return false;
+	}
+
+	Session->SetAssignmentForTest(Assignment);
+	Session->SetSuppressTravelForTest(true);
+	Session->SetActiveLobbyWidget(Widget);
+	Widget->SetRaidSubsystemForTest(Session);
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 0),
+		MakeRaidServerCandidate(TEXT("B"), 0),
+		MakeRaidServerCandidate(TEXT("C"), 0),
+	});
+
+	Session->RequestRaidEntry(TEXT("A"));
+	TestTrue(TEXT("successful assignment starts raid load watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+	TestEqual(TEXT("no load failure is handled before timeout"), Session->GetRaidLoadFailureHandleCountForTest(), 0);
+
+	Session->CompleteRaidLoadForTest();
+	TestFalse(TEXT("successful map load stops raid load watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+	Session->ExpireRaidLoadWatchdogForTest();
+	TestEqual(TEXT("timeout after successful load is ignored"), Session->GetRaidLoadFailureHandleCountForTest(), 0);
+
+	Widget->ShowMainLobby();
+	Session->RequestRaidEntry(TEXT("A"));
+	TestTrue(TEXT("second successful assignment restarts raid load watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+	Session->ExpireRaidLoadWatchdogForTest();
+	TestFalse(TEXT("load timeout stops raid load watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+	TestEqual(TEXT("load timeout records failed result"), Session->GetLastAssignmentResultForTest().Result, ERaidAssignmentResultType::Failed);
+	TestEqual(TEXT("load timeout records map-load failure"), Session->GetLastAssignmentResultForTest().FailReason, ERaidEntryFailReason::MapLoadFailed);
+	TestEqual(TEXT("load timeout is handled once"), Session->GetRaidLoadFailureHandleCountForTest(), 1);
+	TestEqual(TEXT("load timeout shows existing native no-server fallback"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::NoServer);
+
+	Session->NotifyRaidTravelFailureForTest();
+	TestEqual(TEXT("travel failure after timeout is ignored"), Session->GetRaidLoadFailureHandleCountForTest(), 1);
+
+	Widget->ShowMainLobby();
+	Session->RequestRaidEntry(TEXT("A"));
+	Session->NotifyRaidTravelFailureForTest();
+	TestFalse(TEXT("travel failure stops raid load watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+	TestEqual(TEXT("travel failure records map-load failure"), Session->GetLastAssignmentResultForTest().FailReason, ERaidEntryFailReason::MapLoadFailed);
+	TestEqual(TEXT("active travel failure is handled once"), Session->GetRaidLoadFailureHandleCountForTest(), 2);
+	TestEqual(TEXT("travel failure shows existing native no-server fallback"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::NoServer);
+	Session->ExpireRaidLoadWatchdogForTest();
+	TestEqual(TEXT("timeout after travel failure is ignored"), Session->GetRaidLoadFailureHandleCountForTest(), 2);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidLobbyWidgetDebugStateTransitionsTest,
 	"DroneProto.RaidEntry.LobbyWidget.DebugStateTransitions",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
