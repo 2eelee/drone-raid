@@ -2,6 +2,7 @@
 
 #include "BossPatternComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Drone.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
@@ -9,6 +10,10 @@
 #include "GameFramework/GameStateBase.h"
 #include "NiagaraComponent.h"
 #include "NiagaraDataInterfaceArrayFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
+#include "UObject/ConstructorHelpers.h"
 
 ACorruptedActinoPatternActor::ACorruptedActinoPatternActor()
 {
@@ -21,6 +26,32 @@ ACorruptedActinoPatternActor::ACorruptedActinoPatternActor()
 	PatternVFX->SetGenerateOverlapEvents(false);
 	PatternVFX->SetCanEverAffectNavigation(false);
 	PatternVFX->CastShadow = false;
+	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> PatternVFXAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/NS_CorruptedBeam.NS_CorruptedBeam"));
+	if (PatternVFXAsset.Succeeded())
+	{
+		PatternVFX->SetAsset(PatternVFXAsset.Object);
+	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BeamMeshAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/SM_CorruptedBeamWedge.SM_CorruptedBeamWedge"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BeamMaterialAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/M_CorruptedBeam.M_CorruptedBeam"));
+	BeamRenderers.Reserve(4);
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		UStaticMeshComponent* BeamRenderer = CreateDefaultSubobject<UStaticMeshComponent>(
+			*FString::Printf(TEXT("BeamRenderer_%02d"), Index));
+		BeamRenderer->SetupAttachment(Root);
+		BeamRenderer->SetStaticMesh(BeamMeshAsset.Object);
+		BeamRenderer->SetMaterial(0, BeamMaterialAsset.Object);
+		BeamRenderer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BeamRenderer->SetGenerateOverlapEvents(false);
+		BeamRenderer->SetCanEverAffectNavigation(false);
+		BeamRenderer->CastShadow = false;
+		BeamRenderer->SetVisibility(false, true);
+		BeamRenderers.Add(BeamRenderer);
+	}
 	PrimaryActorTick.bCanEverTick = true;
 }
 
@@ -142,6 +173,13 @@ void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	if (!bTelegraphing && !bActive)
 	{
 		PatternVFX->DeactivateImmediate();
+		for (UStaticMeshComponent* BeamRenderer : BeamRenderers)
+		{
+			if (BeamRenderer)
+			{
+				BeamRenderer->SetVisibility(false, true);
+			}
+		}
 		return;
 	}
 
@@ -154,14 +192,27 @@ void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	BeamRotations.Reserve(VisualSamples.Num());
 	InnerWidths.Reserve(VisualSamples.Num());
 	OuterWidths.Reserve(VisualSamples.Num());
-	for (const FCorruptedBeamVisualSample& Sample : VisualSamples)
+	for (int32 Index = 0; Index < VisualSamples.Num(); ++Index)
 	{
+		const FCorruptedBeamVisualSample& Sample = VisualSamples[Index];
 		const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
 		const FVector Direction(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
 		BeamPositions.Add(Direction * (Sample.StartRadiusCm + Sample.LengthCm * 0.5f) + FVector::UpVector * Sample.ZCm);
 		BeamRotations.Add(FVector(0.0f, Sample.AngleDegrees, 0.0f));
 		InnerWidths.Add(Sample.InnerVisualFullWidthCm);
 		OuterWidths.Add(Sample.OuterVisualFullWidthCm);
+		if (BeamRenderers.IsValidIndex(Index) && BeamRenderers[Index])
+		{
+			BeamRenderers[Index]->SetRelativeLocation(Direction * Sample.StartRadiusCm + FVector::UpVector * Sample.ZCm);
+			BeamRenderers[Index]->SetRelativeRotation(FRotator(0.0f, Sample.AngleDegrees, 0.0f));
+			BeamRenderers[Index]->SetRelativeScale3D(
+				bTelegraphing ? FVector(1.0f, 0.42f, 0.24f) : FVector::OneVector);
+			BeamRenderers[Index]->SetScalarParameterValueOnMaterials(
+				TEXT("VFXIntensity"), bTelegraphing ? 4.5f : 18.0f);
+			BeamRenderers[Index]->SetScalarParameterValueOnMaterials(
+				TEXT("VFXOpacity"), bTelegraphing ? 0.24f : 0.72f);
+			BeamRenderers[Index]->SetVisibility(true, true);
+		}
 	}
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("BeamPosition"), BeamPositions);
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("BeamRotation"), BeamRotations);
@@ -276,5 +327,10 @@ void ACorruptedActinoPatternActor::DrawFilledTrapezoid(
 int32 ACorruptedActinoPatternActor::GetDamageAttemptCountForTest() const
 {
 	return DamageAttemptCountForTest;
+}
+
+void ACorruptedActinoPatternActor::RefreshPatternVFXForTest(float ElapsedSeconds)
+{
+	RefreshPatternVFX(ElapsedSeconds);
 }
 #endif

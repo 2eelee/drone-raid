@@ -5,6 +5,7 @@
 #include "CorruptedActinoPatternActor.generated.h"
 
 class UNiagaraComponent;
+class UStaticMeshComponent;
 
 struct FCorruptedBeamVisualSample
 {
@@ -50,6 +51,7 @@ public:
 
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetDamageAttemptCountForTest() const;
+	void RefreshPatternVFXForTest(float ElapsedSeconds);
 #endif
 
 protected:
@@ -58,6 +60,9 @@ protected:
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|BossPattern|VFX", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UNiagaraComponent> PatternVFX = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Raid|BossPattern|VFX")
+	TArray<TObjectPtr<UStaticMeshComponent>> BeamRenderers;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Raid|BossPattern|Debug")
 	bool bEnableDebugVisualization = false;

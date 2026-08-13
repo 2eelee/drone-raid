@@ -5,6 +5,8 @@
 #include "StellarRemnantPatternActor.generated.h"
 
 class UNiagaraComponent;
+class UInstancedStaticMeshComponent;
+class UStaticMeshComponent;
 
 struct FStellarRemnantSample
 {
@@ -73,6 +75,7 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	void ApplyDamageForServerForTest(float PreviousElapsedSeconds, float CurrentElapsedSeconds);
 	int32 GetLogicalSampleCountForTest() const;
+	void RefreshPatternVFXForTest(float ElapsedSeconds);
 #endif
 
 protected:
@@ -81,6 +84,15 @@ protected:
 private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|BossPattern|VFX", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UNiagaraComponent> PatternVFX = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Raid|BossPattern|VFX")
+	TObjectPtr<UInstancedStaticMeshComponent> DamageShardRenderer = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Raid|BossPattern|VFX")
+	TObjectPtr<UInstancedStaticMeshComponent> VisualShardRenderer = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Raid|BossPattern|VFX")
+	TObjectPtr<UStaticMeshComponent> CoreRenderer = nullptr;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Raid|BossPattern|Debug")
 	bool bEnableDebugVisualization = false;

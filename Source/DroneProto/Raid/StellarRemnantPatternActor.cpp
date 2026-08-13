@@ -1,13 +1,19 @@
 #include "StellarRemnantPatternActor.h"
 
 #include "BossPatternComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Drone.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "NiagaraComponent.h"
 #include "NiagaraDataInterfaceArrayFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInterface.h"
+#include "UObject/ConstructorHelpers.h"
 
 AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 {
@@ -20,6 +26,49 @@ AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 	PatternVFX->SetGenerateOverlapEvents(false);
 	PatternVFX->SetCanEverAffectNavigation(false);
 	PatternVFX->CastShadow = false;
+	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> PatternVFXAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/NS_StellarRemnant.NS_StellarRemnant"));
+	if (PatternVFXAsset.Succeeded())
+	{
+		PatternVFX->SetAsset(PatternVFXAsset.Object);
+	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> ShardMeshAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/SM_StellarShard.SM_StellarShard"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> CoreMeshAsset(
+		TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ShardMaterialAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/M_StellarShard.M_StellarShard"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> CoreMaterialAsset(
+		TEXT("/Game/VFX/Boss/Telegraph01/M_StellarCore.M_StellarCore"));
+
+	DamageShardRenderer = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("DamageShardRenderer"));
+	DamageShardRenderer->SetupAttachment(Root);
+	DamageShardRenderer->SetStaticMesh(ShardMeshAsset.Object);
+	DamageShardRenderer->SetMaterial(0, ShardMaterialAsset.Object);
+	DamageShardRenderer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	DamageShardRenderer->SetGenerateOverlapEvents(false);
+	DamageShardRenderer->SetCanEverAffectNavigation(false);
+	DamageShardRenderer->CastShadow = false;
+
+	VisualShardRenderer = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("VisualShardRenderer"));
+	VisualShardRenderer->SetupAttachment(Root);
+	VisualShardRenderer->SetStaticMesh(ShardMeshAsset.Object);
+	VisualShardRenderer->SetMaterial(0, ShardMaterialAsset.Object);
+	VisualShardRenderer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	VisualShardRenderer->SetGenerateOverlapEvents(false);
+	VisualShardRenderer->SetCanEverAffectNavigation(false);
+	VisualShardRenderer->CastShadow = false;
+
+	CoreRenderer = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CoreRenderer"));
+	CoreRenderer->SetupAttachment(Root);
+	CoreRenderer->SetStaticMesh(CoreMeshAsset.Object);
+	CoreRenderer->SetMaterial(0, CoreMaterialAsset.Object);
+	CoreRenderer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	CoreRenderer->SetGenerateOverlapEvents(false);
+	CoreRenderer->SetCanEverAffectNavigation(false);
+	CoreRenderer->CastShadow = false;
+	CoreRenderer->SetVisibility(false, true);
 	PrimaryActorTick.bCanEverTick = true;
 }
 
@@ -181,6 +230,9 @@ void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	if (!bTelegraphing && !bActive)
 	{
 		PatternVFX->DeactivateImmediate();
+		DamageShardRenderer->ClearInstances();
+		VisualShardRenderer->ClearInstances();
+		CoreRenderer->SetVisibility(false, true);
 		return;
 	}
 
@@ -197,6 +249,12 @@ void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	ActiveMask.Reserve(Frames.Num());
 	VisualOnlyMask.Reserve(Frames.Num());
 	WaveIndices.Reserve(Frames.Num());
+	DamageShardRenderer->ClearInstances();
+	VisualShardRenderer->ClearInstances();
+	DamageShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXIntensity"), 24.0f);
+	DamageShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXOpacity"), 0.88f);
+	VisualShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXIntensity"), 9.0f);
+	VisualShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXOpacity"), 0.42f);
 	for (const FStellarRemnantVisualFrame& Frame : Frames)
 	{
 		Positions.Add(Frame.Position);
@@ -205,6 +263,15 @@ void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 		ActiveMask.Add(Frame.bActive && bActive);
 		VisualOnlyMask.Add(Frame.bVisualOnly);
 		WaveIndices.Add(Frame.WaveIndex);
+		if (Frame.bActive && bActive)
+		{
+			const float UniformScale = FMath::Max(0.15f, Frame.SizeCm / 220.0f);
+			const FTransform InstanceTransform(
+				FRotator(0.0f, Frame.AngleDegrees, 0.0f),
+				Frame.Position,
+				FVector(UniformScale));
+			(Frame.bVisualOnly ? VisualShardRenderer : DamageShardRenderer)->AddInstance(InstanceTransform);
+		}
 	}
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("ProjectilePosition"), Positions);
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("ProjectileAngle"), Angles);
@@ -219,6 +286,18 @@ void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	PatternVFX->SetVariableFloat(TEXT("User.GatherAlpha"), bTelegraphing ? TelegraphFrame.GatherAlpha : 0.0f);
 	PatternVFX->SetVariableFloat(TEXT("User.CoreIntensity"), bTelegraphing ? TelegraphFrame.CoreIntensity : 1.0f);
 	PatternVFX->SetVariableBool(TEXT("User.IsActive"), bActive);
+	if (bTelegraphing)
+	{
+		const float CoreScale = FMath::Lerp(0.5f, 2.2f, TelegraphFrame.GatherAlpha);
+		CoreRenderer->SetRelativeScale3D(FVector(CoreScale));
+		CoreRenderer->SetScalarParameterValueOnMaterials(
+			TEXT("VFXIntensity"), FMath::Lerp(4.0f, 32.0f, TelegraphFrame.CoreIntensity));
+		CoreRenderer->SetVisibility(true, true);
+	}
+	else
+	{
+		CoreRenderer->SetVisibility(false, true);
+	}
 	if (!PatternVFX->IsActive() && PatternVFX->GetAsset())
 	{
 		PatternVFX->Activate(true);
@@ -359,5 +438,10 @@ void AStellarRemnantPatternActor::ApplyDamageForServerForTest(
 int32 AStellarRemnantPatternActor::GetLogicalSampleCountForTest() const
 {
 	return Samples.Num();
+}
+
+void AStellarRemnantPatternActor::RefreshPatternVFXForTest(float ElapsedSeconds)
+{
+	RefreshPatternVFX(ElapsedSeconds);
 }
 #endif

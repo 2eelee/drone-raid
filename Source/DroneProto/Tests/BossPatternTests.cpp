@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "CoreGlobals.h"
 #include "Drone.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
@@ -10,6 +11,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Materials/Material.h"
+#include "NiagaraComponent.h"
 #include "Raid/BossPatternActorBase.h"
 #include "Raid/BossPatternComponent.h"
 #include "Raid/BossPatternDataTableRows.h"
@@ -1541,6 +1543,12 @@ bool FDroneBossPatternProductionVFXHostContractTest::RunTest(const FString& Para
 		if (PatternVFX)
 		{
 			TestFalse(*FString::Printf(TEXT("%s VFX does not auto-activate"), ActorLabel), PatternVFX->IsActive());
+			UNiagaraComponent* NiagaraVFX = Cast<UNiagaraComponent>(PatternVFX);
+			TestNotNull(*FString::Printf(TEXT("%s host is a Niagara component"), ActorLabel), NiagaraVFX);
+			if (NiagaraVFX)
+			{
+				TestNotNull(*FString::Printf(TEXT("%s production Niagara system is bound"), ActorLabel), NiagaraVFX->GetAsset());
+			}
 		}
 
 		const FBoolProperty* DebugProperty = FindFProperty<FBoolProperty>(ActorClass, TEXT("bEnableDebugVisualization"));
@@ -1555,6 +1563,92 @@ bool FDroneBossPatternProductionVFXHostContractTest::RunTest(const FString& Para
 
 	VerifyActor(ACorruptedActinoPatternActor::StaticClass(), TEXT("Corrupted"));
 	VerifyActor(AStellarRemnantPatternActor::StaticClass(), TEXT("Stellar"));
+
+	ACorruptedActinoPatternActor* Corrupted = World->SpawnActor<ACorruptedActinoPatternActor>();
+	TArray<UStaticMeshComponent*> CorruptedRenderers;
+	if (Corrupted)
+	{
+		Corrupted->GetComponents<UStaticMeshComponent>(CorruptedRenderers);
+	}
+	TestEqual(TEXT("Corrupted owns four production beam renderers"), CorruptedRenderers.Num(), 4);
+	for (UStaticMeshComponent* Renderer : CorruptedRenderers)
+	{
+		TestTrue(TEXT("Corrupted beam mesh is bound"), Renderer && Renderer->GetStaticMesh() != nullptr);
+		TestNotNull(TEXT("Corrupted beam material is bound"), Renderer ? Renderer->GetMaterial(0) : nullptr);
+		TestEqual(TEXT("Corrupted renderer has no collision"), Renderer->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+	}
+
+	AStellarRemnantPatternActor* Stellar = World->SpawnActor<AStellarRemnantPatternActor>();
+	TArray<UStaticMeshComponent*> StellarRenderers;
+	if (Stellar)
+	{
+		Stellar->GetComponents<UStaticMeshComponent>(StellarRenderers);
+	}
+	TestEqual(TEXT("Stellar owns damage shards, visual shards, and core renderers"), StellarRenderers.Num(), 3);
+	for (UStaticMeshComponent* Renderer : StellarRenderers)
+	{
+		TestTrue(TEXT("Stellar renderer mesh is bound"), Renderer && Renderer->GetStaticMesh() != nullptr);
+		TestNotNull(TEXT("Stellar renderer material is bound"), Renderer ? Renderer->GetMaterial(0) : nullptr);
+		TestEqual(TEXT("Stellar renderer has no collision"), Renderer->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+	}
+
+	if (Corrupted)
+	{
+		Corrupted->SnapshotResolvedConfig(MakeCanonicalBossPatternResolvedConfig());
+		Corrupted->InitializeForServer(
+			EBossPatternKind::CorruptedActino,
+			EBossPatternLifecycleState::Active,
+			701,
+			0.0f);
+		Corrupted->RefreshPatternVFXForTest(0.0f);
+		for (UStaticMeshComponent* Renderer : CorruptedRenderers)
+		{
+			TestTrue(TEXT("active Corrupted beam is visible"), Renderer->IsVisible());
+		}
+	}
+
+	if (Stellar)
+	{
+		Stellar->SnapshotResolvedConfig(MakeCanonicalBossPatternResolvedConfig());
+		Stellar->InitializeForServer(
+			EBossPatternKind::StellarRemnant,
+			EBossPatternLifecycleState::Active,
+			702,
+			0.0f);
+		Stellar->RefreshPatternVFXForTest(0.0f);
+		UInstancedStaticMeshComponent* DamageRenderer =
+			Stellar->FindComponentByClass<UInstancedStaticMeshComponent>();
+		TestNotNull(TEXT("Stellar damage renderer exists"), DamageRenderer);
+		int32 TotalStellarInstances = 0;
+		for (UStaticMeshComponent* Renderer : StellarRenderers)
+		{
+			if (UInstancedStaticMeshComponent* InstancedRenderer = Cast<UInstancedStaticMeshComponent>(Renderer))
+			{
+				TotalStellarInstances += InstancedRenderer->GetInstanceCount();
+			}
+		}
+		TestEqual(TEXT("wave one publishes 16 damage and 8 visual instances"), TotalStellarInstances, 24);
+		Stellar->RefreshPatternVFXForTest(0.5f);
+		TotalStellarInstances = 0;
+		for (UStaticMeshComponent* Renderer : StellarRenderers)
+		{
+			if (UInstancedStaticMeshComponent* InstancedRenderer = Cast<UInstancedStaticMeshComponent>(Renderer))
+			{
+				TotalStellarInstances += InstancedRenderer->GetInstanceCount();
+			}
+		}
+		TestEqual(TEXT("wave two publishes all 32 damage and 16 visual instances"), TotalStellarInstances, 48);
+	}
+
+	const FObjectProperty* FlashMaterialProperty =
+		FindFProperty<FObjectProperty>(ADrone::StaticClass(), TEXT("DroneHitFlashMaterial"));
+	TestNotNull(TEXT("drone exposes a production hit-flash material slot"), FlashMaterialProperty);
+	if (FlashMaterialProperty)
+	{
+		TestNotNull(
+			TEXT("drone CDO has the production hit-flash material bound"),
+			FlashMaterialProperty->GetObjectPropertyValue_InContainer(ADrone::StaticClass()->GetDefaultObject()));
+	}
 	World->DestroyWorld(false);
 	return true;
 }

@@ -18,6 +18,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/DataTable.h"
 #include "GameFramework/PlayerState.h"
+#include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Engine/Engine.h"
@@ -199,8 +200,11 @@ ADrone::ADrone()
 		TEXT("/Game/Data/DroneCombat/DT_DroneCore.DT_DroneCore"));
 	static ConstructorHelpers::FObjectFinder<UDataTable> WeaponTableFinder(
 		TEXT("/Game/Data/DroneCombat/DT_DroneWeapon.DT_DroneWeapon"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> HitFlashMaterialFinder(
+		TEXT("/Game/VFX/Boss/Telegraph01/M_DroneHitFlash.M_DroneHitFlash"));
 	DroneCoreDataTable = CoreTableFinder.Object;
 	DroneWeaponDataTable = WeaponTableFinder.Object;
+	DroneHitFlashMaterial = HitFlashMaterialFinder.Object;
 	// FloatingPawnMovement 이동은 클라 위치를 믿지 않고 입력 축만 Server RPC로 전달한다.
 	// 서버가 이동을 적용하고 ReplicateMovement로 위치를 동기화한다.
 
