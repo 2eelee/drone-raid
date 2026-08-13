@@ -21,6 +21,7 @@
 #include "Raid/RaidPlayerController.h"
 #include "Raid/StellarRemnantPatternActor.h"
 #include "TimerManager.h"
+#include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -1457,6 +1458,63 @@ bool FDroneCorruptedActinoRuntimeDamageTest::RunTest(const FString& Parameters)
 
 	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
 	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternProductionVFXHostContractTest,
+	"DroneProto.BossPattern.Visual.ProductionVFXHostContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternProductionVFXHostContractTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternProductionVFXHostWorld")));
+	TestNotNull(TEXT("test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	const auto VerifyActor = [this, World](UClass* ActorClass, const TCHAR* ActorLabel)
+	{
+		AActor* Actor = World->SpawnActor<AActor>(ActorClass);
+		TestNotNull(*FString::Printf(TEXT("%s actor is spawned"), ActorLabel), Actor);
+		if (!Actor)
+		{
+			return;
+		}
+
+		TArray<UActorComponent*> Components;
+		Actor->GetComponents(Components);
+		int32 PatternVFXCount = 0;
+		UActorComponent* PatternVFX = nullptr;
+		for (UActorComponent* Component : Components)
+		{
+			if (Component && Component->GetFName() == TEXT("PatternVFX"))
+			{
+				++PatternVFXCount;
+				PatternVFX = Component;
+			}
+		}
+		TestEqual(*FString::Printf(TEXT("%s owns one PatternVFX host"), ActorLabel), PatternVFXCount, 1);
+		if (PatternVFX)
+		{
+			TestFalse(*FString::Printf(TEXT("%s VFX does not auto-activate"), ActorLabel), PatternVFX->IsActive());
+		}
+
+		const FBoolProperty* DebugProperty = FindFProperty<FBoolProperty>(ActorClass, TEXT("bEnableDebugVisualization"));
+		TestNotNull(*FString::Printf(TEXT("%s exposes debug opt-in"), ActorLabel), DebugProperty);
+		if (DebugProperty)
+		{
+			TestFalse(
+				*FString::Printf(TEXT("%s debug rendering defaults off"), ActorLabel),
+				DebugProperty->GetPropertyValue_InContainer(ActorClass->GetDefaultObject()));
+		}
+	};
+
+	VerifyActor(ACorruptedActinoPatternActor::StaticClass(), TEXT("Corrupted"));
+	VerifyActor(AStellarRemnantPatternActor::StaticClass(), TEXT("Stellar"));
+	World->DestroyWorld(false);
 	return true;
 }
 

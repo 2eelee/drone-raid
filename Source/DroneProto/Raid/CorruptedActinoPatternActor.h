@@ -4,6 +4,8 @@
 #include "BossPatternActorBase.h"
 #include "CorruptedActinoPatternActor.generated.h"
 
+class UNiagaraComponent;
+
 UCLASS()
 class DRONEPROTO_API ACorruptedActinoPatternActor : public ABossPatternActorBase
 {
@@ -37,6 +39,12 @@ protected:
 	virtual void OnResolvedConfigSnapshot() override;
 
 private:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|BossPattern|VFX", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UNiagaraComponent> PatternVFX = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|BossPattern|Debug")
+	bool bEnableDebugVisualization = false;
+
 	FCorruptedActinoConfig Config;
 	FBossPatternConfig PatternConfig;
 	int32 DamageAttemptCountForTest = 0;

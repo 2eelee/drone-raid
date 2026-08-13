@@ -6,10 +6,19 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
+#include "NiagaraComponent.h"
 
 AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 {
-	SetRootComponent(CreateDefaultSubobject<USceneComponent>(TEXT("Root")));
+	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	SetRootComponent(Root);
+	PatternVFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("PatternVFX"));
+	PatternVFX->SetupAttachment(Root);
+	PatternVFX->SetAutoActivate(false);
+	PatternVFX->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PatternVFX->SetGenerateOverlapEvents(false);
+	PatternVFX->SetCanEverAffectNavigation(false);
+	PatternVFX->CastShadow = false;
 	PrimaryActorTick.bCanEverTick = true;
 }
 
@@ -50,7 +59,7 @@ void AStellarRemnantPatternActor::Tick(float DeltaSeconds)
 		bHasPreviousActiveTime = false;
 	}
 
-	if (GetNetMode() != NM_DedicatedServer)
+	if (bEnableDebugVisualization && GetNetMode() != NM_DedicatedServer)
 	{
 		DrawDebugPattern(ElapsedSeconds);
 	}

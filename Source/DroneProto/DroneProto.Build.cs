@@ -17,6 +17,7 @@ public class DroneProto : ModuleRules
 			"AIModule",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
+			"Niagara",
 			"UMG",
 			"Slate"
 		});

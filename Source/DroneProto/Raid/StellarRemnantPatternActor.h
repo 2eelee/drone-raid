@@ -4,6 +4,8 @@
 #include "BossPatternActorBase.h"
 #include "StellarRemnantPatternActor.generated.h"
 
+class UNiagaraComponent;
+
 struct FStellarRemnantSample
 {
 	int32 WaveIndex = 0;
@@ -54,6 +56,12 @@ protected:
 	virtual void OnResolvedConfigSnapshot() override;
 
 private:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Raid|BossPattern|VFX", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UNiagaraComponent> PatternVFX = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|BossPattern|Debug")
+	bool bEnableDebugVisualization = false;
+
 	FStellarRemnantConfig Config;
 	FBossPatternConfig PatternConfig;
 	TArray<FStellarRemnantSample> Samples;
