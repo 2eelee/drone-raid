@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "CoreGlobals.h"
 #include "Drone.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -8,6 +9,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Materials/Material.h"
 #include "Raid/BossPatternActorBase.h"
 #include "Raid/BossPatternComponent.h"
 #include "Raid/BossPatternDataTableRows.h"
@@ -1553,6 +1555,62 @@ bool FDroneBossPatternProductionVFXHostContractTest::RunTest(const FString& Para
 
 	VerifyActor(ACorruptedActinoPatternActor::StaticClass(), TEXT("Corrupted"));
 	VerifyActor(AStellarRemnantPatternActor::StaticClass(), TEXT("Stellar"));
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneActualDamageFlashTest,
+	"DroneProto.BossPattern.Visual.DroneActualDamageFlash",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneActualDamageFlashTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneActualDamageFlashWorld")));
+	ADrone* Drone = World ? World->SpawnActor<ADrone>() : nullptr;
+	TestNotNull(TEXT("test world is created"), World);
+	TestNotNull(TEXT("drone is spawned"), Drone);
+	if (!World || !Drone)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	UStaticMeshComponent* FlashMesh = NewObject<UStaticMeshComponent>(Drone, TEXT("HitFlashTestMesh"));
+	Drone->AddInstanceComponent(FlashMesh);
+	FlashMesh->RegisterComponentWithWorld(World);
+
+	FObjectProperty* FlashMaterialProperty =
+		FindFProperty<FObjectProperty>(ADrone::StaticClass(), TEXT("DroneHitFlashMaterial"));
+	TestNotNull(TEXT("drone exposes a production hit-flash material slot"), FlashMaterialProperty);
+	UMaterialInterface* FlashMaterial = UMaterial::GetDefaultMaterial(MD_Surface);
+	if (FlashMaterialProperty)
+	{
+		FlashMaterialProperty->SetObjectPropertyValue_InContainer(Drone, FlashMaterial);
+	}
+
+	const int32 InitialHealth = Drone->GetHealth();
+	Drone->ApplyDamageForServer(10, FName(TEXT("ActualDamageFlashTest")));
+	TestEqual(TEXT("actual damage decreases HP"), Drone->GetHealth(), InitialHealth - 10);
+	TestEqual(TEXT("actual damage applies the flash overlay"), FlashMesh->GetOverlayMaterial(), FlashMaterial);
+
+	TickBossPatternTimers(World, 0.151f);
+	TestNull(TEXT("flash overlay clears after 0.15 seconds"), FlashMesh->GetOverlayMaterial());
+
+	FBoolProperty* InvincibleProperty = FindFProperty<FBoolProperty>(ADrone::StaticClass(), TEXT("bIsInvincible"));
+	TestNotNull(TEXT("test can enter the existing invincibility path"), InvincibleProperty);
+	if (InvincibleProperty)
+	{
+		InvincibleProperty->SetPropertyValue_InContainer(Drone, true);
+	}
+	const int32 InvincibleHealth = Drone->GetHealth();
+	Drone->ApplyDamageForServer(10, FName(TEXT("IgnoredDamageFlashTest")));
+	TestEqual(TEXT("ignored damage does not decrease HP"), Drone->GetHealth(), InvincibleHealth);
+	TestNull(TEXT("ignored damage does not start a flash"), FlashMesh->GetOverlayMaterial());
+
 	World->DestroyWorld(false);
 	return true;
 }

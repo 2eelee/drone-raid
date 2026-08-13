@@ -7,6 +7,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/MeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -33,6 +34,8 @@
 
 namespace
 {
+constexpr float DroneHitFlashDurationSeconds = 0.15f;
+
 bool TryGetStatsForPartID(FName PartID, EPartSlot Slot, FDronePartStats& OutStats)
 {
 	OutStats = FDronePartStats();
@@ -282,6 +285,8 @@ void ADrone::Tick(float DeltaSeconds)
 
 void ADrone::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	EndDroneHitFlash();
+
 	if (bCombatCameraRotationInputDisabled)
 	{
 		if (APlayerController* PC = Cast<APlayerController>(GetController()))
@@ -3047,10 +3052,8 @@ void ADrone::PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewH
 		return;
 	}
 
-	if (UWorld* World = GetWorld())
-	{
-		DrawDebugSphere(World, GetActorLocation(), 48.0f, 12, FColor::Red, false, 0.35f, 0, 3.0f);
-	}
+
+	StartDroneHitFlash(OldHP, NewHP);
 }
 
 void ADrone::PlayDroneDamageIgnoredVisualLocally(FName Reason)
@@ -3061,10 +3064,65 @@ void ADrone::PlayDroneDamageIgnoredVisualLocally(FName Reason)
 		return;
 	}
 
+	// Invincible/ignored damage intentionally has no hit flash.
+}
+
+void ADrone::StartDroneHitFlash(float OldHP, float NewHP)
+{
+	if (NewHP >= OldHP || !DroneHitFlashMaterial)
+	{
+		return;
+	}
+
+	EndDroneHitFlash();
+
+	TInlineComponentArray<UMeshComponent*> MeshComponents(this);
+	for (UMeshComponent* MeshComponent : MeshComponents)
+	{
+		if (!IsValid(MeshComponent) || !MeshComponent->IsVisible())
+		{
+			continue;
+		}
+
+		DroneHitFlashMeshes.Add(MeshComponent);
+		DroneHitFlashPreviousOverlays.Add(MeshComponent->GetOverlayMaterial());
+		MeshComponent->SetOverlayMaterial(DroneHitFlashMaterial);
+	}
+
+	if (DroneHitFlashMeshes.IsEmpty())
+	{
+		return;
+	}
+
 	if (UWorld* World = GetWorld())
 	{
-		DrawDebugSphere(World, GetActorLocation(), 54.0f, 12, FColor::Yellow, false, 0.30f, 0, 3.0f);
+		World->GetTimerManager().SetTimer(
+			DroneHitFlashTimerHandle,
+			this,
+			&ADrone::EndDroneHitFlash,
+			DroneHitFlashDurationSeconds,
+			false);
 	}
+}
+
+void ADrone::EndDroneHitFlash()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(DroneHitFlashTimerHandle);
+	}
+
+	const int32 RestoreCount = FMath::Min(DroneHitFlashMeshes.Num(), DroneHitFlashPreviousOverlays.Num());
+	for (int32 Index = 0; Index < RestoreCount; ++Index)
+	{
+		if (IsValid(DroneHitFlashMeshes[Index]))
+		{
+			DroneHitFlashMeshes[Index]->SetOverlayMaterial(DroneHitFlashPreviousOverlays[Index]);
+		}
+	}
+
+	DroneHitFlashMeshes.Reset();
+	DroneHitFlashPreviousOverlays.Reset();
 }
 
 void ADrone::BP_OnDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)

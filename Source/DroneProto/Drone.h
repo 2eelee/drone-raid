@@ -17,6 +17,8 @@ class UDronePart;
 class ARaidBoss;
 class UWorld;
 class UPrimitiveComponent;
+class UMeshComponent;
+class UMaterialInterface;
 class UDataTable;
 
 USTRUCT(BlueprintType)
@@ -328,6 +330,9 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "s"))
 	float DodgeCooldownSeconds = 1.20f;
 
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Combat|Visual", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMaterialInterface> DroneHitFlashMaterial = nullptr;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
 	float CombatCameraDistanceCm = 1400.0f;
 
@@ -438,6 +443,15 @@ private:
 
 	UPROPERTY(Transient)
 	FTimerHandle DodgeEndTimerHandle;
+
+	UPROPERTY(Transient)
+	FTimerHandle DroneHitFlashTimerHandle;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMeshComponent>> DroneHitFlashMeshes;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> DroneHitFlashPreviousOverlays;
 
 	UPROPERTY(Transient)
 	FVector DodgeStartLocationForServer = FVector::ZeroVector;
@@ -659,6 +673,8 @@ private:
 	void PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
 	void PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewHP);
 	void PlayDroneDamageIgnoredVisualLocally(FName Reason);
+	void StartDroneHitFlash(float OldHP, float NewHP);
+	void EndDroneHitFlash();
 	void ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual);
 	void SetDodgeInvincibleVisualHidden(bool bShouldHideVisual);
 	void EndDodgeInvincibilityForServer();
