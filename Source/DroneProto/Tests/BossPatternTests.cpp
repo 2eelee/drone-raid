@@ -1462,6 +1462,45 @@ bool FDroneCorruptedActinoRuntimeDamageTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoVisualSamplesTest,
+	"DroneProto.BossPattern.CorruptedActino.VisualSamples",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoVisualSamplesTest::RunTest(const FString& Parameters)
+{
+	const FCorruptedActinoConfig Config;
+	const TArray<FCorruptedBeamVisualSample> TelegraphSamples =
+		ACorruptedActinoPatternActor::BuildVisualSamples(0.0f, true, Config);
+	const TArray<FCorruptedBeamVisualSample> ActiveSamples =
+		ACorruptedActinoPatternActor::BuildVisualSamples(0.0f, false, Config);
+
+	TestEqual(TEXT("Corrupted publishes exactly four visual beams"), TelegraphSamples.Num(), 4);
+	TestEqual(TEXT("active publishes exactly four visual beams"), ActiveSamples.Num(), 4);
+	if (TelegraphSamples.Num() != 4 || ActiveSamples.Num() != 4)
+	{
+		return false;
+	}
+
+	const float ExpectedAngles[4] = {-25.0f, 115.0f, 155.0f, 295.0f};
+	const float ExpectedZ[4] = {300.0f, 0.0f, -300.0f, 0.0f};
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		const FCorruptedBeamVisualSample& Sample = TelegraphSamples[Index];
+		TestTrue(TEXT("beam angle uses canonical preset"), FMath::IsNearlyEqual(Sample.AngleDegrees, ExpectedAngles[Index], 0.01f));
+		TestTrue(TEXT("beam Z uses canonical preset"), FMath::IsNearlyEqual(Sample.ZCm, ExpectedZ[Index], 0.01f));
+		TestEqual(TEXT("beam starts at 8m"), Sample.StartRadiusCm, 800.0f);
+		TestEqual(TEXT("beam ends at 50m"), Sample.EndRadiusCm, 5000.0f);
+		TestEqual(TEXT("beam length is 42m"), Sample.LengthCm, 4200.0f);
+		TestEqual(TEXT("inner visual width is 5m"), Sample.InnerVisualFullWidthCm, 500.0f);
+		TestEqual(TEXT("outer visual width is 12m"), Sample.OuterVisualFullWidthCm, 1200.0f);
+		TestTrue(TEXT("telegraph is dimmer than active"), Sample.Intensity < ActiveSamples[Index].Intensity);
+		TestTrue(TEXT("telegraph sample is marked telegraph"), Sample.bTelegraphing);
+		TestFalse(TEXT("active sample is not marked telegraph"), ActiveSamples[Index].bTelegraphing);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternProductionVFXHostContractTest,
 	"DroneProto.BossPattern.Visual.ProductionVFXHostContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

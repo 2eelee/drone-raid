@@ -8,6 +8,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "NiagaraComponent.h"
+#include "NiagaraDataInterfaceArrayFunctionLibrary.h"
 
 ACorruptedActinoPatternActor::ACorruptedActinoPatternActor()
 {
@@ -47,6 +48,10 @@ void ACorruptedActinoPatternActor::Tick(float DeltaSeconds)
 	if (HasAuthority() && State.LifecycleState == EBossPatternLifecycleState::Active)
 	{
 		ApplyDamageForServer(ElapsedSeconds);
+	}
+	if (GetNetMode() != NM_DedicatedServer)
+	{
+		RefreshPatternVFX(ElapsedSeconds);
 	}
 	if (bEnableDebugVisualization && GetNetMode() != NM_DedicatedServer)
 	{
@@ -98,6 +103,77 @@ bool ACorruptedActinoPatternActor::IsPointInsideLaser(
 	const float VerticalOffsetCm = PointLocal.Z - EvaluateZCm(Preset, ElapsedSeconds, InConfig);
 	return FMath::Abs(LateralCm) <= CollisionHalfWidthCm + KINDA_SMALL_NUMBER
 		&& FMath::Abs(VerticalOffsetCm) <= InConfig.CollisionFullHeightCm * 0.5f + KINDA_SMALL_NUMBER;
+}
+
+TArray<FCorruptedBeamVisualSample> ACorruptedActinoPatternActor::BuildVisualSamples(
+	float ElapsedSeconds,
+	bool bTelegraphing,
+	const FCorruptedActinoConfig& InConfig)
+{
+	TArray<FCorruptedBeamVisualSample> Result;
+	Result.Reserve(InConfig.LaserCount);
+	for (int32 Index = 0; Index < InConfig.LaserCount; ++Index)
+	{
+		const FCorruptedActinoLaserPreset& Preset = InConfig.Presets[Index];
+		FCorruptedBeamVisualSample& Sample = Result.AddDefaulted_GetRef();
+		Sample.AngleDegrees = EvaluateAngleDegrees(Preset, ElapsedSeconds, InConfig);
+		Sample.ZCm = EvaluateZCm(Preset, ElapsedSeconds, InConfig);
+		Sample.StartRadiusCm = InConfig.StartRadiusCm;
+		Sample.EndRadiusCm = InConfig.StartRadiusCm + InConfig.LengthCm;
+		Sample.LengthCm = InConfig.LengthCm;
+		Sample.InnerVisualFullWidthCm = InConfig.InnerVisualFullWidthCm;
+		Sample.OuterVisualFullWidthCm = InConfig.OuterVisualFullWidthCm;
+		Sample.Intensity = bTelegraphing ? 0.32f : 1.0f;
+		Sample.bTelegraphing = bTelegraphing;
+	}
+	return Result;
+}
+
+void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
+{
+	if (!PatternVFX)
+	{
+		return;
+	}
+
+	const EBossPatternLifecycleState Lifecycle = GetPatternState().LifecycleState;
+	const bool bTelegraphing = Lifecycle == EBossPatternLifecycleState::Telegraphing;
+	const bool bActive = Lifecycle == EBossPatternLifecycleState::Active;
+	if (!bTelegraphing && !bActive)
+	{
+		PatternVFX->DeactivateImmediate();
+		return;
+	}
+
+	const TArray<FCorruptedBeamVisualSample> VisualSamples = BuildVisualSamples(ElapsedSeconds, bTelegraphing, Config);
+	TArray<FVector> BeamPositions;
+	TArray<FVector> BeamRotations;
+	TArray<float> InnerWidths;
+	TArray<float> OuterWidths;
+	BeamPositions.Reserve(VisualSamples.Num());
+	BeamRotations.Reserve(VisualSamples.Num());
+	InnerWidths.Reserve(VisualSamples.Num());
+	OuterWidths.Reserve(VisualSamples.Num());
+	for (const FCorruptedBeamVisualSample& Sample : VisualSamples)
+	{
+		const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
+		const FVector Direction(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
+		BeamPositions.Add(Direction * (Sample.StartRadiusCm + Sample.LengthCm * 0.5f) + FVector::UpVector * Sample.ZCm);
+		BeamRotations.Add(FVector(0.0f, Sample.AngleDegrees, 0.0f));
+		InnerWidths.Add(Sample.InnerVisualFullWidthCm);
+		OuterWidths.Add(Sample.OuterVisualFullWidthCm);
+	}
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("BeamPosition"), BeamPositions);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("BeamRotation"), BeamRotations);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("BeamInnerWidth"), InnerWidths);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("BeamOuterWidth"), OuterWidths);
+	PatternVFX->SetVariableFloat(TEXT("User.ElapsedSeconds"), ElapsedSeconds);
+	PatternVFX->SetVariableFloat(TEXT("User.TelegraphAlpha"), bTelegraphing ? 1.0f : 0.0f);
+	PatternVFX->SetVariableBool(TEXT("User.IsActive"), bActive);
+	if (!PatternVFX->IsActive() && PatternVFX->GetAsset())
+	{
+		PatternVFX->Activate(true);
+	}
 }
 
 float ACorruptedActinoPatternActor::GetServerWorldTimeSeconds() const

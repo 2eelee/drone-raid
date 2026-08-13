@@ -6,6 +6,19 @@
 
 class UNiagaraComponent;
 
+struct FCorruptedBeamVisualSample
+{
+	float AngleDegrees = 0.0f;
+	float ZCm = 0.0f;
+	float StartRadiusCm = 0.0f;
+	float EndRadiusCm = 0.0f;
+	float LengthCm = 0.0f;
+	float InnerVisualFullWidthCm = 0.0f;
+	float OuterVisualFullWidthCm = 0.0f;
+	float Intensity = 0.0f;
+	bool bTelegraphing = false;
+};
+
 UCLASS()
 class DRONEPROTO_API ACorruptedActinoPatternActor : public ABossPatternActorBase
 {
@@ -30,6 +43,10 @@ public:
 		const FCorruptedActinoLaserPreset& Preset,
 		float ElapsedSeconds,
 		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig());
+	static TArray<FCorruptedBeamVisualSample> BuildVisualSamples(
+		float ElapsedSeconds,
+		bool bTelegraphing,
+		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig());
 
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetDamageAttemptCountForTest() const;
@@ -51,6 +68,7 @@ private:
 
 	float GetServerWorldTimeSeconds() const;
 	void ApplyDamageForServer(float ElapsedSeconds);
+	void RefreshPatternVFX(float ElapsedSeconds);
 	void DrawDebugPattern(float ElapsedSeconds) const;
 	void DrawFilledTrapezoid(
 		const FVector& StartCenter,
