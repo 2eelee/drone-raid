@@ -7,6 +7,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
 #include "NiagaraComponent.h"
+#include "NiagaraDataInterfaceArrayFunctionLibrary.h"
 
 AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 {
@@ -59,9 +60,13 @@ void AStellarRemnantPatternActor::Tick(float DeltaSeconds)
 		bHasPreviousActiveTime = false;
 	}
 
-	if (bEnableDebugVisualization && GetNetMode() != NM_DedicatedServer)
+	if (GetNetMode() != NM_DedicatedServer)
 	{
-		DrawDebugPattern(ElapsedSeconds);
+		RefreshPatternVFX(ElapsedSeconds);
+		if (bEnableDebugVisualization)
+		{
+			DrawDebugPattern(ElapsedSeconds);
+		}
 	}
 }
 
@@ -129,6 +134,95 @@ FVector AStellarRemnantPatternActor::EvaluateLocalPosition(
 	const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
 	return FVector(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f) * RadiusCm
 		+ FVector::UpVector * Sample.VisualZOffsetCm;
+}
+
+TArray<FStellarRemnantVisualFrame> AStellarRemnantPatternActor::BuildVisualFrames(
+	float ElapsedSeconds,
+	const FStellarRemnantConfig& InConfig,
+	const FBossPatternConfig& InPatternConfig)
+{
+	const TArray<FStellarRemnantSample> LogicalSamples = BuildLogicalSamples(InConfig, InPatternConfig);
+	TArray<FStellarRemnantVisualFrame> Result;
+	Result.Reserve(LogicalSamples.Num());
+	for (const FStellarRemnantSample& Sample : LogicalSamples)
+	{
+		FStellarRemnantVisualFrame& Frame = Result.AddDefaulted_GetRef();
+		Frame.Position = EvaluateLocalPosition(Sample, ElapsedSeconds, InConfig);
+		Frame.AngleDegrees = Sample.AngleDegrees;
+		Frame.SizeCm = Sample.bVisualOnly ? Sample.VisualFullSizeCm : InConfig.CollisionRadiusCm * 2.0f;
+		Frame.WaveIndex = Sample.WaveIndex;
+		Frame.bActive = IsSampleActive(Sample, ElapsedSeconds, InConfig);
+		Frame.bVisualOnly = Sample.bVisualOnly;
+	}
+	return Result;
+}
+
+FStellarTelegraphVisualFrame AStellarRemnantPatternActor::BuildTelegraphVisualFrame(
+	float ElapsedSeconds,
+	float TelegraphDurationSeconds)
+{
+	FStellarTelegraphVisualFrame Result;
+	const float SafeDuration = FMath::Max(TelegraphDurationSeconds, KINDA_SMALL_NUMBER);
+	Result.GatherAlpha = FMath::Clamp(ElapsedSeconds / SafeDuration, 0.0f, 1.0f);
+	Result.CoreIntensity = FMath::Square(Result.GatherAlpha);
+	return Result;
+}
+
+void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
+{
+	if (!PatternVFX)
+	{
+		return;
+	}
+
+	const EBossPatternLifecycleState Lifecycle = GetPatternState().LifecycleState;
+	const bool bTelegraphing = Lifecycle == EBossPatternLifecycleState::Telegraphing;
+	const bool bActive = Lifecycle == EBossPatternLifecycleState::Active;
+	if (!bTelegraphing && !bActive)
+	{
+		PatternVFX->DeactivateImmediate();
+		return;
+	}
+
+	TArray<FVector> Positions;
+	TArray<float> Angles;
+	TArray<float> Sizes;
+	TArray<bool> ActiveMask;
+	TArray<bool> VisualOnlyMask;
+	TArray<int32> WaveIndices;
+	const TArray<FStellarRemnantVisualFrame> Frames = BuildVisualFrames(ElapsedSeconds, Config, PatternConfig);
+	Positions.Reserve(Frames.Num());
+	Angles.Reserve(Frames.Num());
+	Sizes.Reserve(Frames.Num());
+	ActiveMask.Reserve(Frames.Num());
+	VisualOnlyMask.Reserve(Frames.Num());
+	WaveIndices.Reserve(Frames.Num());
+	for (const FStellarRemnantVisualFrame& Frame : Frames)
+	{
+		Positions.Add(Frame.Position);
+		Angles.Add(Frame.AngleDegrees);
+		Sizes.Add(Frame.SizeCm);
+		ActiveMask.Add(Frame.bActive && bActive);
+		VisualOnlyMask.Add(Frame.bVisualOnly);
+		WaveIndices.Add(Frame.WaveIndex);
+	}
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("ProjectilePosition"), Positions);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("ProjectileAngle"), Angles);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("ProjectileSize"), Sizes);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayBool(PatternVFX, TEXT("ProjectileActive"), ActiveMask);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayBool(PatternVFX, TEXT("ProjectileVisualOnly"), VisualOnlyMask);
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayInt32(PatternVFX, TEXT("ProjectileWave"), WaveIndices);
+	const FStellarTelegraphVisualFrame TelegraphFrame = BuildTelegraphVisualFrame(
+		ElapsedSeconds,
+		PatternConfig.StellarTelegraphSeconds);
+	PatternVFX->SetVariableFloat(TEXT("User.ElapsedSeconds"), ElapsedSeconds);
+	PatternVFX->SetVariableFloat(TEXT("User.GatherAlpha"), bTelegraphing ? TelegraphFrame.GatherAlpha : 0.0f);
+	PatternVFX->SetVariableFloat(TEXT("User.CoreIntensity"), bTelegraphing ? TelegraphFrame.CoreIntensity : 1.0f);
+	PatternVFX->SetVariableBool(TEXT("User.IsActive"), bActive);
+	if (!PatternVFX->IsActive() && PatternVFX->GetAsset())
+	{
+		PatternVFX->Activate(true);
+	}
 }
 
 bool AStellarRemnantPatternActor::IsPointInsideSweptSample(

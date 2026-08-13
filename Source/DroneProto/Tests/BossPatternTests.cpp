@@ -1679,6 +1679,52 @@ bool FDroneStellarRemnantLogicalSamplesTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneStellarRemnantVisualFramesTest,
+	"DroneProto.BossPattern.StellarRemnant.VisualFrames",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneStellarRemnantVisualFramesTest::RunTest(const FString& Parameters)
+{
+	const TArray<FStellarRemnantVisualFrame> FramesAtStart = AStellarRemnantPatternActor::BuildVisualFrames(0.0f);
+	const TArray<FStellarRemnantVisualFrame> FramesAtWaveTwo = AStellarRemnantPatternActor::BuildVisualFrames(0.5f);
+	TestEqual(TEXT("Stellar always publishes 48 frame entries"), FramesAtStart.Num(), 48);
+	TestEqual(TEXT("Stellar keeps 48 frame entries at wave two"), FramesAtWaveTwo.Num(), 48);
+	if (FramesAtStart.Num() != 48 || FramesAtWaveTwo.Num() != 48)
+	{
+		return false;
+	}
+
+	int32 ActiveAtStart = 0;
+	int32 ActiveAtWaveTwo = 0;
+	bool bSawWaveTwoDamage = false;
+	for (int32 Index = 0; Index < FramesAtStart.Num(); ++Index)
+	{
+		ActiveAtStart += FramesAtStart[Index].bActive ? 1 : 0;
+		ActiveAtWaveTwo += FramesAtWaveTwo[Index].bActive ? 1 : 0;
+		if (!FramesAtWaveTwo[Index].bVisualOnly && FramesAtWaveTwo[Index].WaveIndex == 1 && !bSawWaveTwoDamage)
+		{
+			TestEqual(TEXT("first wave-two damage frame uses 11.25 degree offset"), FramesAtWaveTwo[Index].AngleDegrees, 11.25f);
+			TestEqual(TEXT("damage frame remains on player plane"), FramesAtWaveTwo[Index].Position.Z, 0.0);
+			bSawWaveTwoDamage = true;
+		}
+		if (FramesAtWaveTwo[Index].bVisualOnly)
+		{
+			TestTrue(TEXT("visual-only frame stays at canonical Z"),
+				FMath::IsNearlyEqual(FMath::Abs(FramesAtWaveTwo[Index].Position.Z), 300.0));
+		}
+	}
+	TestEqual(TEXT("wave one publishes 16 damage plus 8 visual-only frames"), ActiveAtStart, 24);
+	TestEqual(TEXT("wave two makes all 48 frames active"), ActiveAtWaveTwo, 48);
+	TestTrue(TEXT("wave-two damage frame exists"), bSawWaveTwoDamage);
+
+	const FStellarTelegraphVisualFrame TelegraphStart = AStellarRemnantPatternActor::BuildTelegraphVisualFrame(0.0f, 0.8f);
+	const FStellarTelegraphVisualFrame TelegraphEnd = AStellarRemnantPatternActor::BuildTelegraphVisualFrame(0.8f, 0.8f);
+	TestTrue(TEXT("Stellar gather increases through telegraph"), TelegraphEnd.GatherAlpha > TelegraphStart.GatherAlpha);
+	TestTrue(TEXT("Stellar core intensifies through telegraph"), TelegraphEnd.CoreIntensity > TelegraphStart.CoreIntensity);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneStellarRemnantSweptCollisionTest,
 	"DroneProto.BossPattern.StellarRemnant.SweptCollision",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

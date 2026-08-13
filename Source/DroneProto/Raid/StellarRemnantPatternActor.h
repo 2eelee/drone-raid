@@ -17,6 +17,22 @@ struct FStellarRemnantSample
 	float VisualFullSizeCm = 0.0f;
 };
 
+struct FStellarRemnantVisualFrame
+{
+	FVector Position = FVector::ZeroVector;
+	float AngleDegrees = 0.0f;
+	float SizeCm = 0.0f;
+	int32 WaveIndex = 0;
+	bool bActive = false;
+	bool bVisualOnly = false;
+};
+
+struct FStellarTelegraphVisualFrame
+{
+	float GatherAlpha = 0.0f;
+	float CoreIntensity = 0.0f;
+};
+
 UCLASS()
 class DRONEPROTO_API AStellarRemnantPatternActor : public ABossPatternActorBase
 {
@@ -38,6 +54,13 @@ public:
 		const FStellarRemnantSample& Sample,
 		float ElapsedSeconds,
 		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig());
+	static TArray<FStellarRemnantVisualFrame> BuildVisualFrames(
+		float ElapsedSeconds,
+		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig(),
+		const FBossPatternConfig& InPatternConfig = FBossPatternConfig());
+	static FStellarTelegraphVisualFrame BuildTelegraphVisualFrame(
+		float ElapsedSeconds,
+		float TelegraphDurationSeconds);
 	static bool IsPointInsideSweptSample(
 		const FVector& PointWorld,
 		const FTransform& BossTransform,
@@ -70,5 +93,6 @@ private:
 
 	float GetServerWorldTimeSeconds() const;
 	void ApplyDamageForServer(float PreviousElapsedSeconds, float CurrentElapsedSeconds);
+	void RefreshPatternVFX(float ElapsedSeconds);
 	void DrawDebugPattern(float ElapsedSeconds) const;
 };
