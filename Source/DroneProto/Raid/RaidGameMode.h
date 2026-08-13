@@ -6,6 +6,7 @@
 #include "RaidGameMode.generated.h"
 
 class UDronePartReturnManager;
+class UBalanceTelemetryComponent;
 class ARaidBoss;
 enum class EBossState : uint8;
 
@@ -54,6 +55,7 @@ public:
 	static FString BuildStablePlayerKeyForServer(const APlayerController* PlayerController);
 
 	UDronePartReturnManager* GetDronePartReturnManager() const;
+	UBalanceTelemetryComponent* GetBalanceTelemetryForServer() const;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	bool IsRaidTimeLimitTimerActiveForTest() const;
@@ -67,6 +69,9 @@ private:
 
 	UPROPERTY()
 	UDronePartReturnManager* DronePartReturnManager = nullptr;
+
+	UPROPERTY(VisibleAnywhere, Category = "Raid|Telemetry")
+	UBalanceTelemetryComponent* BalanceTelemetry = nullptr;
 
 	FTimerHandle RaidTimeLimitTimerHandle;
 	bool bRaidTimeLimitExpiredForServer = false;

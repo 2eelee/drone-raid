@@ -1,4 +1,5 @@
 #include "Drone.h"
+#include "Raid/BalanceTelemetryComponent.h"
 #include "DronePart.h"
 #include "DummyParts.h"
 #include "Camera/CameraComponent.h"
@@ -486,6 +487,20 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
 			*GetName(),
 			FMath::Max(0, DamageAmount));
+		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
+		{
+			if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+			{
+				Telemetry->EmitForServer(TEXT("PlayerDamageResolved"), {
+					{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+					{TEXT("Cause"), Reason.IsNone() ? TEXT("Unknown") : Reason.ToString()},
+					{TEXT("Result"), TEXT("Avoided")},
+					{TEXT("AppliedDamage"), TEXT("0")},
+					{TEXT("HPBefore"), UBalanceTelemetryComponent::Number(Health)},
+					{TEXT("HPAfter"), UBalanceTelemetryComponent::Number(Health)},
+				});
+			}
+		}
 		return;
 	}
 
@@ -526,6 +541,20 @@ void ADrone::ApplyDamageForServer(int32 DamageAmount, FName Reason)
 		static_cast<float>(AppliedDamage),
 		PreviousHealth,
 		Health);
+	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
+	{
+		if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+		{
+			Telemetry->EmitForServer(TEXT("PlayerDamageResolved"), {
+				{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+				{TEXT("Cause"), Reason.IsNone() ? TEXT("Unknown") : Reason.ToString()},
+				{TEXT("Result"), TEXT("Hit")},
+				{TEXT("AppliedDamage"), UBalanceTelemetryComponent::Number(PreviousHealth - Health)},
+				{TEXT("HPBefore"), UBalanceTelemetryComponent::Number(PreviousHealth)},
+				{TEXT("HPAfter"), UBalanceTelemetryComponent::Number(Health)},
+			});
+		}
+	}
 
 	if (Health <= 0.0f)
 	{
@@ -590,6 +619,18 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
 			*GetName(),
 			*Direction.ToString());
+		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
+		{
+			if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+			{
+				Telemetry->EmitForServer(TEXT("DodgeResolved"), {
+					{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+					{TEXT("Result"), TEXT("Rejected")},
+					{TEXT("Reason"), Reason ? FString(Reason) : FString(TEXT("Unknown"))},
+					{TEXT("DistanceMeters"), TEXT("0")},
+				});
+			}
+		}
 	};
 
 	if (Direction.IsNearlyZero())
@@ -726,6 +767,18 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 		bWasClamped ? TEXT("Clamped") : TEXT("OK"),
 		PlannedDistanceMeters / MoveDistanceCmToMeters,
 		FMath::Max(0.0f, DodgeCooldownSeconds));
+	if (RaidPC)
+	{
+		if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+		{
+			Telemetry->EmitForServer(TEXT("DodgeResolved"), {
+				{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+				{TEXT("Result"), TEXT("Accepted")},
+				{TEXT("Reason"), bWasClamped ? TEXT("Clamped") : TEXT("None")},
+				{TEXT("DistanceMeters"), UBalanceTelemetryComponent::Number(PlannedDistanceMeters)},
+			});
+		}
+	}
 
 	const AActor* ViewTarget = PlayerPC ? PlayerPC->GetViewTarget() : nullptr;
 	const APawn* ControlledPawn = PlayerPC ? PlayerPC->GetPawn() : nullptr;
@@ -1756,6 +1809,14 @@ void ADrone::HandleDeath()
 			*CorePartID.ToString(),
 			*LeftWeaponPartID.ToString(),
 			*RightWeaponPartID.ToString());
+		if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+		{
+			Telemetry->EmitForServer(TEXT("PlayerDied"), {
+				{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+				{TEXT("Cause"), TEXT("HPZero")},
+				{TEXT("SurvivalTime"), UBalanceTelemetryComponent::Number(BuildCombatRecordSnapshotForServer().SurvivalTime)},
+			});
+		}
 		RaidPC->TryCreateDroneReportForServer(EDroneReportTrigger::Death, false);
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnAfterReport Player=%s Trigger=%s"),
 			*BuildDroneControllerLogString(RaidPC),
@@ -1803,6 +1864,62 @@ void ADrone::RecordAttackIgnoredForServer(FName Reason)
 #if WITH_DEV_AUTOMATION_TESTS
 	LastAttackIgnoredReasonForTest = Reason;
 #endif
+	if (!Reason.IsNone())
+	{
+		EmitAttackResolvedForServer(TEXT("Rejected"), Reason, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+	}
+}
+
+void ADrone::EmitAttackAttemptedForServer()
+{
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this);
+	if (!RaidPC || !Telemetry)
+	{
+		return;
+	}
+	const ARaidBoss* Boss = RaidPC->GetCurrentTargetBoss();
+	const float DistanceCm = Boss ? FVector::Dist(GetActorLocation(), Boss->GetActorLocation()) : 0.0f;
+	Telemetry->EmitForServer(TEXT("AttackAttempted"), {
+		{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+		{TEXT("Core"), EquippedCorePartID.ToString()},
+		{TEXT("Left"), EquippedLeftWeaponPartID.ToString()},
+		{TEXT("Right"), EquippedRightWeaponPartID.ToString()},
+		{TEXT("DistanceCm"), UBalanceTelemetryComponent::Number(DistanceCm)},
+	});
+}
+
+void ADrone::EmitAttackResolvedForServer(
+	FName Result,
+	FName Reason,
+	float RawDamage,
+	float AppliedDamage,
+	float HealAmount,
+	float BossHPBefore,
+	float BossHPAfter)
+{
+	ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController());
+	UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this);
+	if (!RaidPC || !Telemetry)
+	{
+		return;
+	}
+	const ARaidBoss* Boss = RaidPC->GetCurrentTargetBoss();
+	const float DistanceCm = Boss ? FVector::Dist(GetActorLocation(), Boss->GetActorLocation()) : 0.0f;
+	Telemetry->EmitForServer(TEXT("AttackResolved"), {
+		{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+		{TEXT("Result"), Result.IsNone() ? TEXT("Unknown") : Result.ToString()},
+		{TEXT("Reason"), Reason.IsNone() ? TEXT("None") : Reason.ToString()},
+		{TEXT("Core"), EquippedCorePartID.ToString()},
+		{TEXT("Left"), EquippedLeftWeaponPartID.ToString()},
+		{TEXT("Right"), EquippedRightWeaponPartID.ToString()},
+		{TEXT("DistanceCm"), UBalanceTelemetryComponent::Number(DistanceCm)},
+		{TEXT("RawDamage"), UBalanceTelemetryComponent::Number(RawDamage)},
+		{TEXT("AppliedDamage"), UBalanceTelemetryComponent::Number(AppliedDamage)},
+		{TEXT("Heal"), UBalanceTelemetryComponent::Number(HealAmount)},
+		{TEXT("HPBefore"), UBalanceTelemetryComponent::Number(BossHPBefore)},
+		{TEXT("HPAfter"), UBalanceTelemetryComponent::Number(BossHPAfter)},
+	});
 }
 
 void ADrone::HandleAttackBossForServer()
@@ -1836,6 +1953,7 @@ void ADrone::HandleAttackBossForServer()
 			RaidPC && RaidPC->GetPawn() ? *RaidPC->GetPawn()->GetName() : TEXT("None"));
 		return;
 	}
+	EmitAttackAttemptedForServer();
 
 	if (bIsDodging)
 	{
@@ -1989,6 +2107,7 @@ void ADrone::HandleAttackBossForServer()
 			RightWeaponDamage,
 			Boss->GetCurrentHP(),
 			Boss->GetMaxHP());
+		EmitAttackResolvedForServer(TEXT("NoDamage"), NoDamageReason, FinalDamage, 0.0f, 0.0f, BossHPBeforeAttack, Boss->GetCurrentHP());
 		return;
 	}
 
@@ -2011,6 +2130,7 @@ void ADrone::HandleAttackBossForServer()
 			RightWeaponDamage,
 			Boss->GetCurrentHP(),
 			Boss->GetMaxHP());
+		EmitAttackResolvedForServer(TEXT("NoDamage"), NoDamageReason, FinalDamage, 0.0f, 0.0f, BossHPBeforeAttack, Boss->GetCurrentHP());
 		return;
 	}
 	if (DamageDealt > KINDA_SMALL_NUMBER)
@@ -2076,6 +2196,7 @@ void ADrone::HandleAttackBossForServer()
 	{
 		ResetVectorMoveDistanceForServer(FName(TEXT("VectorAttack")));
 	}
+	EmitAttackResolvedForServer(TEXT("Hit"), NAME_None, FinalDamage, DamageDealt, HealAmount, BossHPBeforeAttack, Boss->GetCurrentHP());
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone ZAttack: Drone=%s CorePartID=%s LeftWeaponPartID=%s RightWeaponPartID=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreAttackModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f BossHP=%.2f/%.2f"),
 		*GetName(),

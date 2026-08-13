@@ -1,4 +1,9 @@
 #include "RaidGameMode.h"
+
+#include "BalanceTelemetryComponent.h"
+#include "Misc/CommandLine.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Parse.h"
 #include "Drone.h"
 #include "DronePartInventory.h"
 #include "DronePartReturnManager.h"
@@ -14,6 +19,27 @@
 
 namespace
 {
+FString ResolveBalanceTelemetryVersion()
+{
+	FString BalanceVersion;
+	if (FParse::Value(FCommandLine::Get(), TEXT("BalanceVersion="), BalanceVersion) && !BalanceVersion.IsEmpty())
+	{
+		return BalanceVersion;
+	}
+	if (GConfig)
+	{
+		GConfig->GetString(TEXT("BalanceTelemetry"), TEXT("BalanceTelemetryVersion"), BalanceVersion, GGameIni);
+	}
+	return BalanceVersion.IsEmpty() ? TEXT("Unspecified") : BalanceVersion;
+}
+
+FName ResolveRaidServerSlot()
+{
+	FString ServerSlot;
+	FParse::Value(FCommandLine::Get(), TEXT("RaidServerSlot="), ServerSlot);
+	return ServerSlot.IsEmpty() ? FName(TEXT("Local")) : FName(*ServerSlot);
+}
+
 const FName RaidEntrySpawnTag(TEXT("RaidEntrySpawn"));
 constexpr int32 RequiredRaidEntrySpawnCount = 4;
 
@@ -59,6 +85,7 @@ const TCHAR* ToReportTriggerLogString(EDroneReportTrigger Trigger)
 
 ARaidGameMode::ARaidGameMode()
 {
+	BalanceTelemetry = CreateDefaultSubobject<UBalanceTelemetryComponent>(TEXT("BalanceTelemetry"));
 	GameStateClass       = ARaidGameState::StaticClass();
 	PlayerControllerClass = ARaidPlayerController::StaticClass();
 	PlayerStateClass      = ARaidPlayerState::StaticClass();
@@ -208,11 +235,20 @@ void ARaidGameMode::PostLogin(APlayerController* NewPlayer)
 
 		if (ARaidGameState* GS = GetGameState<ARaidGameState>())
 		{
+			const bool bLateJoin = GS->RaidState == ERaidState::Battle;
 			GS->CurrentPlayers++;
 			UE_LOG(LogTemp, Log, TEXT("[Server] PostLogin: CurrentPlayers = %d"), GS->CurrentPlayers);
 			if (GS->RaidState == ERaidState::Waiting)
 			{
 				GS->SetRaidStateForServer(ERaidState::Drafting);
+			}
+			if (BalanceTelemetry)
+			{
+				BalanceTelemetry->StartSessionForServer(
+					ResolveRaidServerSlot(),
+					GetWorld() ? FName(*GetWorld()->GetMapName()) : FName(TEXT("Unknown")),
+					ResolveBalanceTelemetryVersion());
+				BalanceTelemetry->RecordPlayerJoinedForServer(NewPlayer, bLateJoin, GS->CurrentPlayers);
 			}
 		}
 	}
@@ -405,6 +441,13 @@ void ARaidGameMode::Logout(AController* Exiting)
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Exiting))
 		{
+			if (BalanceTelemetry)
+			{
+				BalanceTelemetry->EmitForServer(TEXT("PlayerLeft"), {
+					{TEXT("Player"), BalanceTelemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
+					{TEXT("ExitReason"), TEXT("Disconnect")},
+				});
+			}
 			RaidPC->ClearBossTargetForServer(FName(TEXT("Cleanup")));
 			if (RaidPC->GetPlayerSelectionState() == EPlayerSelectionState::Selecting)
 			{
@@ -555,6 +598,14 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 	}
 
 	SetAllBossStatesForServer(EBossState::Clear, Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
+	if (BalanceTelemetry)
+	{
+		const ARaidBoss* Boss = GS ? GS->GetRaidBoss() : nullptr;
+		BalanceTelemetry->EndSessionForServer(
+			Reason.IsNone() ? FName(TEXT("Manual")) : Reason,
+			EligiblePlayerCount,
+			Boss ? Boss->GetCurrentHP() : 0.0f);
+	}
 	ResetBossDamageContributionsForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidEnd part return completed Reason=%s PlayerCount=%d"),
@@ -833,6 +884,11 @@ bool ARaidGameMode::NotifyRaidSpawnFailedForTest(AController* Controller, FName 
 UDronePartReturnManager* ARaidGameMode::GetDronePartReturnManager() const
 {
 	return DronePartReturnManager;
+}
+
+UBalanceTelemetryComponent* ARaidGameMode::GetBalanceTelemetryForServer() const
+{
+	return HasAuthority() ? BalanceTelemetry : nullptr;
 }
 
 bool ARaidGameMode::RecordBossDamageForServer(APlayerController* PlayerController, float DamageAmount)

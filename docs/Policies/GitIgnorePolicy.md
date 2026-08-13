@@ -9,6 +9,7 @@
 - 검증이 끝난 결과 문서: `docs/Results/**`
 - 저장소 운영 정책: `docs/Policies/**`
 - 공유 프로젝트 스킬: `.agents/skills/**`
+- 밸런스 로그 수집·분석 도구: `Tools/BalanceTelemetry/**`
 
 ## 로컬 전용
 
@@ -18,6 +19,7 @@
 - `docs/DEVLOG.md`
 - `docs/Audit/**`의 현행 감사·계획과 보관 문서
 - `Saved/`, 로그, 빌드 산출물
+- `Saved/BalanceTelemetry/**`의 inbox, SQLite, CSV, Streamlit 가상환경
 - `.codex/`, `.code-review-graph/`, `.agents/skills/` 이외의 `.agents` 상태
 - `CLAUDE.md`, `AGENTS.md`, `.claude/`
 

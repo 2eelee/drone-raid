@@ -627,6 +627,8 @@ private:
 	void HandleAttackBossForServer();
 	bool HandleTutorialAttackForServer(ATutorialPlayerController* TutorialPlayerController);
 	void RecordAttackIgnoredForServer(FName Reason);
+	void EmitAttackAttemptedForServer();
+	void EmitAttackResolvedForServer(FName Result, FName Reason, float RawDamage, float AppliedDamage, float HealAmount, float BossHPBefore, float BossHPAfter);
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	void UpdateLocalCombatCamera(float DeltaSeconds);
 	void DisableLocalCombatCameraRotationInput(APlayerController* PC);

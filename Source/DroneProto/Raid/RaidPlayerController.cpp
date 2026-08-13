@@ -1,4 +1,5 @@
 #include "RaidPlayerController.h"
+#include "BalanceTelemetryComponent.h"
 #include "BossHUDWidget.h"
 #include "Drone.h"
 #include "DronePartInventory.h"
@@ -2326,6 +2327,15 @@ bool ARaidPlayerController::ProcessReadyForRaidForServer(bool bAutoReady)
 		RaidGameMode->StartRaidTimeLimitTimerForServer();
 		RaidGameMode->StartBossPatternsForServer();
 		RaidGameMode->ClearDroneReportKeyForServer(this, FName(TEXT("RaidReady")));
+		if (UBalanceTelemetryComponent* Telemetry = RaidGameMode->GetBalanceTelemetryForServer())
+		{
+			Telemetry->EmitForServer(TEXT("LoadoutLocked"), {
+				{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(this)},
+				{TEXT("Core"), ReadyCorePartID.ToString()},
+				{TEXT("Left"), ReadyLeftWeaponPartID.ToString()},
+				{TEXT("Right"), ReadyRightWeaponPartID.ToString()},
+			});
+		}
 	}
 
 	StopSelectionTimerForServer(bAutoReady ? TEXT("AutoReady") : TEXT("ManualReady"), !bAutoReady);
@@ -2635,6 +2645,21 @@ bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Tr
 		LastDroneReportData.ReportScore,
 		ReportGradeToLogString(LastDroneReportData.Grade),
 		ReportTriggerToLogString(Trigger));
+
+	if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+	{
+		Telemetry->EmitForServer(TEXT("DroneReportCreated"), {
+			{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(this)},
+			{TEXT("SurvivalTime"), UBalanceTelemetryComponent::Number(LastDroneReportData.SurvivalTime)},
+			{TEXT("BossDamage"), UBalanceTelemetryComponent::Number(LastDroneReportData.BossDamage)},
+			{TEXT("MoveDistance"), UBalanceTelemetryComponent::Number(LastDroneReportData.MoveDistance)},
+			{TEXT("HealAmount"), UBalanceTelemetryComponent::Number(LastDroneReportData.HealAmount)},
+			{TEXT("DamageTakenCount"), FString::FromInt(LastDroneReportData.DamageTakenCount)},
+			{TEXT("BonusScore"), FString::FromInt(LastDroneReportData.BonusScore)},
+			{TEXT("Grade"), ReportGradeToLogString(LastDroneReportData.Grade)},
+			{TEXT("ReportScore"), UBalanceTelemetryComponent::Number(LastDroneReportData.ReportScore)},
+		});
+	}
 
 	Client_ReceiveDroneReport(LastDroneReportData);
 	return true;
