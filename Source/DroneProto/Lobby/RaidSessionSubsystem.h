@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Containers/Ticker.h"
 #include "GameFramework/SaveGame.h"
 #include "RaidAssignmentBase.h"
 #include "Subsystems/GameInstanceSubsystem.h"
@@ -30,6 +31,7 @@ class DRONEPROTO_API URaidSessionSubsystem : public UGameInstanceSubsystem
 
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	virtual void Deinitialize() override;
 
 	void SetActiveLobbyWidget(URaidLobbyWidget* InWidget);
 	void ClearActiveLobbyWidget(URaidLobbyWidget* InWidget);
@@ -98,6 +100,11 @@ public:
 	void ResetTravelRequestedForTest();
 	void RetryRaidEntryForTest();
 	void ExpireMatchmakingWaitForTest();
+	bool IsRaidLoadWatchdogActiveForTest() const { return bRaidLoadWatchdogActive; }
+	int32 GetRaidLoadFailureHandleCountForTest() const { return RaidLoadFailureHandleCountForTest; }
+	void CompleteRaidLoadForTest();
+	void ExpireRaidLoadWatchdogForTest();
+	void NotifyRaidTravelFailureForTest();
 	void SetProfileSaveSlotForTest(const FString& InSlotName) { ProfileSaveSlotName = InSlotName; }
 	bool ReloadLocalProfileForTest();
 #endif
@@ -119,9 +126,20 @@ private:
 	TObjectPtr<URaidLobbyWidget> ActiveLobbyWidget;
 
 	FTimerHandle MatchmakingRetryTimerHandle;
+	FTSTicker::FDelegateHandle RaidLoadWatchdogTickerHandle;
+	FDelegateHandle PostLoadMapDelegateHandle;
+	FDelegateHandle TravelFailureDelegateHandle;
+	FDelegateHandle NetworkFailureDelegateHandle;
 	FString PendingRaidEntrySlotId;
+	FServerEndpoint PendingRaidLoadEndpoint;
+	TWeakObjectPtr<UWorld> RaidLoadSourceWorld;
 	double MatchmakingWaitStartTimeSeconds = 0.0;
+	double RaidLoadWatchdogStartTimeSeconds = 0.0;
 	bool bMatchmakingRetryActive = false;
+	bool bRaidLoadWatchdogActive = false;
+	bool bRaidLoadFailureHandled = false;
+	bool bPendingLoadFailedPopupAfterLobbyReturn = false;
+	bool bLobbyReturnRequestedForLoadFailure = false;
 	FRaidAssignmentResult LastAssignmentResult;
 	FString Callsign = TEXT("AAA");
 	bool bHasCompletedTutorial = false;
@@ -130,12 +148,15 @@ private:
 
 	static constexpr double MatchmakingTimeoutSeconds = 10.0;
 	static constexpr float MatchmakingRetryIntervalSeconds = 1.0f;
+	static constexpr double RaidLoadTimeoutSeconds = 10.0;
+	static constexpr float RaidLoadWatchdogTickIntervalSeconds = 0.10f;
 	static constexpr int32 ProfileSaveUserIndex = 0;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	bool bSuppressTravelForTest = false;
 	bool bTravelRequestedForTest = false;
 	int32 TravelRequestCountForTest = 0;
+	int32 RaidLoadFailureHandleCountForTest = 0;
 #endif
 
 	UUserWidget* CreateAndShowPopup(TSubclassOf<UUserWidget> WidgetClass);
@@ -148,6 +169,14 @@ private:
 	bool SaveLocalProfile() const;
 	static bool TryNormalizeCallsign(const FString& RawCallsign, FString& OutCallsign);
 	void TravelToRaidEndpoint(const FRaidAssignmentResult& Result);
+	void StartRaidLoadWatchdog(UWorld* SourceWorld, const FServerEndpoint& Endpoint);
+	void StopRaidLoadWatchdog();
+	bool HandleRaidLoadWatchdogTick(float DeltaSeconds);
+	void HandlePostLoadMap(UWorld* LoadedWorld);
+	void CompletePendingRaidLoad();
+	void HandlePendingRaidLoadFailure(const FString& DebugReason);
+	void PresentPendingRaidLoadFailure();
+	bool IsLobbyWorld(const UWorld* World) const;
 	void RecordAssignmentResult(const FRaidAssignmentResult& Result);
 	double GetMatchmakingNowSeconds() const;
 };

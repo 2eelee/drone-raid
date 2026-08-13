@@ -73,6 +73,8 @@ private:
 	float PendingDelaySeconds = 0.0f;
 	int32 TransitionSerial = 0;
 	int32 NextPatternInstanceID = 0;
+	int32 ActiveTelemetryPatternInstanceID = 0;
+	float ActiveTelemetryPatternStartTime = 0.0f;
 	int32 ActivePlayerCount = -1;
 	bool bRunning = false;
 	bool bResolvedConfigReady = false;

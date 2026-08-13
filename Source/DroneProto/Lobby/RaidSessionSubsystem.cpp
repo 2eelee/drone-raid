@@ -1,9 +1,12 @@
 #include "RaidSessionSubsystem.h"
 
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "LocalAssignment.h"
 #include "RaidLobbyWidget.h"
+#include "UObject/UObjectGlobals.h"
 
 namespace
 {
@@ -52,6 +55,65 @@ void URaidSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	Assignment = NewObject<ULocalAssignment>(this);
 	LoadLocalProfile();
+
+	PostLoadMapDelegateHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(
+		this,
+		&URaidSessionSubsystem::HandlePostLoadMap);
+	if (GEngine)
+	{
+		TravelFailureDelegateHandle = GEngine->OnTravelFailure().AddWeakLambda(
+			this,
+			[this](UWorld* FailedWorld, ETravelFailure::Type FailureType, const FString& ErrorString)
+			{
+				if (bRaidLoadWatchdogActive
+					&& (!FailedWorld || FailedWorld == RaidLoadSourceWorld.Get() || FailedWorld->GetGameInstance() == GetGameInstance()))
+				{
+					HandlePendingRaidLoadFailure(FString::Printf(
+						TEXT("TravelFailure:%s:%s"),
+						ETravelFailure::ToString(FailureType),
+						*ErrorString));
+				}
+			});
+		NetworkFailureDelegateHandle = GEngine->OnNetworkFailure().AddWeakLambda(
+			this,
+			[this](UWorld* FailedWorld, UNetDriver*, ENetworkFailure::Type FailureType, const FString& ErrorString)
+			{
+				if (bRaidLoadWatchdogActive
+					&& (!FailedWorld || FailedWorld == RaidLoadSourceWorld.Get() || FailedWorld->GetGameInstance() == GetGameInstance()))
+				{
+					HandlePendingRaidLoadFailure(FString::Printf(
+						TEXT("NetworkFailure:%s:%s"),
+						ENetworkFailure::ToString(FailureType),
+						*ErrorString));
+				}
+			});
+	}
+}
+
+void URaidSessionSubsystem::Deinitialize()
+{
+	StopMatchmakingRetry();
+	StopRaidLoadWatchdog();
+	if (PostLoadMapDelegateHandle.IsValid())
+	{
+		FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapDelegateHandle);
+		PostLoadMapDelegateHandle.Reset();
+	}
+	if (GEngine)
+	{
+		if (TravelFailureDelegateHandle.IsValid())
+		{
+			GEngine->OnTravelFailure().Remove(TravelFailureDelegateHandle);
+			TravelFailureDelegateHandle.Reset();
+		}
+		if (NetworkFailureDelegateHandle.IsValid())
+		{
+			GEngine->OnNetworkFailure().Remove(NetworkFailureDelegateHandle);
+			NetworkFailureDelegateHandle.Reset();
+		}
+	}
+
+	Super::Deinitialize();
 }
 
 bool URaidSessionSubsystem::TryLoginWithCallsign(const FString& RawCallsign)
@@ -186,6 +248,11 @@ bool URaidSessionSubsystem::TryNormalizeCallsign(const FString& RawCallsign, FSt
 void URaidSessionSubsystem::SetActiveLobbyWidget(URaidLobbyWidget* InWidget)
 {
 	ActiveLobbyWidget = InWidget;
+	if (ActiveLobbyWidget && bPendingLoadFailedPopupAfterLobbyReturn)
+	{
+		bPendingLoadFailedPopupAfterLobbyReturn = false;
+		ShowLoadFailed();
+	}
 }
 
 void URaidSessionSubsystem::ClearActiveLobbyWidget(URaidLobbyWidget* InWidget)
@@ -201,6 +268,10 @@ void URaidSessionSubsystem::RequestRaidEntry(const FString& SlotId)
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryRequest Slot=%s AuthorityModel=LocalPrototype"), *SlotId);
 
 	StopMatchmakingRetry();
+	StopRaidLoadWatchdog();
+	bRaidLoadFailureHandled = false;
+	bPendingLoadFailedPopupAfterLobbyReturn = false;
+	bLobbyReturnRequestedForLoadFailure = false;
 	PendingRaidEntrySlotId = SlotId;
 	EvaluateRaidEntry(false);
 }
@@ -368,6 +439,7 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 	++TravelRequestCountForTest;
 	if (bSuppressTravelForTest)
 	{
+		StartRaidLoadWatchdog(nullptr, Result.Endpoint);
 		return;
 	}
 #endif
@@ -387,10 +459,12 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 
 	if (Result.Endpoint.bIsLevelName)
 	{
+		StartRaidLoadWatchdog(World, Result.Endpoint);
 		UGameplayStatics::OpenLevel(World, FName(*Result.Endpoint.TravelTarget));
 	}
 	else if (APlayerController* PC = World->GetFirstPlayerController())
 	{
+		StartRaidLoadWatchdog(World, Result.Endpoint);
 		PC->ClientTravel(Result.Endpoint.TravelTarget, TRAVEL_Absolute);
 	}
 	else
@@ -402,6 +476,160 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 		RecordAssignmentResult(LoadFailedResult);
 		HandleRaidEntryFailure(LoadFailedResult);
 	}
+}
+
+void URaidSessionSubsystem::StartRaidLoadWatchdog(UWorld* SourceWorld, const FServerEndpoint& Endpoint)
+{
+	StopRaidLoadWatchdog();
+	RaidLoadSourceWorld = SourceWorld;
+	PendingRaidLoadEndpoint = Endpoint;
+	RaidLoadWatchdogStartTimeSeconds = FPlatformTime::Seconds();
+	bRaidLoadWatchdogActive = true;
+	bRaidLoadFailureHandled = false;
+	bPendingLoadFailedPopupAfterLobbyReturn = false;
+	bLobbyReturnRequestedForLoadFailure = false;
+	RaidLoadWatchdogTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateUObject(this, &URaidSessionSubsystem::HandleRaidLoadWatchdogTick),
+		RaidLoadWatchdogTickIntervalSeconds);
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadWatchdog Started Slot=%s Target=%s TimeoutSeconds=%.2f"),
+		*Endpoint.SlotId,
+		*Endpoint.TravelTarget,
+		RaidLoadTimeoutSeconds);
+}
+
+void URaidSessionSubsystem::StopRaidLoadWatchdog()
+{
+	if (RaidLoadWatchdogTickerHandle.IsValid())
+	{
+		FTSTicker::RemoveTicker(RaidLoadWatchdogTickerHandle);
+		RaidLoadWatchdogTickerHandle.Reset();
+	}
+
+	bRaidLoadWatchdogActive = false;
+	RaidLoadSourceWorld.Reset();
+}
+
+bool URaidSessionSubsystem::HandleRaidLoadWatchdogTick(float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	if (!bRaidLoadWatchdogActive)
+	{
+		RaidLoadWatchdogTickerHandle.Reset();
+		return false;
+	}
+
+	const double ElapsedSeconds = FPlatformTime::Seconds() - RaidLoadWatchdogStartTimeSeconds;
+	if (ElapsedSeconds < RaidLoadTimeoutSeconds)
+	{
+		return true;
+	}
+
+	RaidLoadWatchdogTickerHandle.Reset();
+	HandlePendingRaidLoadFailure(TEXT("MapLoadTimeout"));
+	return false;
+}
+
+void URaidSessionSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
+{
+	if (bPendingLoadFailedPopupAfterLobbyReturn
+		&& IsLobbyWorld(LoadedWorld)
+		&& ActiveLobbyWidget
+		&& ActiveLobbyWidget->GetWorld() == LoadedWorld)
+	{
+		bPendingLoadFailedPopupAfterLobbyReturn = false;
+		ShowLoadFailed();
+	}
+
+	if (!bRaidLoadWatchdogActive
+		|| !LoadedWorld
+		|| LoadedWorld == RaidLoadSourceWorld.Get()
+		|| LoadedWorld->GetGameInstance() != GetGameInstance())
+	{
+		return;
+	}
+
+	const double ElapsedSeconds = FPlatformTime::Seconds() - RaidLoadWatchdogStartTimeSeconds;
+	if (ElapsedSeconds > RaidLoadTimeoutSeconds)
+	{
+		HandlePendingRaidLoadFailure(TEXT("MapLoadTimeoutAfterPostLoad"));
+		return;
+	}
+
+	CompletePendingRaidLoad();
+}
+
+void URaidSessionSubsystem::CompletePendingRaidLoad()
+{
+	if (!bRaidLoadWatchdogActive)
+	{
+		return;
+	}
+
+	const FServerEndpoint CompletedEndpoint = PendingRaidLoadEndpoint;
+	const double ElapsedSeconds = FPlatformTime::Seconds() - RaidLoadWatchdogStartTimeSeconds;
+	StopRaidLoadWatchdog();
+	PendingRaidLoadEndpoint = FServerEndpoint{};
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadWatchdog Completed Slot=%s Target=%s ElapsedSeconds=%.2f"),
+		*CompletedEndpoint.SlotId,
+		*CompletedEndpoint.TravelTarget,
+		ElapsedSeconds);
+}
+
+void URaidSessionSubsystem::HandlePendingRaidLoadFailure(const FString& DebugReason)
+{
+	if (!bRaidLoadWatchdogActive || bRaidLoadFailureHandled)
+	{
+		return;
+	}
+
+	const FServerEndpoint FailedEndpoint = PendingRaidLoadEndpoint;
+	bRaidLoadFailureHandled = true;
+	StopRaidLoadWatchdog();
+	PendingRaidLoadEndpoint = FServerEndpoint{};
+
+	const FRaidAssignmentResult LoadFailedResult = FRaidAssignmentResult::Failed(
+		ERaidEntryFailReason::MapLoadFailed,
+		DebugReason,
+		FailedEndpoint);
+	RecordAssignmentResult(LoadFailedResult);
+#if WITH_DEV_AUTOMATION_TESTS
+	++RaidLoadFailureHandleCountForTest;
+#endif
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadWatchdog Failed Slot=%s Target=%s DebugReason=%s"),
+		*FailedEndpoint.SlotId,
+		*FailedEndpoint.TravelTarget,
+		*DebugReason);
+	PresentPendingRaidLoadFailure();
+}
+
+void URaidSessionSubsystem::PresentPendingRaidLoadFailure()
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	UWorld* World = GameInstance ? GameInstance->GetWorld() : nullptr;
+	if ((!World || IsLobbyWorld(World)) && ActiveLobbyWidget)
+	{
+		bPendingLoadFailedPopupAfterLobbyReturn = false;
+		ShowLoadFailed();
+		return;
+	}
+
+	bPendingLoadFailedPopupAfterLobbyReturn = true;
+	if (!World || bLobbyReturnRequestedForLoadFailure)
+	{
+		return;
+	}
+
+	bLobbyReturnRequestedForLoadFailure = true;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidLoadFailed ReturnToLobby Target=LobbyMap"));
+	UGameplayStatics::OpenLevel(World, FName(TEXT("LobbyMap")));
+}
+
+bool URaidSessionSubsystem::IsLobbyWorld(const UWorld* World) const
+{
+	return World && World->GetMapName().EndsWith(TEXT("LobbyMap"));
 }
 
 void URaidSessionSubsystem::RecordAssignmentResult(const FRaidAssignmentResult& Result)
@@ -511,6 +739,7 @@ void URaidSessionSubsystem::HideEntryPopups()
 void URaidSessionSubsystem::CancelMatchmaking()
 {
 	StopMatchmakingRetry();
+	StopRaidLoadWatchdog();
 	LastAssignmentResult = FRaidAssignmentResult::Canceled(TEXT("CancelMatchmaking"));
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryCancel Slot=%s"),
@@ -553,5 +782,20 @@ void URaidSessionSubsystem::ExpireMatchmakingWaitForTest()
 	RecordAssignmentResult(TimeoutResult);
 	StopMatchmakingRetry();
 	HandleRaidEntryFailure(TimeoutResult);
+}
+
+void URaidSessionSubsystem::CompleteRaidLoadForTest()
+{
+	CompletePendingRaidLoad();
+}
+
+void URaidSessionSubsystem::ExpireRaidLoadWatchdogForTest()
+{
+	HandlePendingRaidLoadFailure(TEXT("MapLoadTimeout"));
+}
+
+void URaidSessionSubsystem::NotifyRaidTravelFailureForTest()
+{
+	HandlePendingRaidLoadFailure(TEXT("TravelFailureForTest"));
 }
 #endif

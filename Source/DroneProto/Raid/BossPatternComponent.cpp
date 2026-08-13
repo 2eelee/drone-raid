@@ -1,4 +1,5 @@
 #include "BossPatternComponent.h"
+#include "BalanceTelemetryComponent.h"
 
 #include "BossPatternActorBase.h"
 #include "BossPatternDataTableResolver.h"
@@ -168,7 +169,7 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 {
 	AActor* Owner = GetOwner();
 	const ARaidBoss* Boss = Cast<ARaidBoss>(Owner);
-	const ARaidPlayerController* PlayerController = Target ? Cast<ARaidPlayerController>(Target->GetController()) : nullptr;
+	ARaidPlayerController* PlayerController = Target ? Cast<ARaidPlayerController>(Target->GetController()) : nullptr;
 	const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr;
 	if (!Owner || !Owner->HasAuthority() || !bRunning || ServerState != EBossPatternServerState::Active
 		|| !Boss || Boss->IsDefeated() || !Target || !Target->HasAuthority() || DamageAmount <= 0
@@ -187,12 +188,27 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 
 	if (Target->IsInvincibleForDamage())
 	{
-		if (!DodgeIgnoredLoggedPlayerKeys.Contains(PlayerKey))
+		const bool bFirstIgnoredContact = !DodgeIgnoredLoggedPlayerKeys.Contains(PlayerKey);
+		if (bFirstIgnoredContact)
 		{
 			DodgeIgnoredLoggedPlayerKeys.Add(PlayerKey);
 			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=DodgeInvincible Pattern=%s Player=%s"),
 				ToPatternName(CurrentPattern),
 				*PlayerController->GetName());
+			if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+			{
+				Telemetry->EmitForServer(TEXT("PatternContactResolved"), {
+					{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(PlayerController)},
+					{TEXT("Pattern"), ToPatternName(CurrentPattern)},
+					{TEXT("PatternInstance"), FString::FromInt(ActiveTelemetryPatternInstanceID)},
+					{TEXT("Result"), TEXT("Avoided")},
+					{TEXT("Reason"), TEXT("DodgeInvincible")},
+					{TEXT("AppliedDamage"), TEXT("0")},
+					{TEXT("HPBefore"), FString::FromInt(Target->GetHealth())},
+					{TEXT("HPAfter"), FString::FromInt(Target->GetHealth())},
+					{TEXT("Killed"), TEXT("0")},
+				});
+			}
 		}
 		return false;
 	}
@@ -200,13 +216,28 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 
 	if (HitLockTimerHandles.Contains(PlayerKey))
 	{
-		if (!HitLockIgnoredLoggedPlayerKeys.Contains(PlayerKey))
+		const bool bFirstSuppressedContact = !HitLockIgnoredLoggedPlayerKeys.Contains(PlayerKey);
+		if (bFirstSuppressedContact)
 		{
 			HitLockIgnoredLoggedPlayerKeys.Add(PlayerKey);
 			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern HitIgnored Reason=PatternHitLock Pattern=%s Player=%s Key=%s"),
 				ToPatternName(CurrentPattern),
 				*PlayerController->GetName(),
 				*PlayerKey);
+			if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+			{
+				Telemetry->EmitForServer(TEXT("PatternContactResolved"), {
+					{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(PlayerController)},
+					{TEXT("Pattern"), ToPatternName(CurrentPattern)},
+					{TEXT("PatternInstance"), FString::FromInt(ActiveTelemetryPatternInstanceID)},
+					{TEXT("Result"), TEXT("Suppressed")},
+					{TEXT("Reason"), TEXT("PatternHitLock")},
+					{TEXT("AppliedDamage"), TEXT("0")},
+					{TEXT("HPBefore"), FString::FromInt(Target->GetHealth())},
+					{TEXT("HPAfter"), FString::FromInt(Target->GetHealth())},
+					{TEXT("Killed"), TEXT("0")},
+				});
+			}
 		}
 		return false;
 	}
@@ -229,6 +260,20 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 		HealthBefore - HealthAfter,
 		HealthBefore,
 		HealthAfter);
+	if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+	{
+		Telemetry->EmitForServer(TEXT("PatternContactResolved"), {
+			{TEXT("Player"), Telemetry->GetOrAssignPlayerAliasForServer(PlayerController)},
+			{TEXT("Pattern"), ToPatternName(CurrentPattern)},
+			{TEXT("PatternInstance"), FString::FromInt(ActiveTelemetryPatternInstanceID)},
+			{TEXT("Result"), TEXT("Hit")},
+			{TEXT("Reason"), TEXT("None")},
+			{TEXT("AppliedDamage"), FString::FromInt(HealthBefore - HealthAfter)},
+			{TEXT("HPBefore"), FString::FromInt(HealthBefore)},
+			{TEXT("HPAfter"), FString::FromInt(HealthAfter)},
+			{TEXT("Killed"), HealthAfter <= 0 ? TEXT("1") : TEXT("0")},
+		});
+	}
 	return true;
 }
 
@@ -390,6 +435,17 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 		ActivePatternActor->FinishSpawning(PatternSpawnTransform);
 		const int32 InstanceID = ++NextPatternInstanceID;
 		ActivePatternActor->InitializeForServer(CurrentPattern, LifecycleState, InstanceID, GetServerWorldTimeSeconds());
+		ActiveTelemetryPatternInstanceID = InstanceID;
+		ActiveTelemetryPatternStartTime = GetServerWorldTimeSeconds();
+		if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+		{
+			Telemetry->EmitForServer(TEXT("PatternStarted"), {
+				{TEXT("Pattern"), ToPatternName(CurrentPattern)},
+				{TEXT("PatternInstance"), FString::FromInt(InstanceID)},
+				{TEXT("Lifecycle"), LifecycleState == EBossPatternLifecycleState::Active ? TEXT("Active") : TEXT("Telegraphing")},
+				{TEXT("AlivePlayers"), FString::FromInt(FMath::Max(0, ActivePlayerCount))},
+			});
+		}
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Spawn Pattern=%s Lifecycle=%s InstanceID=%d Boss=%s"),
 			ToPatternName(CurrentPattern),
 			LifecycleState == EBossPatternLifecycleState::Active ? TEXT("Active") : TEXT("Telegraphing"),
@@ -401,11 +457,25 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 
 void UBossPatternComponent::DestroyActivePatternActorForServer()
 {
+	if (ActivePatternActor && ActiveTelemetryPatternInstanceID > 0)
+	{
+		if (UBalanceTelemetryComponent* Telemetry = UBalanceTelemetryComponent::FindForServer(this))
+		{
+			Telemetry->EmitForServer(TEXT("PatternEnded"), {
+				{TEXT("Pattern"), ToPatternName(CurrentPattern)},
+				{TEXT("PatternInstance"), FString::FromInt(ActiveTelemetryPatternInstanceID)},
+				{TEXT("Duration"), UBalanceTelemetryComponent::Number(FMath::Max(0.0f, GetServerWorldTimeSeconds() - ActiveTelemetryPatternStartTime))},
+				{TEXT("EndReason"), TEXT("Destroyed")},
+			});
+		}
+	}
 	if (ActivePatternActor && !ActivePatternActor->IsActorBeingDestroyed())
 	{
 		ActivePatternActor->Destroy();
 	}
 	ActivePatternActor = nullptr;
+	ActiveTelemetryPatternInstanceID = 0;
+	ActiveTelemetryPatternStartTime = 0.0f;
 }
 
 void UBossPatternComponent::ClearHitLockForServer(FString PlayerKey)

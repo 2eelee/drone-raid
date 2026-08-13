@@ -37,7 +37,7 @@ constexpr FExpectedGradeRow ExpectedGradeRows[] =
 };
 
 template <typename RowType>
-const RowType* FindRow(const UDataTable* Table, const TCHAR* RowName)
+const RowType* FindDroneReportRow(const UDataTable* Table, const TCHAR* RowName)
 {
 	return Table ? Table->FindRow<RowType>(FName(RowName), TEXT("DroneReportDataResolve"), false) : nullptr;
 }
@@ -120,7 +120,7 @@ bool DroneReportData::TryResolve(
 	TSet<EDroneReportBonusType> SeenBonusTypes;
 	for (const FExpectedBonusRow& Expected : ExpectedBonusRows)
 	{
-		const FDroneBonusRow* Row = FindRow<FDroneBonusRow>(Tables.Bonus, Expected.RowName);
+		const FDroneBonusRow* Row = FindDroneReportRow<FDroneBonusRow>(Tables.Bonus, Expected.RowName);
 		if (!Row) return Fail(EDroneReportDataFallbackReason::MissingBonusRow);
 		if (Row->BonusID != Expected.BonusID || Row->BonusName != FName(Expected.BonusName)) return Fail(EDroneReportDataFallbackReason::InvalidBonusIdentity);
 		if (SeenBonusTypes.Contains(Expected.Type)) return Fail(EDroneReportDataFallbackReason::DuplicateBonusType);
@@ -130,7 +130,7 @@ bool DroneReportData::TryResolve(
 	}
 	if (Tables.Bonus->GetRowMap().Num() != UE_ARRAY_COUNT(ExpectedBonusRows)) return Fail(EDroneReportDataFallbackReason::UnexpectedBonusRow);
 
-	const FDroneReportSettingsRow* Settings = FindRow<FDroneReportSettingsRow>(Tables.Settings, TEXT("REPORT_SETTINGS"));
+	const FDroneReportSettingsRow* Settings = FindDroneReportRow<FDroneReportSettingsRow>(Tables.Settings, TEXT("REPORT_SETTINGS"));
 	if (!Settings) return Fail(EDroneReportDataFallbackReason::MissingSettingsRow);
 	if (Tables.Settings->GetRowMap().Num() != 1) return Fail(EDroneReportDataFallbackReason::UnexpectedSettingsRow);
 	if (Settings->BonusScoreCap < 0) return Fail(EDroneReportDataFallbackReason::InvalidSettingsRange);
@@ -139,7 +139,7 @@ bool DroneReportData::TryResolve(
 	TSet<EDroneReportGrade> SeenGrades;
 	for (const FExpectedGradeRow& Expected : ExpectedGradeRows)
 	{
-		const FDroneGradeRow* Row = FindRow<FDroneGradeRow>(Tables.Grade, Expected.RowName);
+		const FDroneGradeRow* Row = FindDroneReportRow<FDroneGradeRow>(Tables.Grade, Expected.RowName);
 		if (!Row) return Fail(EDroneReportDataFallbackReason::MissingGradeRow);
 		if (Row->Grade != Expected.Grade || SeenGrades.Contains(Row->Grade)) return Fail(EDroneReportDataFallbackReason::DuplicateGrade);
 		if (!IsNonNegative(Row->MinScore) || !IsNonNegative(Row->MaxScore) || Row->MinScore > Row->MaxScore) return Fail(EDroneReportDataFallbackReason::InvalidGradeRange);
