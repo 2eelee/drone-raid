@@ -883,6 +883,137 @@ bool FPop04ArenaFourTaggedStartsTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPop04ArenaHasNoLegacyPlacedDroneTest,
+	"DroneProto.POP04.Arena.NoLegacyPlacedDrone",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPop04ArenaHasNoLegacyPlacedDroneTest::RunTest(const FString& Parameters)
+{
+	UWorld* ArenaWorld = LoadObject<UWorld>(nullptr, TEXT("/Game/TestMap.TestMap"));
+	TestNotNull(TEXT("TestMap loads"), ArenaWorld);
+	if (!ArenaWorld || !ArenaWorld->PersistentLevel)
+	{
+		return false;
+	}
+
+	int32 PlacedDroneCount = 0;
+	for (AActor* Actor : ArenaWorld->PersistentLevel->Actors)
+	{
+		if (Cast<ADrone>(Actor))
+		{
+			++PlacedDroneCount;
+		}
+	}
+	TestEqual(TEXT("TestMap has no legacy placed ADrone"), PlacedDroneCount, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPop04SpawnedDroneVisibilityContractTest,
+	"DroneProto.POP04.Entry.SpawnedDroneVisibilityContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPop04SpawnedDroneVisibilityContractTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Pop04VisibleSpawnWorld")));
+	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/BP_Drone.BP_Drone_C"));
+	TestNotNull(TEXT("test world is created"), World);
+	TestNotNull(TEXT("BP_Drone class loads"), DroneClass);
+	if (!World || !DroneClass)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	const FVector EntryLocation(0.0f, 3500.0f, 92.0f);
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ADrone* SpawnedDrone = World->SpawnActor<ADrone>(DroneClass, EntryLocation, FRotator(0.0f, -90.0f, 0.0f), SpawnParams);
+	TestNotNull(TEXT("BP_Drone spawns at a POP-04 entry"), SpawnedDrone);
+	if (SpawnedDrone && !SpawnedDrone->HasActorBegunPlay())
+	{
+		SpawnedDrone->DispatchBeginPlay();
+	}
+	if (SpawnedDrone)
+	{
+		UStaticMeshComponent* DroneVisual = SpawnedDrone->FindComponentByClass<UStaticMeshComponent>();
+		TestNotNull(TEXT("spawned BP_Drone has a static-mesh visual"), DroneVisual);
+		if (DroneVisual)
+		{
+			TestTrue(TEXT("spawned BP_Drone visual has a mesh"), DroneVisual->GetStaticMesh() != nullptr);
+			TestTrue(TEXT("spawned BP_Drone visual is enabled"), DroneVisual->IsVisible());
+			TestFalse(TEXT("spawned BP_Drone visual is not hidden in game"), DroneVisual->bHiddenInGame);
+			TestFalse(TEXT("spawned BP_Drone visual is visible to its owning player"), DroneVisual->bOwnerNoSee);
+		}
+	}
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPop04FirstMovePreservesSpawnHeightTest,
+	"DroneProto.POP04.Entry.FirstMovePreservesSpawnHeight",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FPop04FirstMovePreservesSpawnHeightTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Pop04SpawnHeightWorld")));
+	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/BP_Drone.BP_Drone_C"));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidPlayerController* PlayerController = World ? World->SpawnActor<ARaidPlayerController>() : nullptr;
+	TestNotNull(TEXT("spawn-height world is created"), World);
+	TestNotNull(TEXT("spawn-height BP_Drone class loads"), DroneClass);
+	TestNotNull(TEXT("spawn-height game state is spawned"), GameState);
+	TestNotNull(TEXT("spawn-height player controller is spawned"), PlayerController);
+	if (!World || !DroneClass || !GameState || !PlayerController)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	const FVector EntryLocation(3500.0f, 0.0f, 92.0f);
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ADrone* SpawnedDrone = World->SpawnActor<ADrone>(DroneClass, EntryLocation, FRotator(0.0f, 180.0f, 0.0f), SpawnParams);
+	TestNotNull(TEXT("BP_Drone spawns at the 92cm POP-04 entry height"), SpawnedDrone);
+	if (!SpawnedDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	if (!SpawnedDrone->HasActorBegunPlay())
+	{
+		SpawnedDrone->DispatchBeginPlay();
+	}
+	TestTrue(TEXT("BeginPlay preserves the 92cm entry height"),
+		FMath::IsNearlyEqual(SpawnedDrone->GetActorLocation().Z, EntryLocation.Z, 0.1f));
+
+	World->AddController(PlayerController);
+	PlayerController->Possess(SpawnedDrone);
+	PlayerController->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("spawn-height player enters battle"),
+		PlayerController->GetCurrentSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestTrue(TEXT("first battle move input is accepted"),
+		SpawnedDrone->ApplyMoveInputForServerForTest(FVector2D(1.0f, 0.0f)));
+	TestTrue(TEXT("first battle move is applied"),
+		SpawnedDrone->ApplyPendingServerMoveInputForTest(0.1f));
+	TestTrue(TEXT("first move preserves the 92cm entry height"),
+		FMath::IsNearlyEqual(SpawnedDrone->GetActorLocation().Z, EntryLocation.Z, 0.1f));
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternCanonicalFallbackTest,
 	"DroneProto.BossPattern.Contract.CanonicalFallback",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

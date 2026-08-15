@@ -9,6 +9,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/TextRenderComponent.h"
 #include "Engine/World.h"
+#include "GameFramework/SpringArmComponent.h"
 
 namespace
 {
@@ -120,6 +121,72 @@ bool FRaidBossPrototypeVisualReadyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("visual-ready boss has no invalid reason"),
 		InvalidReason,
 		FName());
+
+	DestroyDroneCameraTestWorld(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneFixedBossFacingCameraWorldRotationTest,
+	"DroneProto.D18.Drone.FixedBossFacingCameraKeepsWorldRotationUnderDroneYaw",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneFixedBossFacingCameraWorldRotationTest::RunTest(const FString& Parameters)
+{
+	FDroneCameraTestWorld Context = CreateDroneCameraTestWorld(TEXT("FixedBossFacingCameraWorldRotationWorld"));
+	TestNotNull(TEXT("camera world rotation world is created"), Context.World);
+	if (!Context.World)
+	{
+		return false;
+	}
+
+	ADrone* Drone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("drone is spawned for the combat camera rotation contract"), Drone);
+	if (!Drone)
+	{
+		DestroyDroneCameraTestWorld(Context);
+		return false;
+	}
+
+	USpringArmComponent* CombatCameraSpringArm = Drone->GetComponentByClass<USpringArmComponent>();
+	TestNotNull(TEXT("drone exposes the combat camera spring arm"), CombatCameraSpringArm);
+	if (!CombatCameraSpringArm)
+	{
+		DestroyDroneCameraTestWorld(Context);
+		return false;
+	}
+
+	// 전투 카메라는 보스를 향하는 월드 회전을 계산해 SpringArm에 직접 넘긴다.
+	// 드론은 보스를 향해 회전하므로, 부모 회전이 이 월드 회전을 상쇄하면 카메라가 보스 반대편을 본다.
+	// POP-04 미표시는 드론 Yaw=180 지점에서 정확히 그렇게 재현됐다.
+	const FRotator RequestedWorldRotation(-5.5f, 180.0f, 0.0f);
+	const TArray<float> DroneYawDegrees = { 0.0f, 90.0f, 180.0f, -90.0f };
+	for (const float DroneYaw : DroneYawDegrees)
+	{
+		Drone->SetActorRotation(FRotator(0.0f, DroneYaw, 0.0f));
+		CombatCameraSpringArm->SetWorldLocationAndRotation(
+			FVector(4900.0f, 0.0f, 472.0f),
+			RequestedWorldRotation);
+
+		const FRotator TargetRotation = CombatCameraSpringArm->GetTargetRotation();
+		const float YawErrorDegrees = FMath::Abs(
+			FRotator::NormalizeAxis(TargetRotation.Yaw - RequestedWorldRotation.Yaw));
+		const float PitchErrorDegrees = FMath::Abs(
+			FRotator::NormalizeAxis(TargetRotation.Pitch - RequestedWorldRotation.Pitch));
+
+		TestTrue(
+			*FString::Printf(
+				TEXT("spring arm keeps the requested world yaw while the drone yaw is %.0f (error %.2f)"),
+				DroneYaw,
+				YawErrorDegrees),
+			YawErrorDegrees <= 0.01f);
+		TestTrue(
+			*FString::Printf(
+				TEXT("spring arm keeps the requested world pitch while the drone yaw is %.0f (error %.2f)"),
+				DroneYaw,
+				PitchErrorDegrees),
+			PitchErrorDegrees <= 0.01f);
+	}
 
 	DestroyDroneCameraTestWorld(Context);
 	return true;

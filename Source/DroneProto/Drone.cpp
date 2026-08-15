@@ -18,6 +18,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/DataTable.h"
+#include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerState.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
@@ -226,9 +227,10 @@ ADrone::ADrone()
 	CombatCameraSpringArm->SetupAttachment(RootComponent);
 	CombatCameraSpringArm->TargetArmLength = 0.0f;
 	CombatCameraSpringArm->bUsePawnControlRotation = false;
-	CombatCameraSpringArm->bInheritPitch = false;
-	CombatCameraSpringArm->bInheritYaw = false;
-	CombatCameraSpringArm->bInheritRoll = false;
+	// 전투 카메라는 매 틱 보스를 향하는 월드 회전을 계산해 SetWorldLocationAndRotation으로 직접 넘긴다.
+	// 상대 회전으로 두면 USpringArmComponent::GetTargetRotation()이 bInherit* 규칙에 따라
+	// 부모(드론) 회전을 상쇄해 카메라가 드론 Yaw만큼 틀어지므로, 회전을 월드 절대값으로 고정한다.
+	CombatCameraSpringArm->SetUsingAbsoluteRotation(true);
 	CombatCameraSpringArm->bDoCollisionTest = false;
 
 	CombatCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("CombatCamera"));
@@ -241,6 +243,20 @@ void ADrone::BeginPlay()
 {
 	Super::BeginPlay();
 
+	if (GetNetMode() != NM_DedicatedServer)
+	{
+		TArray<UStaticMeshComponent*> VisualComponents;
+		GetComponents<UStaticMeshComponent>(VisualComponents);
+		for (UStaticMeshComponent* VisualComponent : VisualComponents)
+		{
+			if (VisualComponent && VisualComponent->GetStaticMesh())
+			{
+				VisualComponent->SetHiddenInGame(false, true);
+				VisualComponent->SetVisibility(true, true);
+			}
+		}
+	}
+
 	if (HasAuthority())
 	{
 		if (BaseMoveSpeedCmPerSecond <= KINDA_SMALL_NUMBER)
@@ -249,6 +265,7 @@ void ADrone::BeginPlay()
 		}
 		RefreshMoveSpeedForServer();
 		FVector SpawnLocation = GetActorLocation();
+		FixedZPosition = SpawnLocation.Z;
 		LockZPositionForServer(SpawnLocation);
 		SetActorLocation(SpawnLocation, false, nullptr, ETeleportType::TeleportPhysics);
 		RefreshMovementBoundaryCenterForServer();
