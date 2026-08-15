@@ -32,6 +32,7 @@
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
@@ -755,6 +756,72 @@ bool FRaidLobbyWidgetDebugStateTransitionsTest::RunTest(const FString& Parameter
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidLobbyWidgetZStartsRaidEntryTest,
+	"DroneProto.RaidEntry.LobbyWidget.ZStartsRaidEntry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidLobbyWidgetZStartsRaidEntryTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* Session = NewObject<URaidSessionSubsystem>(GameInstance);
+	ULocalAssignment* Assignment = NewObject<ULocalAssignment>(Session);
+	URaidLobbyWidget* Widget = NewObject<URaidLobbyWidget>();
+	TestNotNull(TEXT("Z-entry game instance is created"), GameInstance);
+	TestNotNull(TEXT("Z-entry session is created"), Session);
+	TestNotNull(TEXT("Z-entry assignment is created"), Assignment);
+	TestNotNull(TEXT("Z-entry lobby widget is created"), Widget);
+	if (!GameInstance || !Session || !Assignment || !Widget)
+	{
+		return false;
+	}
+
+	Session->SetAssignmentForTest(Assignment);
+	Session->SetSuppressTravelForTest(true);
+	Session->SetActiveLobbyWidget(Widget);
+	Widget->SetRaidSubsystemForTest(Session);
+	Assignment->SetCandidatesForTest({
+		MakeRaidServerCandidate(TEXT("A"), 16),
+		MakeRaidServerCandidate(TEXT("B"), 16),
+		MakeRaidServerCandidate(TEXT("C"), 16),
+	});
+
+	TSharedRef<SWidget> LobbySlateWidget = Widget->TakeWidget();
+	TSharedRef<SWindow> LobbyWindow = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[LobbySlateWidget];
+	FSlateApplication::Get().AddWindow(LobbyWindow, false);
+	TSharedRef<SEditableTextBox> PreviousFocusSink = SNew(SEditableTextBox);
+	TSharedRef<SWindow> PreviousFocusWindow = SNew(SWindow)
+		.ClientSize(FVector2D(320.0f, 120.0f))
+		[PreviousFocusSink];
+	FSlateApplication::Get().AddWindow(PreviousFocusWindow, false);
+	TestTrue(
+		TEXT("login control can own focus before entering the main lobby"),
+		FSlateApplication::Get().SetKeyboardFocus(PreviousFocusSink, EFocusCause::SetDirectly));
+
+	Widget->ShowMainLobby();
+	TestEqual(
+		TEXT("Z-entry test starts from the main lobby state"),
+		Widget->GetCurrentLobbyUIState(),
+		ERaidLobbyUIState::Main);
+	FSlateApplication::Get().Tick();
+	TestTrue(TEXT("entering the main lobby restores keyboard focus"), Widget->HasKeyboardFocus());
+
+	const FKeyEvent RaidEntryEvent(EKeys::Z, FModifierKeysState(), 0, false, 0, 0);
+	TestTrue(
+		TEXT("Z is handled by the main lobby widget"),
+		FSlateApplication::Get().ProcessKeyDownEvent(RaidEntryEvent));
+	TestEqual(
+		TEXT("Z starts the existing raid-entry flow"),
+		Widget->GetCurrentLobbyUIState(),
+		ERaidLobbyUIState::Waiting);
+
+	FSlateApplication::Get().RequestDestroyWindow(PreviousFocusWindow);
+	FSlateApplication::Get().RequestDestroyWindow(LobbyWindow);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidLobbyWidgetSessionStateTransitionsTest,
 	"DroneProto.RaidEntry.LobbyWidget.SessionStateTransitions",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -815,6 +882,78 @@ bool FRaidLobbyWidgetSessionStateTransitionsTest::RunTest(const FString& Paramet
 	TestEqual(TEXT("duplicate join while loading keeps lobby in loading"), Widget->GetCurrentLobbyUIState(), ERaidLobbyUIState::Loading);
 	TestEqual(TEXT("duplicate join while loading does not request a second travel"), Session->GetTravelRequestCountForTest(), 1);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidLobbyWidgetCallsignInputAutoFocusTest,
+	"DroneProto.RaidEntry.LobbyWidget.CallsignInputAutoFocus",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidLobbyWidgetCallsignInputAutoFocusTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidLobbyWidgetCallsignInputAutoFocusWorld"));
+	TestNotNull(TEXT("callsign auto-focus world is created"), Context.World);
+	TestNotNull(TEXT("callsign auto-focus player controller is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	Context.PC->SetPlayer(LocalPlayer);
+	UClass* LobbyWidgetClass = LoadClass<URaidLobbyWidget>(
+		nullptr,
+		TEXT("/Game/WBP_RaidLobby.WBP_RaidLobby_C"));
+	URaidLobbyWidget* LobbyWidget = LobbyWidgetClass
+		? CreateWidget<URaidLobbyWidget>(Context.PC, LobbyWidgetClass)
+		: nullptr;
+	TestNotNull(TEXT("raid lobby widget asset class loads"), LobbyWidgetClass);
+	TestNotNull(TEXT("raid lobby widget is created"), LobbyWidget);
+	if (!LobbyWidget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TSharedRef<SWindow> LobbyWindow = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[LobbyWidget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(LobbyWindow, false);
+	UEditableTextBox* CallsignInput = LobbyWidget->WidgetTree
+		? Cast<UEditableTextBox>(LobbyWidget->WidgetTree->FindWidget(TEXT("CallsignInput")))
+		: nullptr;
+	TestNotNull(TEXT("callsign input exists in the real lobby widget"), CallsignInput);
+	TestEqual(
+		TEXT("unidentified player starts on the callsign login screen"),
+		LobbyWidget->GetCurrentLobbyUIState(),
+		ERaidLobbyUIState::Login);
+
+	TSharedRef<SEditableTextBox> PreviousFocusSink = SNew(SEditableTextBox);
+	TSharedRef<SWindow> PreviousFocusWindow = SNew(SWindow)
+		.ClientSize(FVector2D(320.0f, 120.0f))
+		[PreviousFocusSink];
+	FSlateApplication::Get().AddWindow(PreviousFocusWindow, false);
+	TestTrue(
+		TEXT("an external startup control owns focus before lobby focus restoration"),
+		FSlateApplication::Get().SetKeyboardFocus(PreviousFocusSink, EFocusCause::SetDirectly));
+
+	TickWorldForAutomationTest(Context.World, 0.01f);
+	FSlateApplication::Get().Tick();
+	TestTrue(
+		TEXT("callsign input receives keyboard focus when the login screen starts"),
+		CallsignInput && CallsignInput->HasKeyboardFocus());
+
+	LobbyWidget->SetKeyboardFocus();
+	FSlateApplication::Get().Tick();
+	TestTrue(
+		TEXT("a late lobby-root focus request is redirected back to the callsign input"),
+		CallsignInput && CallsignInput->HasKeyboardFocus());
+
+	FSlateApplication::Get().RequestDestroyWindow(PreviousFocusWindow);
+	FSlateApplication::Get().RequestDestroyWindow(LobbyWindow);
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 
@@ -3004,6 +3143,209 @@ bool FDronePartSelectUIRestoresKeyboardFocusTest::RunTest(const FString& Paramet
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportWidgetZReturnsToLobbyTest,
+	"DroneProto.D11.DroneReport.ZReturnsToLobby",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportWidgetZReturnsToLobbyTest::RunTest(const FString& Parameters)
+{
+	UDroneReportWidget* Widget = NewObject<UDroneReportWidget>();
+	TestNotNull(TEXT("Z-return drone report widget is created"), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+
+	Widget->SetSuppressReturnToLobbyTravelForTest(true);
+	TSharedRef<SWindow> ReportWindow = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[Widget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(ReportWindow, false);
+	Widget->SetKeyboardFocus();
+	FSlateApplication::Get().Tick();
+	TestTrue(TEXT("drone report widget accepts keyboard focus"), Widget->HasKeyboardFocus());
+
+	const FKeyEvent ReturnEvent(EKeys::Z, FModifierKeysState(), 0, false, 0, 0);
+	TestTrue(
+		TEXT("Z is handled by the drone report widget"),
+		FSlateApplication::Get().ProcessKeyDownEvent(ReturnEvent));
+	TestEqual(
+		TEXT("Z reuses the existing return-to-lobby request exactly once"),
+		Widget->GetReturnToLobbyTravelRequestCountForTest(),
+		1);
+
+	FSlateApplication::Get().RequestDestroyWindow(ReportWindow);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIMouseArrowNavigationTest,
+	"DroneProto.D5.DronePartSelectUI.MouseArrowNavigationRestoresKeyboardFocus",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIMouseArrowNavigationTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DronePartSelectUIMouseArrowNavigationWorld"));
+	TestNotNull(TEXT("mouse navigation world is created"), Context.World);
+	TestNotNull(TEXT("mouse navigation player controller is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	Context.PC->SetPlayer(LocalPlayer);
+	UClass* SelectWidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* SelectWidget = SelectWidgetClass
+		? CreateWidget<UDronePartSelectWidget>(Context.PC, SelectWidgetClass)
+		: nullptr;
+	TestNotNull(TEXT("mouse navigation widget asset class loads"), SelectWidgetClass);
+	TestNotNull(TEXT("mouse navigation widget is created"), SelectWidget);
+	if (!SelectWidget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	AddExpectedError(TEXT("DronePartSelectWidget has no ARaidPlayerController owning player"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("RefreshFromController skipped: Owning ARaidPlayerController is missing"), EAutomationExpectedErrorFlags::Contains, 1);
+	TSharedRef<SWindow> SelectWindow = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[SelectWidget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(SelectWindow, false);
+
+	FObjectProperty* CachedControllerProperty = FindFProperty<FObjectProperty>(
+		UDronePartSelectWidget::StaticClass(),
+		TEXT("CachedRaidPlayerController"));
+	TestNotNull(TEXT("mouse navigation widget controller cache is reflected"), CachedControllerProperty);
+	if (!CachedControllerProperty)
+	{
+		FSlateApplication::Get().RequestDestroyWindow(SelectWindow);
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	CachedControllerProperty->SetObjectPropertyValue_InContainer(SelectWidget, Context.PC);
+	SelectWidget->RefreshFromController();
+
+	UButton* CoreNextButton = SelectWidget->WidgetTree
+		? Cast<UButton>(SelectWidget->WidgetTree->FindWidget(TEXT("Button_CoreNext")))
+		: nullptr;
+	TestNotNull(TEXT("core next mouse button exists"), CoreNextButton);
+	TestEqual(
+		TEXT("core next mouse button participates in hit testing"),
+		CoreNextButton ? CoreNextButton->GetVisibility() : ESlateVisibility::Collapsed,
+		ESlateVisibility::Visible);
+	TestEqual(
+		TEXT("core preview starts at the first candidate"),
+		SelectWidget->GetPreviewPartIDForSlot(EDronePartSlot::Core),
+		FName(TEXT("CORE_001")));
+
+	TSharedRef<SEditableTextBox> FocusSink = SNew(SEditableTextBox);
+	TSharedRef<SWindow> FocusWindow = SNew(SWindow)
+		.ClientSize(FVector2D(320.0f, 120.0f))
+		[FocusSink];
+	FSlateApplication::Get().AddWindow(FocusWindow, false);
+	TestTrue(
+		TEXT("mouse navigation starts with focus outside the selection widget"),
+		FSlateApplication::Get().SetKeyboardFocus(FocusSink, EFocusCause::SetDirectly));
+
+	if (CoreNextButton)
+	{
+		CoreNextButton->OnClicked.Broadcast();
+		FSlateApplication::Get().Tick();
+	}
+
+	TestEqual(
+		TEXT("clicking core next advances to the second candidate"),
+		SelectWidget->GetPreviewPartIDForSlot(EDronePartSlot::Core),
+		FName(TEXT("CORE_002")));
+	TestTrue(
+		TEXT("mouse arrow navigation restores keyboard focus to the selection widget"),
+		SelectWidget->HasKeyboardFocus());
+
+	FSlateApplication::Get().RequestDestroyWindow(FocusWindow);
+	FSlateApplication::Get().RequestDestroyWindow(SelectWindow);
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUINonSpecifiedWASDTest,
+	"DroneProto.D5.DronePartSelectUI.NonSpecifiedWASDIsNotConsumed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUINonSpecifiedWASDTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(
+		TEXT("DronePartSelectUINonSpecifiedWASDWorld"),
+		ReturnManager);
+	TestNotNull(TEXT("non-specified input world is created"), Context.World);
+	TestNotNull(TEXT("non-specified input player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("non-specified input return manager is initialized"), ReturnManager);
+	if (!Context.World || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	Context.PC->SetPlayer(LocalPlayer);
+	UClass* SelectWidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* SelectWidget = SelectWidgetClass
+		? CreateWidget<UDronePartSelectWidget>(Context.PC, SelectWidgetClass)
+		: nullptr;
+	TestNotNull(TEXT("non-specified input widget asset class loads"), SelectWidgetClass);
+	TestNotNull(TEXT("non-specified input widget is created"), SelectWidget);
+	if (!SelectWidget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	AddExpectedError(TEXT("DronePartSelectWidget has no ARaidPlayerController owning player"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("RefreshFromController skipped: Owning ARaidPlayerController is missing"), EAutomationExpectedErrorFlags::Contains, 1);
+	TSharedRef<SWindow> SelectWindow = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[SelectWidget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(SelectWindow, false);
+
+	FObjectProperty* CachedControllerProperty = FindFProperty<FObjectProperty>(
+		UDronePartSelectWidget::StaticClass(),
+		TEXT("CachedRaidPlayerController"));
+	TestNotNull(TEXT("non-specified input widget controller cache is reflected"), CachedControllerProperty);
+	if (!CachedControllerProperty)
+	{
+		FSlateApplication::Get().RequestDestroyWindow(SelectWindow);
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	CachedControllerProperty->SetObjectPropertyValue_InContainer(SelectWidget, Context.PC);
+	SelectWidget->RefreshFromController();
+	SelectWidget->SetKeyboardFocus();
+	FSlateApplication::Get().Tick();
+	TestTrue(TEXT("non-specified input starts with selection keyboard focus"), SelectWidget->HasKeyboardFocus());
+
+	const FKeyEvent NextCandidateEvent(EKeys::D, FModifierKeysState(), 0, false, 0, 0);
+	TestFalse(
+		TEXT("D is not consumed by the direction-key-only selection contract"),
+		FSlateApplication::Get().ProcessKeyDownEvent(NextCandidateEvent));
+	TestEqual(
+		TEXT("D does not change the focused part preview"),
+		SelectWidget->GetPreviewPartIDForSlot(EDronePartSlot::Core),
+		FName(TEXT("CORE_001")));
+
+	FSlateApplication::Get().RequestDestroyWindow(SelectWindow);
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartSelectUIBlueprintStructureTest,
 	"DroneProto.D5.DronePartSelectUI.BlueprintStructure",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -3069,20 +3411,6 @@ bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters
 		TestTrue(TEXT("planning layout collapses the redundant state text"),
 			RedundantStateText && RedundantStateText->GetVisibility() == ESlateVisibility::Collapsed);
 
-		for (const FName ArrowName : {
-			FName(TEXT("Button_CorePrev")),
-			FName(TEXT("Button_CoreNext")),
-			FName(TEXT("Button_RightPrev")),
-			FName(TEXT("Button_RightNext")),
-			FName(TEXT("Button_LeftPrev")),
-			FName(TEXT("Button_LeftNext"))})
-		{
-			UButton* ArrowButton = Cast<UButton>(Widget->WidgetTree->FindWidget(ArrowName));
-			TestNotNull(*FString::Printf(TEXT("%s arrow exists"), *ArrowName.ToString()), ArrowButton);
-			TestTrue(
-				*FString::Printf(TEXT("%s arrow is visible guidance without hit testing"), *ArrowName.ToString()),
-				ArrowButton && ArrowButton->GetVisibility() == ESlateVisibility::HitTestInvisible);
-		}
 	}
 
 	World->DestroyWorld(false);

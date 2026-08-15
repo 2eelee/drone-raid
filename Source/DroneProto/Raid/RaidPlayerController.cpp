@@ -1640,6 +1640,7 @@ void ARaidPlayerController::ShowDroneReportWidget(const FDroneReportData& Report
 		InputMode.SetWidgetToFocus(CurrentDroneReportWidget->TakeWidget());
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		SetInputMode(InputMode);
+		CurrentDroneReportWidget->SetKeyboardFocus();
 
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetShown Player=%s Grade=%s BonusScore=%d"),
 			*BuildControllerLogString(this),

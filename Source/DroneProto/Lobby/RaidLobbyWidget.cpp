@@ -6,6 +6,7 @@
 #include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
+#include "InputCoreTypes.h"
 #include "TimerManager.h"
 #include "Widgets/Input/SEditableTextBox.h"
 
@@ -76,6 +77,7 @@ FString SanitizeCallsignInput(const FString& RawText)
 void URaidLobbyWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	SetIsFocusable(true);
 
 	if (UGameInstance* GI = GetGameInstance())
 	{
@@ -145,6 +147,17 @@ void URaidLobbyWidget::NativeDestruct()
 	}
 
 	Super::NativeDestruct();
+}
+
+FReply URaidLobbyWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (CurrentUIState == ERaidLobbyUIState::Main && InKeyEvent.GetKey() == EKeys::Z)
+	{
+		HandleRaidJoinClicked();
+		return FReply::Handled();
+	}
+
+	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
 void URaidLobbyWidget::RequestEntry(const FString& SlotId)
@@ -222,6 +235,7 @@ bool URaidLobbyWidget::IsSlotEnabled(const FString& SlotId) const
 void URaidLobbyWidget::ShowMainLobby()
 {
 	SetLobbyUIState(ERaidLobbyUIState::Main);
+	SetKeyboardFocus();
 }
 
 void URaidLobbyWidget::ShowWaitingPopup()
@@ -352,6 +366,25 @@ void URaidLobbyWidget::SetLobbyUIState(ERaidLobbyUIState NewState)
 	SetOptionalWidgetVisibility(NoServerPopupPanel, NewState == ERaidLobbyUIState::NoServer);
 	SetOptionalWidgetVisibility(LoadingPanel, NewState == ERaidLobbyUIState::Loading);
 
+	if (NewState == ERaidLobbyUIState::Login && CallsignInput)
+	{
+		SetDesiredFocusWidget(CallsignInput);
+
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().SetTimerForNextTick(
+				FTimerDelegate::CreateUObject(this, &URaidLobbyWidget::RestoreLoginInputFocus));
+		}
+		else
+		{
+			RestoreLoginInputFocus();
+		}
+	}
+	else
+	{
+		SetDesiredFocusWidget(NAME_None);
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] LobbyUIState State=%s Widget=%s MainLobbyPanel=%d WaitingPopupPanel=%d NoServerPopupPanel=%d LoadingPanel=%d"),
 		ToRaidLobbyUIStateText(NewState),
 		*GetName(),
@@ -359,6 +392,14 @@ void URaidLobbyWidget::SetLobbyUIState(ERaidLobbyUIState NewState)
 		WaitingPopupPanel ? 1 : 0,
 		NoServerPopupPanel ? 1 : 0,
 		LoadingPanel ? 1 : 0);
+}
+
+void URaidLobbyWidget::RestoreLoginInputFocus()
+{
+	if (CurrentUIState == ERaidLobbyUIState::Login && CallsignInput)
+	{
+		CallsignInput->SetKeyboardFocus();
+	}
 }
 
 void URaidLobbyWidget::SetOptionalWidgetVisibility(UWidget* Widget, bool bShouldShow)

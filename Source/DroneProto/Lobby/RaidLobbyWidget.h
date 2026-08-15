@@ -11,6 +11,7 @@ class UWidget;
 class URaidSessionSubsystem;
 class FReply;
 struct FCharacterEvent;
+struct FKeyEvent;
 
 UENUM(BlueprintType)
 enum class ERaidLobbyUIState : uint8
@@ -81,6 +82,7 @@ public:
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 private:
 	UFUNCTION()
@@ -96,6 +98,7 @@ private:
 	void HandleNoServerConfirmClicked();
 
 	void SetLobbyUIState(ERaidLobbyUIState NewState);
+	void RestoreLoginInputFocus();
 	void BindCallsignInput();
 	void TryAutoSubmitCallsign();
 	void CancelPendingCallsignAutoSubmit();

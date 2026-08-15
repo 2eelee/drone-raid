@@ -3,6 +3,7 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
 #include "Kismet/GameplayStatics.h"
 
 namespace
@@ -13,6 +14,7 @@ constexpr const TCHAR* ReturnToLobbyMapName = TEXT("LobbyMap");
 void UDroneReportWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	SetIsFocusable(true);
 
 	if (ReturnToLobbyButton)
 	{
@@ -23,6 +25,17 @@ void UDroneReportWidget::NativeConstruct()
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReturnToLobbyButtonMissing Widget=%s"),
 			*GetName());
 	}
+}
+
+FReply UDroneReportWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (InKeyEvent.GetKey() == EKeys::Z)
+	{
+		RequestReturnToLobby();
+		return FReply::Handled();
+	}
+
+	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
 void UDroneReportWidget::RefreshReport(const FDroneReportData& InReportData)

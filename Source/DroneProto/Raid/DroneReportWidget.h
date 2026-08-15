@@ -7,6 +7,8 @@
 
 class UButton;
 class UTextBlock;
+class FReply;
+struct FKeyEvent;
 
 UCLASS()
 class DRONEPROTO_API UDroneReportWidget : public UUserWidget
@@ -60,6 +62,7 @@ public:
 
 protected:
 	virtual void NativeConstruct() override;
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional), Category = "Drone|Report")
 	TObjectPtr<UTextBlock> SurvivalTimeText = nullptr;

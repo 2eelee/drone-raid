@@ -170,7 +170,8 @@ void UDronePartSelectWidget::RefreshFromController()
 
 	if (Text_ControlGuide)
 	{
-		Text_ControlGuide->SetText(FText::FromString(TEXT("↑/↓ 항목 이동   ←/→ 부품 변경   Z 선택/참가   C 취소")));
+		Text_ControlGuide->SetText(FText::FromString(
+			TEXT("↑/↓ 항목 이동   ←/→ 부품 변경   Z 선택·참가   C 취소")));
 	}
 
 	UE_LOG(LogTemp, VeryVerbose, TEXT("[Client] DronePartSelectWidget RefreshFromController: Player=%s FocusedSlot=%s Core=%s Right=%s Left=%s"),
@@ -520,7 +521,7 @@ void UDronePartSelectWidget::ApplyPlanningLayout()
 	{
 		if (ArrowButton)
 		{
-			ArrowButton->SetVisibility(ESlateVisibility::HitTestInvisible);
+			ArrowButton->SetVisibility(ESlateVisibility::Visible);
 		}
 	}
 
@@ -724,26 +725,32 @@ void UDronePartSelectWidget::BindButtonEvents()
 	if (Button_CorePrev)
 	{
 		Button_CorePrev->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleCorePrevClicked);
+		Button_CorePrev->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleCorePrevClicked);
 	}
 	if (Button_CoreNext)
 	{
 		Button_CoreNext->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleCoreNextClicked);
+		Button_CoreNext->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleCoreNextClicked);
 	}
 	if (Button_RightPrev)
 	{
 		Button_RightPrev->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleRightPrevClicked);
+		Button_RightPrev->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleRightPrevClicked);
 	}
 	if (Button_RightNext)
 	{
 		Button_RightNext->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleRightNextClicked);
+		Button_RightNext->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleRightNextClicked);
 	}
 	if (Button_LeftPrev)
 	{
 		Button_LeftPrev->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleLeftPrevClicked);
+		Button_LeftPrev->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleLeftPrevClicked);
 	}
 	if (Button_LeftNext)
 	{
 		Button_LeftNext->OnClicked.RemoveDynamic(this, &UDronePartSelectWidget::HandleLeftNextClicked);
+		Button_LeftNext->OnClicked.AddDynamic(this, &UDronePartSelectWidget::HandleLeftNextClicked);
 	}
 	if (Button_CombatStart)
 	{
