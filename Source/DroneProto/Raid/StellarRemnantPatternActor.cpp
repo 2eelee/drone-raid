@@ -82,7 +82,7 @@ void AStellarRemnantPatternActor::OnResolvedConfigSnapshot()
 void AStellarRemnantPatternActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (!HasResolvedConfigSnapshot())
+	if (!HasResolvedConfigSnapshot() && !TryAcquireResolvedConfigSnapshot())
 	{
 		return;
 	}
@@ -251,10 +251,15 @@ void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	WaveIndices.Reserve(Frames.Num());
 	DamageShardRenderer->ClearInstances();
 	VisualShardRenderer->ClearInstances();
+	// 피해 파편과 visual-only 파편은 같은 금색 계열 안에서 확실히 갈려야 한다.
+	// visual-only는 플레이어 평면 위·아래를 지나며 피해를 주지 않으므로,
+	// 구분이 약하면 "맞았는데 안 맞는다"로 읽힌다.
 	DamageShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXIntensity"), 24.0f);
 	DamageShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXOpacity"), 0.88f);
+	DamageShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXVisualOnly"), 0.0f);
 	VisualShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXIntensity"), 9.0f);
 	VisualShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXOpacity"), 0.42f);
+	VisualShardRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXVisualOnly"), 1.0f);
 	for (const FStellarRemnantVisualFrame& Frame : Frames)
 	{
 		Positions.Add(Frame.Position);
@@ -273,7 +278,8 @@ void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 			(Frame.bVisualOnly ? VisualShardRenderer : DamageShardRenderer)->AddInstance(InstanceTransform);
 		}
 	}
-	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(PatternVFX, TEXT("ProjectilePosition"), Positions);
+	// Corrupted와 같은 이유로 위치는 Position 배열로 보낸다.
+	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(PatternVFX, TEXT("ProjectilePosition"), Positions);
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("ProjectileAngle"), Angles);
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayFloat(PatternVFX, TEXT("ProjectileSize"), Sizes);
 	UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayBool(PatternVFX, TEXT("ProjectileActive"), ActiveMask);
@@ -368,21 +374,25 @@ void AStellarRemnantPatternActor::ApplyDamageForServer(
 			continue;
 		}
 
-		FVector TargetOrigin = Drone->GetActorLocation();
-		FVector TargetExtent = FVector::ZeroVector;
-		Drone->GetActorBounds(false, TargetOrigin, TargetExtent);
-		const float TargetRadiusCm = TargetExtent.Size();
+		// 판정은 확정 명세 5.1의 파편 collision radius만 쓰고 드론은 위치 한 점으로 본다.
+		// GetActorBounds()로 드론 반경을 더하면 세 가지가 한꺼번에 깨진다.
+		//  1. bOnlyCollidingComponents=false라 콜리전 없는 Niagara/VFX 컴포넌트까지 포함되고,
+		//     Niagara dynamic bounds는 파티클이 날아간 거리만큼 커진다.
+		//  2. FVector::Size()는 AABB extent의 대각선이라 구 반경을 항상 과대평가한다.
+		//  3. TargetOrigin이 out 파라미터로 덮어써져 판정 중심이 드론 위치에서 벗어난다.
+		// 결과적으로 서버 판정이 BP 에셋 구성에 좌우되고, 보이는 파편 지름
+		// (CollisionRadiusCm * 2)보다 훨씬 먼 곳에서 피격된다.
+		const FVector TargetLocation = Drone->GetActorLocation();
 
 		for (const FStellarRemnantSample& Sample : Samples)
 		{
 			if (IsPointInsideSweptSample(
-				TargetOrigin,
+				TargetLocation,
 				GetActorTransform(),
 				Sample,
 				PreviousElapsedSeconds,
 				CurrentElapsedSeconds,
-				Config,
-				TargetRadiusCm))
+				Config))
 			{
 				PatternComponent->TryApplyPatternDamageForServer(Drone, PatternConfig.StellarDamage);
 				break;

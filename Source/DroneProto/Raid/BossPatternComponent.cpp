@@ -402,6 +402,28 @@ void UBossPatternComponent::FinishActiveForServer()
 	ScheduleTransition(FMath::Max(0.0f, ResolvedConfig.Common.IntermissionSeconds - NextTelegraphSeconds));
 }
 
+bool UBossPatternComponent::TryGetPlayerPlaneZForServer(float& OutPlaneZCm) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	// 드론은 진입 높이를 FixedZPosition으로 고정하므로 어느 드론을 봐도 같은 평면이다.
+	// 한 기도 없으면 보스 Z를 그대로 쓴다.
+	for (TActorIterator<ADrone> It(World); It; ++It)
+	{
+		const ADrone* Drone = *It;
+		if (Drone && !Drone->IsActorBeingDestroyed())
+		{
+			OutPlaneZCm = Drone->GetActorLocation().Z;
+			return true;
+		}
+	}
+	return false;
+}
+
 ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPatternLifecycleState LifecycleState)
 {
 	DestroyActivePatternActorForServer();
@@ -423,6 +445,18 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 	}
 	FTransform PatternSpawnTransform = Owner->GetActorTransform();
 	PatternSpawnTransform.SetScale3D(FVector::OneVector);
+	// 패턴 기하는 확정 명세가 말하는 "플레이어 평면"을 기준으로 놓는다.
+	// 보스 Z를 그대로 쓰면 드론의 고정 높이와 어긋나 두 패턴 모두 판정이 깨진다.
+	//  - Stellar 피해 파편의 로컬 Z는 0이고 판정은 3D 거리이므로, 평면이 어긋난 만큼이
+	//    파편 반경(70cm)을 넘으면 XY가 정확히 겹쳐도 절대 맞지 않는다.
+	//  - Corrupted는 높이를 ±75cm로 따로 보므로, 빔 Z 진동(±300cm)이 드론 높이를
+	//    스치고 지나갈 때만 우연히 맞는다. 화면의 빔 위치와 피격이 어긋나 보인다.
+	if (float PlayerPlaneZ = 0.0f; TryGetPlayerPlaneZForServer(PlayerPlaneZ))
+	{
+		FVector PatternOrigin = PatternSpawnTransform.GetLocation();
+		PatternOrigin.Z = PlayerPlaneZ;
+		PatternSpawnTransform.SetLocation(PatternOrigin);
+	}
 	ActivePatternActor = World->SpawnActorDeferred<ABossPatternActorBase>(
 		PatternActorClass,
 		PatternSpawnTransform,

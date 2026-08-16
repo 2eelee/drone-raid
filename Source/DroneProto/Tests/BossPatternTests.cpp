@@ -2,6 +2,7 @@
 #include "CoreGlobals.h"
 #include "Drone.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
@@ -1560,6 +1561,8 @@ bool FDroneCorruptedActinoRuntimeDamageTest::RunTest(const FString& Parameters)
 	const FVector BossStartLocation(900.0f, -450.0f, 125.0f);
 	const FRotator BossStartRotation(0.0f, 31.0f, 0.0f);
 	Context.Boss->SetActorLocationAndRotation(BossStartLocation, BossStartRotation);
+	// 패턴 원점은 보스 시작 XY·회전을 스냅샷하되 Z는 플레이어 평면을 따른다.
+	const float PlayerPlaneZCm = static_cast<float>(Context.Drone->GetActorLocation().Z);
 	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
 	TestTrue(TEXT("first Corrupted starts"), Context.Component->FireScheduledTransitionForTest());
 	ACorruptedActinoPatternActor* CorruptedActor = Cast<ACorruptedActinoPatternActor>(Context.Component->GetActivePatternActorForTest());
@@ -1570,7 +1573,10 @@ bool FDroneCorruptedActinoRuntimeDamageTest::RunTest(const FString& Parameters)
 		DestroyBossPatternPlayerTestContext(Context);
 		return false;
 	}
-	TestTrue(TEXT("actor snapshots Boss start location"), CorruptedActor->GetActorLocation().Equals(BossStartLocation, 0.01f));
+	TestTrue(
+		TEXT("actor snapshots Boss start XY on the player plane"),
+		CorruptedActor->GetActorLocation().Equals(
+			FVector(BossStartLocation.X, BossStartLocation.Y, PlayerPlaneZCm), 0.01f));
 	TestTrue(TEXT("actor snapshots Boss start rotation"), CorruptedActor->GetActorRotation().Equals(BossStartRotation, 0.01f));
 
 	const FCorruptedActinoConfig Config;
@@ -1701,7 +1707,8 @@ bool FDroneBossPatternProductionVFXHostContractTest::RunTest(const FString& Para
 	{
 		Corrupted->GetComponents<UStaticMeshComponent>(CorruptedRenderers);
 	}
-	TestEqual(TEXT("Corrupted owns four production beam renderers"), CorruptedRenderers.Num(), 4);
+	// 빔 4개 × 부피용 레이어 3겹. 평면 판 한 장으로는 두께가 읽히지 않는다.
+	TestEqual(TEXT("Corrupted owns one renderer per beam"), CorruptedRenderers.Num(), 4);
 	for (UStaticMeshComponent* Renderer : CorruptedRenderers)
 	{
 		TestTrue(TEXT("Corrupted beam mesh is bound"), Renderer && Renderer->GetStaticMesh() != nullptr);
@@ -2393,6 +2400,293 @@ bool FDroneBossPatternIntegrationMarkerContractTest::RunTest(const FString& Para
 	{
 		TestTrue(*FString::Printf(TEXT("required marker exists: %s"), Marker), ComponentSource.Contains(Marker));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoTelegraphMatchesActiveStartPoseTest,
+	"DroneProto.BossPattern.CorruptedActino.TelegraphMatchesActiveStartPose",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoTelegraphMatchesActiveStartPoseTest::RunTest(const FString& Parameters)
+{
+	const FCorruptedActinoConfig Config;
+
+	// lifecycle 전환에서 StartServerTime이 다시 잡히므로 active는 항상 t=0 자세로 시작한다.
+	// 예고는 그 자세를 미리 보여줘야 하며, 예고 경과 시간에 따라 움직이면
+	// 발동 순간 빔이 순간 이동해 예고가 가리킨 위치와 실제 공격 위치가 어긋난다.
+	const TArray<FCorruptedBeamVisualSample> ActiveStart =
+		ACorruptedActinoPatternActor::BuildVisualSamples(0.0f, false, Config);
+	TestEqual(TEXT("active start publishes four beams"), ActiveStart.Num(), Config.LaserCount);
+
+	const float TelegraphProbeSeconds[] = {0.0f, 0.5f, 0.999f};
+	for (const float ProbeSeconds : TelegraphProbeSeconds)
+	{
+		const TArray<FCorruptedBeamVisualSample> Telegraph =
+			ACorruptedActinoPatternActor::BuildVisualSamples(ProbeSeconds, true, Config);
+		TestEqual(TEXT("telegraph publishes four beams"), Telegraph.Num(), ActiveStart.Num());
+		for (int32 Index = 0; Index < Telegraph.Num() && Index < ActiveStart.Num(); ++Index)
+		{
+			TestEqual(
+				*FString::Printf(TEXT("telegraph beam %d angle matches active start at t=%.3f"), Index, ProbeSeconds),
+				Telegraph[Index].AngleDegrees,
+				ActiveStart[Index].AngleDegrees);
+			TestEqual(
+				*FString::Printf(TEXT("telegraph beam %d Z matches active start at t=%.3f"), Index, ProbeSeconds),
+				Telegraph[Index].ZCm,
+				ActiveStart[Index].ZCm);
+		}
+	}
+
+	// active는 예고와 달리 실제 경과 시간을 따라 움직여야 한다.
+	const TArray<FCorruptedBeamVisualSample> ActiveLater =
+		ACorruptedActinoPatternActor::BuildVisualSamples(1.0f, false, Config);
+	TestTrue(
+		TEXT("active beams still move with elapsed time"),
+		!FMath::IsNearlyEqual(ActiveLater[0].AngleDegrees, ActiveStart[0].AngleDegrees));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoTelegraphWidthContractTest,
+	"DroneProto.BossPattern.CorruptedActino.TelegraphWidthContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoTelegraphWidthContractTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("CorruptedTelegraphWidthWorld")));
+	if (!World)
+	{
+		return false;
+	}
+
+	// InitializeForServer는 InstanceID가 겹치면 중복 복제로 보고 액터를 파괴한다.
+	// 캡처마다 고유 InstanceID를 써야 요청한 lifecycle이 실제로 적용된다.
+	auto CaptureBeamScales = [World](
+		const FBossPatternResolvedConfig& ResolvedConfig,
+		EBossPatternLifecycleState Lifecycle,
+		int32 InstanceID,
+		TArray<FVector>& OutScales)
+	{
+		ACorruptedActinoPatternActor* Actor = World->SpawnActor<ACorruptedActinoPatternActor>();
+		if (!Actor)
+		{
+			return;
+		}
+		Actor->SnapshotResolvedConfig(ResolvedConfig);
+		Actor->InitializeForServer(EBossPatternKind::CorruptedActino, Lifecycle, InstanceID, 0.0f);
+		Actor->RefreshPatternVFXForTest(0.0f);
+		TArray<UStaticMeshComponent*> Renderers;
+		Actor->GetComponents<UStaticMeshComponent>(Renderers);
+		for (const UStaticMeshComponent* Renderer : Renderers)
+		{
+			OutScales.Add(Renderer->GetRelativeScale3D());
+		}
+	};
+
+	const FBossPatternResolvedConfig CanonicalConfig = MakeCanonicalBossPatternResolvedConfig();
+	TArray<FVector> TelegraphScales;
+	TArray<FVector> ActiveScales;
+	CaptureBeamScales(CanonicalConfig, EBossPatternLifecycleState::Telegraphing, 901, TelegraphScales);
+	CaptureBeamScales(CanonicalConfig, EBossPatternLifecycleState::Active, 902, ActiveScales);
+	// 빔 4개 × 레이어 3겹. 모든 겹이 같은 폭·길이 스케일을 써야 두께만 달라진다.
+	TestEqual(TEXT("telegraph exposes every beam layer"), TelegraphScales.Num(), 4);
+	TestEqual(TEXT("active exposes every beam layer"), ActiveScales.Num(), 4);
+
+	for (int32 Index = 0; Index < TelegraphScales.Num() && Index < ActiveScales.Num(); ++Index)
+	{
+		// 예고 폭이 active보다 좁으면 안전 구역 경계를 실제보다 넓게 알려주게 된다.
+		TestEqual(
+			*FString::Printf(TEXT("telegraph beam %d keeps the active width scale"), Index),
+			TelegraphScales[Index].Y,
+			ActiveScales[Index].Y);
+		TestEqual(
+			*FString::Printf(TEXT("telegraph beam %d keeps the active length scale"), Index),
+			TelegraphScales[Index].X,
+			ActiveScales[Index].X);
+		// 예고와 active는 두께로 구분한다.
+		TestTrue(
+			*FString::Printf(TEXT("telegraph beam %d is thinner than active"), Index),
+			TelegraphScales[Index].Z < ActiveScales[Index].Z);
+	}
+
+	// 렌더러 스케일은 config 시각 폭·길이를 따라야 한다. 상수 1로 두면 config를 바꿔도 화면이 그대로다.
+	FBossPatternResolvedConfig WidenedConfig = CanonicalConfig;
+	WidenedConfig.Corrupted.OuterVisualFullWidthCm = CanonicalConfig.Corrupted.OuterVisualFullWidthCm * 2.0f;
+	WidenedConfig.Corrupted.LengthCm = CanonicalConfig.Corrupted.LengthCm * 0.5f;
+	TArray<FVector> WidenedScales;
+	CaptureBeamScales(WidenedConfig, EBossPatternLifecycleState::Active, 903, WidenedScales);
+	TestEqual(TEXT("widened config exposes every beam layer"), WidenedScales.Num(), 4);
+	for (int32 Index = 0; Index < WidenedScales.Num() && Index < ActiveScales.Num(); ++Index)
+	{
+		TestEqual(
+			*FString::Printf(TEXT("beam %d width scale follows config visual width"), Index),
+			WidenedScales[Index].Y,
+			ActiveScales[Index].Y * 2.0f);
+		TestEqual(
+			*FString::Printf(TEXT("beam %d length scale follows config length"), Index),
+			WidenedScales[Index].X,
+			ActiveScales[Index].X * 0.5f);
+	}
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternPlayerPlaneAlignmentTest,
+	"DroneProto.BossPattern.Transform.PatternOriginFollowsPlayerPlane",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternPlayerPlaneAlignmentTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("PatternPlayerPlaneWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component || !Context.Drone)
+	{
+		TestTrue(TEXT("player plane test setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	// 실제 진입 조건을 재현한다. PlayerStart는 Z=92이고 보스는 월드 원점이다.
+	// 패턴 원점이 보스 Z를 그대로 쓰면 두 평면이 92cm 어긋난다.
+	constexpr float PlayerPlaneZCm = 92.0f;
+	const TArray<FStellarRemnantSample> Samples = AStellarRemnantPatternActor::BuildLogicalSamples();
+	const FStellarRemnantSample* DamageSample = Samples.FindByPredicate(
+		[](const FStellarRemnantSample& Sample)
+		{
+			return !Sample.bVisualOnly && Sample.WaveIndex == 0;
+		});
+	TestNotNull(TEXT("wave one damage sample exists"), DamageSample);
+	if (!DamageSample)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	// 파편 경로 XY 정중앙, 플레이어 평면 높이. 여기서 안 맞으면 어디서도 맞지 않는다.
+	const FVector ShardLocal = AStellarRemnantPatternActor::EvaluateLocalPosition(*DamageSample, 1.0f);
+	Context.Drone->SetActorLocation(FVector(ShardLocal.X, ShardLocal.Y, PlayerPlaneZCm));
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted starts"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("first Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	AStellarRemnantPatternActor* StellarActor =
+		Cast<AStellarRemnantPatternActor>(Context.Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("Stellar uses dedicated actor"), StellarActor);
+	if (!StellarActor)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestEqual(
+		TEXT("pattern origin sits on the player plane, not the boss plane"),
+		static_cast<float>(StellarActor->GetActorLocation().Z),
+		PlayerPlaneZCm);
+
+	TestTrue(TEXT("Stellar becomes active"), Context.Component->FireScheduledTransitionForTest());
+	// 드론은 진입 높이에 머문다. 파편 XY만 맞추고 Z는 플레이어 평면으로 유지해야
+	// 실제 전투 조건이 된다.
+	const FVector ShardWorld = StellarActor->GetActorTransform().TransformPosition(ShardLocal);
+	Context.Drone->SetActorLocation(FVector(ShardWorld.X, ShardWorld.Y, PlayerPlaneZCm));
+	const int32 HealthBefore = Context.Drone->GetHealth();
+	StellarActor->ApplyDamageForServerForTest(0.5f, 1.5f);
+	TestEqual(
+		TEXT("shard passing through the drone on the player plane deals damage"),
+		Context.Drone->GetHealth(),
+		HealthBefore - 25);
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneStellarRemnantDamageIgnoresTargetBoundsTest,
+	"DroneProto.BossPattern.StellarRemnant.DamageIgnoresTargetBounds",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneStellarRemnantDamageIgnoresTargetBoundsTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("StellarTargetBoundsWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component || !Context.Drone)
+	{
+		TestTrue(TEXT("target bounds test setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted starts"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("first Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
+	TestTrue(TEXT("Stellar telegraph starts"), Context.Component->FireScheduledTransitionForTest());
+	AStellarRemnantPatternActor* StellarActor =
+		Cast<AStellarRemnantPatternActor>(Context.Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("Stellar uses dedicated actor"), StellarActor);
+	if (!StellarActor)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+	TestTrue(TEXT("Stellar becomes active"), Context.Component->FireScheduledTransitionForTest());
+
+	// BP_Drone은 메시와 VFX 컴포넌트를 붙인다. 서버 판정이 그 bounds를 타면
+	// 에셋 구성만으로 피격 범위가 커진다. 그 상황을 큰 primitive로 재현한다.
+	USphereComponent* BoundsInflator = NewObject<USphereComponent>(Context.Drone);
+	TestNotNull(TEXT("bounds inflator is created"), BoundsInflator);
+	if (BoundsInflator)
+	{
+		BoundsInflator->SetupAttachment(Context.Drone->GetRootComponent());
+		BoundsInflator->SetSphereRadius(1500.0f);
+		BoundsInflator->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		BoundsInflator->RegisterComponent();
+	}
+
+	const TArray<FStellarRemnantSample> Samples = AStellarRemnantPatternActor::BuildLogicalSamples();
+	const FStellarRemnantSample* DamageSample = Samples.FindByPredicate(
+		[](const FStellarRemnantSample& Sample)
+		{
+			return !Sample.bVisualOnly && Sample.WaveIndex == 0;
+		});
+	TestNotNull(TEXT("wave one damage sample exists"), DamageSample);
+	if (!DamageSample)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	const FTransform PatternTransform = StellarActor->GetActorTransform();
+	// Wave 2는 t=0.5에 나오므로 miss 판정은 Wave 1만 떠 있는 구간에서 본다.
+	const FVector ShardLocal = AStellarRemnantPatternActor::EvaluateLocalPosition(*DamageSample, 0.4f);
+	const FVector ShardDirection = FVector(ShardLocal.X, ShardLocal.Y, 0.0f).GetSafeNormal();
+	const FVector LateralLocal(-ShardDirection.Y, ShardDirection.X, 0.0f);
+
+	// 파편 반경 70cm 바로 밖(200cm 옆)이면 어떤 bounds를 가진 드론이라도 맞지 않아야 한다.
+	const float MissDistanceCm = 200.0f;
+	Context.Drone->SetActorLocation(
+		PatternTransform.TransformPosition(ShardLocal + LateralLocal * MissDistanceCm));
+	const int32 HealthBeforeMiss = Context.Drone->GetHealth();
+	StellarActor->ApplyDamageForServerForTest(0.0f, 0.4f);
+	TestEqual(
+		TEXT("target outside the shard collision radius is not hit regardless of actor bounds"),
+		Context.Drone->GetHealth(),
+		HealthBeforeMiss);
+
+	// 파편 반경 안에서는 그대로 맞아야 한다.
+	Context.Drone->SetActorLocation(
+		PatternTransform.TransformPosition(
+			AStellarRemnantPatternActor::EvaluateLocalPosition(*DamageSample, 0.9f)));
+	const int32 HealthBeforeHit = Context.Drone->GetHealth();
+	StellarActor->ApplyDamageForServerForTest(0.4f, 0.9f);
+	TestEqual(
+		TEXT("target inside the shard collision radius still takes canonical damage"),
+		Context.Drone->GetHealth(),
+		HealthBeforeHit - 25);
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
 	return true;
 }
 

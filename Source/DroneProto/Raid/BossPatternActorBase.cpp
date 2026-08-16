@@ -23,17 +23,29 @@ ABossPatternActorBase::ABossPatternActorBase()
 void ABossPatternActorBase::BeginPlay()
 {
 	Super::BeginPlay();
-	if (!bHasResolvedConfigSnapshot)
+	TryAcquireResolvedConfigSnapshot();
+}
+
+bool ABossPatternActorBase::TryAcquireResolvedConfigSnapshot()
+{
+	if (bHasResolvedConfigSnapshot)
 	{
-		const UBossPatternComponent* Component = GetOwner()
-			? GetOwner()->FindComponentByClass<UBossPatternComponent>()
-			: nullptr;
-		FBossPatternResolvedConfig LocalConfig;
-		if (Component && Component->CopyResolvedConfig(LocalConfig))
-		{
-			SnapshotResolvedConfig(LocalConfig);
-		}
+		return true;
 	}
+
+	// 클라이언트에서는 Owner(보스)가 아직 복제되지 않았을 수 있다. BeginPlay 1회만 시도하면
+	// 그 인스턴스는 config를 영영 못 받고 Tick이 계속 조기 반환해 아무것도 렌더되지 않는다.
+	// 예고는 1초뿐이라 이 창을 놓치면 예고가 통째로 화면에서 사라진다.
+	const UBossPatternComponent* Component = GetOwner()
+		? GetOwner()->FindComponentByClass<UBossPatternComponent>()
+		: nullptr;
+	FBossPatternResolvedConfig LocalConfig;
+	if (Component && Component->CopyResolvedConfig(LocalConfig))
+	{
+		SnapshotResolvedConfig(LocalConfig);
+		return true;
+	}
+	return false;
 }
 
 void ABossPatternActorBase::SnapshotResolvedConfig(const FBossPatternResolvedConfig& Config)

@@ -31,6 +31,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	bool TryAcquireResolvedConfigSnapshot();
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	const FBossPatternResolvedConfig& GetResolvedConfigSnapshot() const;
 	virtual void OnResolvedConfigSnapshot();

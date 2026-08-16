@@ -85,6 +85,7 @@ private:
 	void BeginTelegraphForServer();
 	void BeginActiveForServer();
 	void FinishActiveForServer();
+	bool TryGetPlayerPlaneZForServer(float& OutPlaneZCm) const;
 	ABossPatternActorBase* SpawnPatternActorForServer(EBossPatternLifecycleState LifecycleState);
 	void DestroyActivePatternActorForServer();
 	void ClearHitLockForServer(FString PlayerKey);
