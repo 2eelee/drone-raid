@@ -1741,7 +1741,9 @@ bool FDroneBossPatternProductionVFXHostContractTest::RunTest(const FString& Para
 		Corrupted->RefreshPatternVFXForTest(0.0f);
 		for (UStaticMeshComponent* Renderer : CorruptedRenderers)
 		{
-			TestTrue(TEXT("active Corrupted beam is visible"), Renderer->IsVisible());
+			// SM_CorruptedBeamWedge는 42m x 12m 꽉 찬 판이라 판정 영역을 색칠한 모습이 된다.
+			// telegraph/active 모두 숨기고 개발용 debug 시각화에서만 쓴다.
+			TestFalse(TEXT("filled wedge stays hidden from players"), Renderer->IsVisible());
 		}
 	}
 
@@ -2444,6 +2446,168 @@ bool FDroneCorruptedActinoTelegraphMatchesActiveStartPoseTest::RunTest(const FSt
 	TestTrue(
 		TEXT("active beams still move with elapsed time"),
 		!FMath::IsNearlyEqual(ActiveLater[0].AngleDegrees, ActiveStart[0].AngleDegrees));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoPetalLoopContractTest,
+	"DroneProto.BossPattern.CorruptedActino.PetalLoopContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoPetalLoopContractTest::RunTest(const FString& Parameters)
+{
+	const FCorruptedActinoConfig Config;
+	const float StartRadiusCm = Config.StartRadiusCm;
+	const float EndRadiusCm = Config.StartRadiusCm + Config.LengthCm;
+
+	// 한 프레임 안에서 out-and-back이 성립해야 한다. 과거 시간 샘플을 모아 만드는 것이 아니다.
+	const TArray<FCorruptedPetalSample> Samples =
+		ACorruptedActinoPatternActor::BuildPetalSamples(1.7f, 0, Config);
+	TestTrue(TEXT("petal samples exist"), Samples.Num() > 0);
+	if (Samples.Num() == 0)
+	{
+		return false;
+	}
+
+	// strand는 여러 겹이어야 겹쳐진 에너지 띠로 읽힌다.
+	TSet<int32> StrandIndices;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		StrandIndices.Add(Sample.StrandIndex);
+	}
+	TestTrue(TEXT("petal has multiple strands"), StrandIndices.Num() >= 3);
+
+	// strand 0의 u=0, u=0.5, u=1 지점을 본다.
+	TArray<FCorruptedPetalSample> Primary;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		if (Sample.StrandIndex == 0)
+		{
+			Primary.Add(Sample);
+		}
+	}
+	TestTrue(TEXT("primary strand is dense enough to read as a curve"), Primary.Num() >= 16);
+	if (Primary.Num() < 16)
+	{
+		return false;
+	}
+
+	auto RadialOf = [](const FCorruptedPetalSample& Sample)
+	{
+		return FVector(Sample.LocalPosition.X, Sample.LocalPosition.Y, 0.0f).Size();
+	};
+
+	const float FirstRadial = RadialOf(Primary[0]);
+	const float LastRadial = RadialOf(Primary.Last());
+	const FCorruptedPetalSample& Mid = Primary[Primary.Num() / 2];
+	const float MidRadial = RadialOf(Mid);
+
+	// 시작과 끝이 보스 근처로 돌아온다. lateral 흔들림 때문에 정확히 같지는 않으므로 여유를 둔다.
+	TestTrue(TEXT("petal starts near the boss"), FMath::Abs(FirstRadial - StartRadiusCm) < 700.0f);
+	TestTrue(TEXT("petal returns near the boss"), FMath::Abs(LastRadial - StartRadiusCm) < 700.0f);
+	// 중간이 가장 바깥이다. 이것이 out-and-back의 핵심이다.
+	// 시각 reach는 판정 길이보다 짧다. 꽃잎이 판정 끝(50m)까지 뻗으면 카메라(보스에서 49m)를
+	// 지나쳐 화면을 감싸므로 앞에서 닫는다. envelope과 collision은 같을 필요가 없다.
+	TestTrue(TEXT("petal reaches far beyond the start radius"),
+		MidRadial > StartRadiusCm + Config.LengthCm * 0.4f);
+	TestTrue(TEXT("petal visual reach stays inside the collision length"),
+		MidRadial < EndRadiusCm);
+	TestTrue(TEXT("petal midpoint is far beyond both ends"),
+		MidRadial > FirstRadial + Config.LengthCm * 0.5f
+			&& MidRadial > LastRadial + Config.LengthCm * 0.5f);
+
+	// 완전한 폐곡선은 Primary 하나뿐이어야 한다. secondary까지 u=0..1을 완주하면
+	// 결과가 겹친 네온 타원이 된다.
+	// StrandIndex가 petal strand 수 이상이면 filament다. 별도 층이므로 여기서 제외한다.
+	int32 MaxPetalStrandIndex = 0;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		MaxPetalStrandIndex = FMath::Max(MaxPetalStrandIndex, Sample.StrandIndex);
+	}
+	const int32 PetalStrandLimit = 4;
+	TestTrue(TEXT("filament layer exists beyond the petal strands"),
+		MaxPetalStrandIndex >= PetalStrandLimit);
+
+	TSet<int32> ClosedStrands;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		if (Sample.StrandIndex >= PetalStrandLimit)
+		{
+			continue;
+		}
+		if (Sample.LinkOrder <= KINDA_SMALL_NUMBER || Sample.LinkOrder >= 1.0f - KINDA_SMALL_NUMBER)
+		{
+			ClosedStrands.Add(Sample.StrandIndex);
+		}
+	}
+	TestEqual(TEXT("only the primary strand spans the full loop"), ClosedStrands.Num(), 1);
+	TestTrue(TEXT("the full loop belongs to the primary strand"), ClosedStrands.Contains(0));
+
+	// 리본 한 가닥의 두께는 envelope(시각 폭 5m~12m)과 다른 값이어야 한다.
+	// 한 가닥을 12m로 만들면 다시 색면이 된다.
+	float MaxWidthCm = 0.0f;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		MaxWidthCm = FMath::Max(MaxWidthCm, Sample.RibbonWidthCm);
+	}
+	TestTrue(TEXT("ribbon width stays far below the visual envelope"),
+		MaxWidthCm > 0.0f && MaxWidthCm < Config.InnerVisualFullWidthCm * 0.5f);
+
+	// filament는 주 ribbon보다 훨씬 가늘어야 한다. 눈에 띄면 실패다.
+	float MaxFilamentWidthCm = 0.0f;
+	int32 FilamentSampleCount = 0;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		if (Sample.StrandIndex >= PetalStrandLimit)
+		{
+			MaxFilamentWidthCm = FMath::Max(MaxFilamentWidthCm, Sample.RibbonWidthCm);
+			++FilamentSampleCount;
+		}
+	}
+	TestTrue(TEXT("filament stays much thinner than the ribbons"),
+		MaxFilamentWidthCm > 0.0f && MaxFilamentWidthCm < MaxWidthCm * 0.4f);
+	// 내부를 메우면 lightning mesh가 된다. petal 샘플보다 적어야 한다.
+	TestTrue(TEXT("filament stays sparse"),
+		FilamentSampleCount > 0 && FilamentSampleCount < PetalStrandLimit * 40);
+
+	// filament는 리본을 따라가는 장식선이 아니라 두 rail 사이를 가로지르는 연결선이다.
+	// u와 1-u를 이으므로 양 끝이 꽃잎 폭만큼 떨어져야 한다.
+	TMap<int32, TArray<FVector>> FilamentByStrand;
+	for (const FCorruptedPetalSample& Sample : Samples)
+	{
+		if (Sample.StrandIndex >= PetalStrandLimit)
+		{
+			FilamentByStrand.FindOrAdd(Sample.StrandIndex).Add(Sample.LocalPosition);
+		}
+	}
+	TestTrue(TEXT("filament count stays between four and six"),
+		FilamentByStrand.Num() >= 4 && FilamentByStrand.Num() <= 6);
+	int32 CrossingFilaments = 0;
+	for (const TPair<int32, TArray<FVector>>& Bolt : FilamentByStrand)
+	{
+		if (Bolt.Value.Num() < 2)
+		{
+			continue;
+		}
+		if (FVector::Dist(Bolt.Value[0], Bolt.Value.Last()) > 600.0f)
+		{
+			++CrossingFilaments;
+		}
+	}
+	TestEqual(TEXT("every filament spans the petal interior"),
+		CrossingFilaments, FilamentByStrand.Num());
+
+	// 서버 판정은 이 곡선을 쓰지 않는다. 기존 사다리꼴 판정이 그대로여야 한다.
+	const FTransform Identity;
+	const float CollisionAngleRadians = FMath::DegreesToRadians(
+		ACorruptedActinoPatternActor::EvaluateAngleDegrees(Config.Presets[0], 0.0f, Config));
+	const FVector CollisionProbe =
+		FVector(FMath::Cos(CollisionAngleRadians), FMath::Sin(CollisionAngleRadians), 0.0f)
+			* (Config.StartRadiusCm + Config.LengthCm * 0.5f)
+		+ FVector::UpVector * ACorruptedActinoPatternActor::EvaluateZCm(Config.Presets[0], 0.0f, Config);
+	TestTrue(TEXT("collision still uses the radial trapezoid"),
+		ACorruptedActinoPatternActor::IsPointInsideLaser(
+			CollisionProbe, Identity, Config.Presets[0], 0.0f, Config));
 	return true;
 }
 

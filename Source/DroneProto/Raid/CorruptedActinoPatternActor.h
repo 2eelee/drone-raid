@@ -7,6 +7,15 @@
 class UNiagaraComponent;
 class UStaticMeshComponent;
 
+// 한 프레임의 petal loop 위 한 점. 과거 시간 trail이 아니라 u 파라미터 위의 공간 샘플이다.
+struct FCorruptedPetalSample
+{
+	FVector LocalPosition = FVector::ZeroVector;
+	float RibbonWidthCm = 0.0f;
+	float LinkOrder = 0.0f;
+	int32 StrandIndex = 0;
+};
+
 struct FCorruptedBeamVisualSample
 {
 	float AngleDegrees = 0.0f;
@@ -48,6 +57,12 @@ public:
 		float ElapsedSeconds,
 		bool bTelegraphing,
 		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig());
+	// 한 방향(Presets[PresetIndex])의 petal loop를 만든다. 4방향 확장은 승인 후에 한다.
+	static TArray<FCorruptedPetalSample> BuildPetalSamples(
+		float ElapsedSeconds,
+		int32 PresetIndex = 0,
+		const FCorruptedActinoConfig& InConfig = FCorruptedActinoConfig(),
+		TOptional<float> OverrideAngleDegrees = TOptional<float>());
 
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetDamageAttemptCountForTest() const;
