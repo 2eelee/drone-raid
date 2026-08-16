@@ -117,6 +117,9 @@ ACorruptedActinoPatternActor::ACorruptedActinoPatternActor()
 			BeamRenderer->SetGenerateOverlapEvents(false);
 			BeamRenderer->SetCanEverAffectNavigation(false);
 			BeamRenderer->CastShadow = false;
+			// Additive/translucent 머티리얼은 Nanite 경로를 쓸 수 없다. fallback을 강제해
+			// 런타임 Nanite 경고를 막는다.
+			BeamRenderer->bDisallowNanite = true;
 			BeamRenderer->SetVisibility(false, true);
 			BeamRenderers.Add(BeamRenderer);
 		}

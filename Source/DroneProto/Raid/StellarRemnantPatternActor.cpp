@@ -50,6 +50,9 @@ AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 	DamageShardRenderer->SetGenerateOverlapEvents(false);
 	DamageShardRenderer->SetCanEverAffectNavigation(false);
 	DamageShardRenderer->CastShadow = false;
+	// Additive/translucent 머티리얼은 Nanite 경로를 쓸 수 없다. fallback을 강제해
+	// 런타임 Nanite 경고를 막는다.
+	DamageShardRenderer->bDisallowNanite = true;
 
 	VisualShardRenderer = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("VisualShardRenderer"));
 	VisualShardRenderer->SetupAttachment(Root);
@@ -59,6 +62,7 @@ AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 	VisualShardRenderer->SetGenerateOverlapEvents(false);
 	VisualShardRenderer->SetCanEverAffectNavigation(false);
 	VisualShardRenderer->CastShadow = false;
+	VisualShardRenderer->bDisallowNanite = true;
 
 	CoreRenderer = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("CoreRenderer"));
 	CoreRenderer->SetupAttachment(Root);
@@ -68,6 +72,7 @@ AStellarRemnantPatternActor::AStellarRemnantPatternActor()
 	CoreRenderer->SetGenerateOverlapEvents(false);
 	CoreRenderer->SetCanEverAffectNavigation(false);
 	CoreRenderer->CastShadow = false;
+	CoreRenderer->bDisallowNanite = true;
 	CoreRenderer->SetVisibility(false, true);
 	PrimaryActorTick.bCanEverTick = true;
 }
