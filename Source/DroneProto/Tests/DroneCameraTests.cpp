@@ -216,8 +216,14 @@ bool FDroneFixedBossFacingCameraMathTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(FVector::Dist2D(PlayerPosition, CameraView.CameraLocation), 1400.0f, 0.01f));
 	TestTrue(TEXT("camera height is 3.8m above the player"),
 		FMath::IsNearlyEqual(CameraView.CameraLocation.Z - PlayerPosition.Z, 380.0f, 0.01f));
-	TestTrue(TEXT("camera looks at the boss when a boss target exists"),
-		CameraView.CameraRotation.Vector().Equals((BossPosition - CameraView.CameraLocation).GetSafeNormal(), 0.001f));
+	// 2026-08-17 A안 전환 — Pitch 는 고정값이고 Yaw 만 보스를 향한다. LookAt 유도는 폐기했다.
+	TestTrue(TEXT("camera yaw faces the boss while pitch stays fixed"),
+		FMath::IsNearlyEqual(
+			CameraView.CameraRotation.Yaw,
+			(BossPosition - CameraView.CameraLocation).Rotation().Yaw,
+			0.01f));
+	TestTrue(TEXT("camera uses the configured fixed pitch even with a valid boss"),
+		FMath::IsNearlyEqual(CameraView.CameraRotation.Pitch, -10.0f, 0.01f));
 	TestTrue(TEXT("camera metadata records boss validity"),
 		CameraView.bBossValid);
 
@@ -235,10 +241,69 @@ bool FDroneFixedBossFacingCameraMathTest::RunTest(const FString& Parameters)
 		FMath::IsNearlyEqual(FVector::Dist2D(PlayerPosition, FallbackView.CameraLocation), 1400.0f, 0.01f));
 	TestTrue(TEXT("fallback camera still applies configured height"),
 		FMath::IsNearlyEqual(FallbackView.CameraLocation.Z - PlayerPosition.Z, 380.0f, 0.01f));
-	TestTrue(TEXT("fallback camera uses configured fallback pitch"),
+	TestTrue(TEXT("fallback camera uses the same configured pitch"),
 		FMath::IsNearlyEqual(FallbackView.CameraRotation.Pitch, -10.0f, 0.01f));
 	TestFalse(TEXT("fallback camera metadata records missing boss"),
 		FallbackView.bBossValid);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneFixedBossFacingCameraFixedPitchTest,
+	"DroneProto.D18.Drone.FixedBossFacingCameraUsesFixedPitchRegardlessOfBossHeight",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneFixedBossFacingCameraFixedPitchTest::RunTest(const FString& Parameters)
+{
+	// 확정 명세(드론 이동·회피 기획서 :213, :307) — CameraPitchAngle 은 조건 없는 고정값 -10° 다.
+	// 계산식 :951 의 LookAt 유도는 2026-08-17 사용자 결정으로 폐기했다.
+	const FVector PlayerPosition(0.0f, 0.0f, 92.0f);
+	const float PitchDegrees = -10.0f;
+
+	// 보스가 드론보다 훨씬 높이 떠 있어도 카메라 Pitch 는 고정값을 유지해야 한다.
+	const FVector HighBossPosition(3500.0f, 0.0f, 800.0f);
+	FDroneCombatCameraView HighView;
+	ADrone::CalculateFixedBossFacingQuarterView(
+		PlayerPosition,
+		&HighBossPosition,
+		FVector::ForwardVector,
+		1400.0f,
+		380.0f,
+		PitchDegrees,
+		HighView);
+	TestTrue(TEXT("camera keeps the configured pitch even when the boss is far above the drone"),
+		FMath::IsNearlyEqual(HighView.CameraRotation.Pitch, PitchDegrees, 0.01f));
+
+	// 보스가 드론과 같은 높이여도 동일한 고정값이어야 한다.
+	const FVector LevelBossPosition(3500.0f, 0.0f, 92.0f);
+	FDroneCombatCameraView LevelView;
+	ADrone::CalculateFixedBossFacingQuarterView(
+		PlayerPosition,
+		&LevelBossPosition,
+		FVector::ForwardVector,
+		1400.0f,
+		380.0f,
+		PitchDegrees,
+		LevelView);
+	TestTrue(TEXT("camera keeps the configured pitch when the boss is level with the drone"),
+		FMath::IsNearlyEqual(LevelView.CameraRotation.Pitch, PitchDegrees, 0.01f));
+
+	// Yaw 는 여전히 보스를 향해야 한다(Boss-Facing 계약 유지).
+	const FVector SideBossPosition(0.0f, 3500.0f, 800.0f);
+	FDroneCombatCameraView SideView;
+	ADrone::CalculateFixedBossFacingQuarterView(
+		PlayerPosition,
+		&SideBossPosition,
+		FVector::ForwardVector,
+		1400.0f,
+		380.0f,
+		PitchDegrees,
+		SideView);
+	TestTrue(TEXT("camera yaw still faces the boss"),
+		FMath::IsNearlyEqual(SideView.CameraRotation.Yaw, 90.0f, 0.01f));
+	TestTrue(TEXT("camera roll stays zero"),
+		FMath::IsNearlyEqual(SideView.CameraRotation.Roll, 0.0f, 0.01f));
 
 	return true;
 }

@@ -143,7 +143,7 @@ public:
 		FVector FallbackForwardDirection,
 		float CameraDistanceCm,
 		float CameraHeightCm,
-		float FallbackPitchDegrees,
+		float PitchDegrees,
 		FDroneCombatCameraView& OutCameraView);
 
 	static bool ShouldApplyFixedBossFacingCamera(
@@ -340,7 +340,7 @@ private:
 	float CombatCameraHeightCm = 380.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (Units = "deg", AllowPrivateAccess = "true"))
-	float CombatCameraFallbackPitchDegrees = -10.0f;
+	float CombatCameraPitchDegrees = -10.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "1.0", ClampMax = "170.0", Units = "deg", AllowPrivateAccess = "true"))
 	float CombatCameraFOV = 75.0f;

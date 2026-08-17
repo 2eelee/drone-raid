@@ -1117,7 +1117,7 @@ bool ADrone::CalculateFixedBossFacingQuarterView(
 	FVector FallbackForwardDirection,
 	float CameraDistanceCm,
 	float CameraHeightCm,
-	float FallbackPitchDegrees,
+	float PitchDegrees,
 	FDroneCombatCameraView& OutCameraView)
 {
 	const bool bBossValid = BossPosition != nullptr;
@@ -1145,17 +1145,15 @@ bool ADrone::CalculateFixedBossFacingQuarterView(
 		PlayerPosition - CameraForwardDirection * SafeDistanceCm + FVector::UpVector * SafeHeightCm;
 	OutCameraView.bBossValid = bBossValid;
 
-	if (bBossValid)
-	{
-		OutCameraView.CameraRotation = (*BossPosition - OutCameraView.CameraLocation).Rotation();
-	}
-	else
-	{
-		OutCameraView.CameraRotation = FRotator(
-			FallbackPitchDegrees,
-			CameraForwardDirection.Rotation().Yaw,
-			0.0f);
-	}
+	// Pitch 는 보스 높이와 무관한 고정값이다(드론 이동·회피 기획서 :213, :307).
+	// 기획서 :951 의 LookAt 유도 방식은 2026-08-17 사용자 결정으로 폐기했다 —
+	// 보스가 드론보다 훨씬 높아 LookAt 은 카메라를 위로 들어올리고, 그 결과 바닥이 사라져
+	// 목표 구도(docs/sources/UIReference_20260817/03_Camera_FixedBossFacingQuarterView.png)와 어긋난다.
+	// Yaw 는 계속 보스를 향하므로 Boss-Facing 계약은 유지된다.
+	OutCameraView.CameraRotation = FRotator(
+		PitchDegrees,
+		CameraForwardDirection.Rotation().Yaw,
+		0.0f);
 
 	return bBossValid;
 }
@@ -2386,7 +2384,7 @@ void ADrone::UpdateLocalCombatCamera(float DeltaSeconds)
 		BuildFixedBossFacingFallbackForward(FixedFallbackYaw),
 		CombatCameraDistanceCm,
 		CombatCameraHeightCm,
-		CombatCameraFallbackPitchDegrees,
+		CombatCameraPitchDegrees,
 		CameraView);
 
 	if (CombatCameraSpringArm)
@@ -2593,7 +2591,7 @@ FRotator ADrone::ResolveLocalCameraRelativeInputRotation() const
 
 	if (bHasCombatCameraFallbackYaw)
 	{
-		return FRotator(CombatCameraFallbackPitchDegrees, CombatCameraFallbackYawDegrees, 0.0f);
+		return FRotator(CombatCameraPitchDegrees, CombatCameraFallbackYawDegrees, 0.0f);
 	}
 
 	if (const APlayerController* PC = Cast<APlayerController>(GetController()))
