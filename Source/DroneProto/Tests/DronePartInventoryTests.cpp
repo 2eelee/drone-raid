@@ -8066,4 +8066,58 @@ bool FRaidEmptyRaidTimerRecoveryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportStoreTest,
+	"DroneProto.REPORT05.Store.GeneratedReportsAreKeptForServer",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportStoreTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("ReportStoreWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("report store game mode is spawned"), GameMode);
+	TestNotNull(TEXT("report store drone is spawned"), Context.Drone);
+	if (!GameMode || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestEqual(TEXT("the store starts empty"), GameMode->GetDroneReportDataListForServer().Num(), 0);
+
+	FDroneCombatRecord SeededRecord;
+	SeededRecord.BossDamage = 3000.0f;
+	SeededRecord.BossMaxHP = 60000.0f;
+	SeededRecord.CombatStartTime = 1.0f;
+	SeededRecord.CombatEndTime = 301.0f;
+	Context.Drone->SetCombatRecordForTest(SeededRecord);
+
+	TestTrue(TEXT("a report is created"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestEqual(TEXT("the created report is kept on the server"),
+		GameMode->GetDroneReportDataListForServer().Num(), 1);
+	if (GameMode->GetDroneReportDataListForServer().Num() == 1)
+	{
+		TestTrue(TEXT("the stored record matches the report that was shown"),
+			FMath::IsNearlyEqual(
+				GameMode->GetDroneReportDataListForServer()[0].ReportScore,
+				Context.PC->GetLastDroneReportDataForTest().ReportScore,
+				0.01f));
+	}
+
+	// 중복 요청은 리포트를 만들지 않으므로 저장소도 늘지 않아야 한다.
+	TestFalse(TEXT("a duplicate request is rejected"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestEqual(TEXT("a rejected duplicate does not grow the store"),
+		GameMode->GetDroneReportDataListForServer().Num(), 1);
+
+	GameMode->ClearDroneReportDataListForServer(FName(TEXT("Automation")));
+	TestEqual(TEXT("the store can be cleared for a new session"),
+		GameMode->GetDroneReportDataListForServer().Num(), 0);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
 #endif

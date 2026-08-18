@@ -55,6 +55,14 @@ public:
 	bool TryMarkDroneReportGeneratedForServer(class ARaidPlayerController* RaidPC);
 	void ClearDroneReportKeyForServer(class ARaidPlayerController* RaidPC, FName Reason);
 
+	// 원문 `:63, :76`(REPORT-05): `SaveDroneReportData()`로 생성된 리포트를 `DroneReportDataList`에
+	// 보관한다. 지금까지는 표시된 뒤 사라져 레이드 종료 후 등급 분포를 조회할 수단이 없었고,
+	// 그래서 `TEST-02`의 밸런스 체크리스트가 구조적으로 실행 불가능했다.
+	// 보관 수명은 GameMode 인스턴스(= 레이드 세션 1회)이며 별도 영속화는 하지 않는다.
+	bool SaveDroneReportDataForServer(ARaidPlayerController* RaidPC, const FDroneReportData& ReportData);
+	const TArray<FDroneReportData>& GetDroneReportDataListForServer() const;
+	void ClearDroneReportDataListForServer(FName Reason);
+
 	bool RecordBossDamageForServer(APlayerController* PlayerController, float DamageAmount);
 	float GetBossDamageForPlayerKeyForServer(const FString& PlayerKey) const;
 	TArray<FDroneBossDamageContribution> GetSortedBossDamageContributionsForServer() const;
@@ -85,6 +93,7 @@ private:
 	FTimerHandle RaidTimerWatchdogTimerHandle;
 
 	TSet<FString> GeneratedDroneReportPlayerKeys;
+	TArray<FDroneReportData> DroneReportDataList;
 	TMap<FString, float> PlayerBossDamageMap;
 	TMap<TWeakObjectPtr<AController>, TWeakObjectPtr<AActor>> PlayerStartAssignments;
 

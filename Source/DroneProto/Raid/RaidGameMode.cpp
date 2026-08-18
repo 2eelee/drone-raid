@@ -1059,6 +1059,41 @@ TArray<FDroneBossDamageContribution> ARaidGameMode::GetSortedBossDamageContribut
 	return Contributions;
 }
 
+bool ARaidGameMode::SaveDroneReportDataForServer(ARaidPlayerController* RaidPC, const FDroneReportData& ReportData)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	DroneReportDataList.Add(ReportData);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportSaved Player=%s Callsign=%s Grade=%d ReportScore=%.2f StoredCount=%d"),
+		*GetNameSafe(RaidPC),
+		*ReportData.Callsign,
+		static_cast<int32>(ReportData.Grade),
+		ReportData.ReportScore,
+		DroneReportDataList.Num());
+	return true;
+}
+
+const TArray<FDroneReportData>& ARaidGameMode::GetDroneReportDataListForServer() const
+{
+	return DroneReportDataList;
+}
+
+void ARaidGameMode::ClearDroneReportDataListForServer(FName Reason)
+{
+	if (!HasAuthority() || DroneReportDataList.IsEmpty())
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportStoreCleared Reason=%s ClearedCount=%d"),
+		Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
+		DroneReportDataList.Num());
+	DroneReportDataList.Reset();
+}
+
 void ARaidGameMode::ResetBossDamageContributionsForServer(FName Reason)
 {
 	if (!HasAuthority())

@@ -2613,6 +2613,25 @@ bool ARaidPlayerController::TryCreateDroneReportForServer(EDroneReportTrigger Tr
 	LastDroneReportData = FDroneReportRules::BuildReportData(CombatRecord, bBossDefeated, ResolveDroneReportConfigForServer());
 	bDroneReportGenerated = true;
 
+	// REPORT-05: 생성 즉시 서버 목록에 보관한다. 이전에는 `LastDroneReportData` 1건만 남아
+	// 레이드 종료 뒤 결과를 조회·집계할 수단이 없었다.
+	if (UWorld* ReportWorld = GetWorld())
+	{
+		ARaidGameMode* ReportGameMode = ReportWorld->GetAuthGameMode<ARaidGameMode>();
+		if (!ReportGameMode)
+		{
+			for (TActorIterator<ARaidGameMode> It(ReportWorld); It; ++It)
+			{
+				ReportGameMode = *It;
+				break;
+			}
+		}
+		if (ReportGameMode)
+		{
+			ReportGameMode->SaveDroneReportDataForServer(this, LastDroneReportData);
+		}
+	}
+
 	const bool bBossSlayer = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::BossSlayer);
 	const bool bHighDPS = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::HighDPS);
 	const bool bNoDamage = ReportHasBonus(LastDroneReportData, EDroneReportBonusType::NoDamage);
