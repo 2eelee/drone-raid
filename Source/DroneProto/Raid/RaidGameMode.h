@@ -39,6 +39,9 @@ public:
 	void ReturnAllEquippedPartsForRaidEnd(FName Reason);
 
 	void HandleBossDefeatedForServer();
+
+	// ENTRY-15: 입장 도중 끊긴 연결이 붙잡고 있던 예약을 반납하고 반납 건수를 돌려준다.
+	int32 ReleaseAbandonedRaidReservationsForServer(FName Reason);
 	void StartRaidTimeLimitTimerForServer();
 	void ClearRaidTimeLimitTimerForServer(FName Reason);
 	bool IsRaidTimeLimitTimerActiveForServer() const;
@@ -98,6 +101,7 @@ private:
 	TObjectPtr<URaidServerAdmissionService> AdmissionService;
 
 	bool bAdmissionRequired = false;
+	FDelegateHandle PendingConnectionLostDelegateHandle;
 
 	FTimerHandle RaidTimeLimitTimerHandle;
 	bool bRaidTimeLimitExpiredForServer = false;
@@ -110,6 +114,8 @@ private:
 
 	bool EnsureDronePartReturnManagerForServer();
 	void ValidateRaidAdmission(const FString& Options, FString& OutErrorMessage);
+	void HandlePendingConnectionLostForServer(const FUniqueNetIdRepl& ConnectionUniqueId);
+	void CollectLiveReservationTokensForServer(TSet<FString>& OutTokens) const;
 	void HandleRaidTimeLimitExpiredForServer();
 	void HandleRaidTimerWatchdogTickForServer();
 	void NotifyBossPatternPopulationAfterLogoutForServer();

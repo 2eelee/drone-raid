@@ -25,11 +25,13 @@ public:
 	bool BindClaimedToken(APlayerController* PlayerController, const FString& Token);
 	bool CommitForPlayer(APlayerController* PlayerController);
 	bool ReleasePlayer(AController* Controller);
+	int32 ReleaseAbandonedClaims(const TSet<FString>& LiveReservationTokens);
 	int32 GetActivePlayers() const;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	void InitializeForTest(const FString& InSlotId);
 	bool IssueReservationForTest(double NowSeconds, FString& OutToken);
+	bool TryCommitClaimedForTest(const FString& Token);
 #endif
 
 private:

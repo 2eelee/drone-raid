@@ -13,6 +13,9 @@
 #include "RaidPlayerState.h"
 #include "RaidServerAdmissionService.h"
 #include "Kismet/GameplayStatics.h"
+#include "Engine/NetConnection.h"
+#include "Engine/NetDriver.h"
+#include "GameDelegates.h"
 #include "GameFramework/PlayerStart.h"
 #include "GameFramework/PlayerState.h"
 #include "Engine/World.h"
@@ -136,6 +139,15 @@ void ARaidGameMode::BeginPlay()
 				ReservationPort,
 				*GameEndpoint);
 		}
+
+		if (AdmissionService)
+		{
+			// 입장 도중 끊긴 연결은 PlayerController가 없어 Logout이 불리지 않는다.
+			// 엔진이 그 구간의 연결 상실을 알려 주는 유일한 경로가 이 델리게이트다(ENTRY-15).
+			PendingConnectionLostDelegateHandle = FGameDelegates::Get().GetPendingConnectionLostDelegate().AddUObject(
+				this,
+				&ARaidGameMode::HandlePendingConnectionLostForServer);
+		}
 	}
 
 	ARaidGameState* GS = GetGameState<ARaidGameState>();
@@ -244,6 +256,11 @@ ARaidBoss* ARaidGameMode::EnsureRaidBossForServer()
 
 void ARaidGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (PendingConnectionLostDelegateHandle.IsValid())
+	{
+		FGameDelegates::Get().GetPendingConnectionLostDelegate().Remove(PendingConnectionLostDelegateHandle);
+		PendingConnectionLostDelegateHandle.Reset();
+	}
 	if (AdmissionService)
 	{
 		AdmissionService->Shutdown();
@@ -282,6 +299,64 @@ void ARaidGameMode::ValidateRaidAdmission(const FString& Options, FString& OutEr
 	const FString Slot = UGameplayStatics::ParseOption(Options, TEXT("RaidSlot"));
 	const FString Token = UGameplayStatics::ParseOption(Options, TEXT("RaidReservation"));
 	AdmissionService->TryClaim(Slot, Token, FPlatformTime::Seconds(), OutErrorMessage);
+}
+
+void ARaidGameMode::HandlePendingConnectionLostForServer(const FUniqueNetIdRepl& ConnectionUniqueId)
+{
+	// 엔진은 어떤 연결이 사라졌는지 UniqueId로만 알려 주는데 Dedicated Server 구성에 따라 이 값이
+	// 유효하지 않을 수 있어 식별자로 쓰지 않는다. 대신 살아 있는 연결이 들고 있는 토큰과 대조해
+	// 주인이 사라진 예약을 찾는다. UNetConnection::CleanUp이 이 알림보다 먼저 연결을 드라이버에서
+	// 제거하므로 방금 끊긴 연결은 이미 목록에 없다.
+	ReleaseAbandonedRaidReservationsForServer(FName(TEXT("PendingConnectionLost")));
+}
+
+int32 ARaidGameMode::ReleaseAbandonedRaidReservationsForServer(FName Reason)
+{
+	if (!HasAuthority() || !AdmissionService)
+	{
+		return 0;
+	}
+
+	TSet<FString> LiveReservationTokens;
+	CollectLiveReservationTokensForServer(LiveReservationTokens);
+	const int32 ReleasedCount = AdmissionService->ReleaseAbandonedClaims(LiveReservationTokens);
+	if (ReleasedCount > 0)
+	{
+		// 원문 (5)의 "서버 매칭 취소"에 해당한다. 아직 commit 전이라 CurrentPlayers는 움직이지 않고
+		// 예약 정원만 돌아온다.
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryMatchingCanceled Reason=%s Released=%d LiveConnections=%d CurrentPlayers=%d"),
+			*Reason.ToString(),
+			ReleasedCount,
+			LiveReservationTokens.Num(),
+			AdmissionService->GetActivePlayers());
+	}
+	return ReleasedCount;
+}
+
+void ARaidGameMode::CollectLiveReservationTokensForServer(TSet<FString>& OutTokens) const
+{
+	const UWorld* World = GetWorld();
+	const UNetDriver* NetDriver = World ? World->GetNetDriver() : nullptr;
+	if (!NetDriver)
+	{
+		return;
+	}
+
+	for (const UNetConnection* Connection : NetDriver->ClientConnections)
+	{
+		if (!Connection)
+		{
+			continue;
+		}
+
+		// 클라이언트가 NMT_Login에 실어 보낸 URL이 연결에 그대로 남아 있어, 이 연결이 어떤 예약으로
+		// 들어왔는지는 여기서만 확인할 수 있다.
+		const FString Token = UGameplayStatics::ParseOption(Connection->RequestURL, TEXT("RaidReservation"));
+		if (!Token.IsEmpty())
+		{
+			OutTokens.Add(Token);
+		}
+	}
 }
 
 FString ARaidGameMode::InitNewPlayer(

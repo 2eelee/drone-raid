@@ -4,6 +4,7 @@
 #include "Lobby/RemoteRaidAssignment.h"
 #include "Lobby/RaidSessionSubsystem.h"
 #include "Raid/RaidReservationLedger.h"
+#include "Raid/RaidServerAdmissionService.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidReservationAtomicCapacityExpiryAndReplayTest,
@@ -38,6 +39,60 @@ bool FRaidReservationAtomicCapacityExpiryAndReplayTest::RunTest(const FString& P
 	TestTrue(TEXT("expiring reservation succeeds"), ExpiryLedger.TryReserve(300.0, ExpiringToken));
 	ExpiryLedger.Expire(310.01);
 	TestEqual(TEXT("expired token returns capacity"), ExpiryLedger.GetReservedPlayers(310.01), 0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidReservationEntryDisconnectReleaseTest,
+	"DroneProto.RaidEntry.Reservation.EntryDisconnectReleasesReservation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidReservationEntryDisconnectReleaseTest::RunTest(const FString& Parameters)
+{
+	// ENTRY-15: PreLogin claim과 PostLogin commit 사이는 클라이언트 맵 로드 구간이라
+	// 서버에 PlayerController가 없고 Logout이 불리지 않는다. 그 구간에서 연결이 끊기면
+	// 예약을 명시적으로 반납해야 정원이 새지 않는다.
+	FRaidReservationLedger Ledger(1, 10.0, 120.0);
+	FString Token;
+	TestTrue(TEXT("reservation for the entry window succeeds"), Ledger.TryReserve(100.0, Token));
+	TestTrue(TEXT("entry claim succeeds"), Ledger.TryClaim(Token, 101.0));
+
+	// claim 수명은 pending 수명과 분리돼야 한다. 10초는 맵 로드를 덮지 못해
+	// 정상 입장 중인 플레이어의 예약이 먼저 만료되고 PostLogin commit이 실패한다.
+	TestEqual(TEXT("claimed reservation outlives the pending lifetime"), Ledger.GetReservedPlayers(160.0), 1);
+
+	TestTrue(TEXT("abandoned claim is released"), Ledger.ReleaseReservation(Token));
+	TestEqual(TEXT("release frees the reserved slot"), Ledger.GetReservedPlayers(161.0), 0);
+	TestFalse(TEXT("releasing the same token twice is rejected"), Ledger.ReleaseReservation(Token));
+	TestFalse(TEXT("releasing an unknown token is rejected"), Ledger.ReleaseReservation(TEXT("no-such-token")));
+
+	FString NextToken;
+	TestTrue(TEXT("released capacity accepts the next reservation"), Ledger.TryReserve(162.0, NextToken));
+
+	URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>();
+	TestNotNull(TEXT("admission service is created"), Admission);
+	if (!Admission)
+	{
+		return false;
+	}
+	Admission->InitializeForTest(TEXT("A"));
+
+	const double NowSeconds = 200.0;
+	FString LiveToken;
+	FString LostToken;
+	FString ErrorMessage;
+	TestTrue(TEXT("live reservation is issued"), Admission->IssueReservationForTest(NowSeconds, LiveToken));
+	TestTrue(TEXT("lost reservation is issued"), Admission->IssueReservationForTest(NowSeconds, LostToken));
+	TestTrue(TEXT("live reservation is claimed"), Admission->TryClaim(TEXT("A"), LiveToken, NowSeconds, ErrorMessage));
+	TestTrue(TEXT("lost reservation is claimed"), Admission->TryClaim(TEXT("A"), LostToken, NowSeconds, ErrorMessage));
+
+	// 살아 있는 연결이 들고 있는 토큰은 남기고 나머지만 반납한다.
+	TSet<FString> LiveTokens;
+	LiveTokens.Add(LiveToken);
+	TestEqual(TEXT("only the abandoned claim is released"), Admission->ReleaseAbandonedClaims(LiveTokens), 1);
+	TestEqual(TEXT("sweeping again releases nothing"), Admission->ReleaseAbandonedClaims(LiveTokens), 0);
+	TestTrue(TEXT("surviving claim still commits after the sweep"), Admission->TryCommitClaimedForTest(LiveToken));
 
 	return true;
 }

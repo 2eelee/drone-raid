@@ -13,6 +13,13 @@
 
 namespace
 {
+constexpr int32 RaidReservationMaxPlayers = 16;
+// 예약만 받고 접속하지 않는 클라이언트를 회수하는 시간.
+constexpr double RaidReservationPendingLifetimeSeconds = 10.0;
+// PreLogin 통과 후 클라이언트가 맵을 로드하는 동안 예약을 붙잡아 두는 시간. 연결이 실제로 끊기면
+// ReleaseAbandonedClaims가 즉시 회수하므로 이 값은 알림이 오지 않는 경우의 backstop이다.
+constexpr double RaidReservationClaimedLifetimeSeconds = 120.0;
+
 TUniquePtr<FHttpServerResponse> MakeJsonResponse(
 	EHttpServerResponseCodes Code,
 	const FString& Result,
@@ -55,7 +62,10 @@ bool URaidServerAdmissionService::Initialize(
 	GameMode = InGameMode;
 	SlotId = InSlotId.TrimStartAndEnd();
 	GameEndpoint = InGameEndpoint.TrimStartAndEnd();
-	Ledger = MakeUnique<FRaidReservationLedger>(16, 10.0);
+	Ledger = MakeUnique<FRaidReservationLedger>(
+		RaidReservationMaxPlayers,
+		RaidReservationPendingLifetimeSeconds,
+		RaidReservationClaimedLifetimeSeconds);
 
 	Router = FHttpServerModule::Get().GetHttpRouter(InPort, true);
 	if (!Router.IsValid())
@@ -172,6 +182,47 @@ bool URaidServerAdmissionService::ReleasePlayer(AController* Controller)
 	return Ledger->ReleaseActivePlayer();
 }
 
+int32 URaidServerAdmissionService::ReleaseAbandonedClaims(const TSet<FString>& LiveReservationTokens)
+{
+	// ENTRY-15: claim 상태 예약은 PreLogin을 통과했지만 아직 PostLogin commit 전인 입장 중 연결의 것이다.
+	// 그 구간에는 PlayerController가 없어 Logout이 불리지 않으므로, 살아 있는 연결이 더 이상 들고 있지
+	// 않은 claim은 여기서 반납해야 정원이 회수된다. commit을 마친 플레이어는 원장에서 이미 사라졌으므로
+	// 이 쓸기의 대상이 아니다 — 그쪽 회수는 Logout의 ReleasePlayer가 맡는다.
+	if (!Ledger)
+	{
+		return 0;
+	}
+
+	TArray<FString> ClaimedTokens;
+	Ledger->GetClaimedTokens(ClaimedTokens);
+
+	int32 ReleasedCount = 0;
+	for (const FString& Token : ClaimedTokens)
+	{
+		if (LiveReservationTokens.Contains(Token))
+		{
+			continue;
+		}
+		if (!Ledger->ReleaseReservation(Token))
+		{
+			continue;
+		}
+
+		++ReleasedCount;
+		for (auto It = PlayerTokens.CreateIterator(); It; ++It)
+		{
+			if (It.Value() == Token)
+			{
+				It.RemoveCurrent();
+			}
+		}
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidReservationCanceled Slot=%s Scope=EntryDisconnect CurrentPlayers=%d MaxPlayers=16"),
+			*SlotId,
+			GetActivePlayers());
+	}
+	return ReleasedCount;
+}
+
 int32 URaidServerAdmissionService::GetActivePlayers() const
 {
 	return Ledger ? Ledger->GetActivePlayers() : 0;
@@ -182,12 +233,21 @@ void URaidServerAdmissionService::InitializeForTest(const FString& InSlotId)
 {
 	Shutdown();
 	SlotId = InSlotId;
-	Ledger = MakeUnique<FRaidReservationLedger>(16, 10.0);
+	Ledger = MakeUnique<FRaidReservationLedger>(
+		RaidReservationMaxPlayers,
+		RaidReservationPendingLifetimeSeconds,
+		RaidReservationClaimedLifetimeSeconds);
 }
 
 bool URaidServerAdmissionService::IssueReservationForTest(double NowSeconds, FString& OutToken)
 {
 	return Ledger && Ledger->TryReserve(NowSeconds, OutToken);
+}
+
+
+bool URaidServerAdmissionService::TryCommitClaimedForTest(const FString& Token)
+{
+	return Ledger && Ledger->TryCommitClaimed(Token);
 }
 #endif
 

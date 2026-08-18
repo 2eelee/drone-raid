@@ -5909,6 +5909,57 @@ bool FRaidServerAdmissionLifecycleTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEntryDisconnectCancelsMatchingTest,
+	"DroneProto.RaidEntry.Reservation.EntryDisconnectCancelsMatching",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEntryDisconnectCancelsMatchingTest::RunTest(const FString& Parameters)
+{
+	// ENTRY-15(원문 :272-280): 서버 입장 도중 클라이언트 연결이 종료되면 서버 매칭을 취소한다.
+	// 이 구간에는 PlayerController가 없어 Logout이 불리지 않으므로, 연결 상실 알림을 받은 뒤
+	// 살아 있는 연결이 들고 있지 않은 claim을 쓸어 반납하는 것이 유일한 회수 경로다.
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidEntryDisconnectReleaseWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("entry disconnect game mode is spawned"), GameMode);
+	if (!Context.World || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+	Admission->InitializeForTest(TEXT("A"));
+	GameMode->SetAdmissionServiceForTest(Admission, true);
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	FString Token;
+	FString ErrorMessage;
+	TestTrue(TEXT("entry reservation is issued"), Admission->IssueReservationForTest(NowSeconds, Token));
+	TestTrue(TEXT("entry reservation is claimed at PreLogin"), Admission->TryClaim(TEXT("A"), Token, NowSeconds, ErrorMessage));
+
+	// 합성 월드에는 NetDriver가 없어 살아 있는 연결이 0개다. 입장 중이던 연결이 모두 사라진 상태와 같다.
+	TestEqual(TEXT("connection loss releases the in-flight reservation"),
+		GameMode->ReleaseAbandonedRaidReservationsForServer(FName(TEXT("PendingConnectionLost"))), 1);
+	TestFalse(TEXT("canceled matching cannot be committed later"), Admission->TryCommitClaimedForTest(Token));
+	TestEqual(TEXT("canceled matching leaves no active player"), Admission->GetActivePlayers(), 0);
+	TestEqual(TEXT("repeated notification releases nothing"),
+		GameMode->ReleaseAbandonedRaidReservationsForServer(FName(TEXT("PendingConnectionLost"))), 0);
+
+	// 입장을 마친 플레이어는 연결 상실 알림으로 반납되지 않는다. 그 회수는 Logout이 맡는다.
+	FString AdmittedToken;
+	TestTrue(TEXT("admitted reservation is issued"), Admission->IssueReservationForTest(NowSeconds, AdmittedToken));
+	TestTrue(TEXT("admitted reservation is claimed"), Admission->TryClaim(TEXT("A"), AdmittedToken, NowSeconds, ErrorMessage));
+	TestTrue(TEXT("admitted token binds to controller"), Admission->BindClaimedToken(Context.PC, AdmittedToken));
+	TestTrue(TEXT("admitted token commits"), Admission->CommitForPlayer(Context.PC));
+	TestEqual(TEXT("committed player is not swept by connection loss"),
+		GameMode->ReleaseAbandonedRaidReservationsForServer(FName(TEXT("PendingConnectionLost"))), 0);
+	TestEqual(TEXT("committed player remains active"), Admission->GetActivePlayers(), 1);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidBossStateJoinGateTest,
 	"DroneProto.Q4.RaidBoss.BossStateJoinGate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

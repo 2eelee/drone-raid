@@ -3,9 +3,13 @@
 #include "Misc/Guid.h"
 #include "Misc/ScopeLock.h"
 
-FRaidReservationLedger::FRaidReservationLedger(int32 InMaxPlayers, double InTokenLifetimeSeconds)
+FRaidReservationLedger::FRaidReservationLedger(
+	int32 InMaxPlayers,
+	double InPendingLifetimeSeconds,
+	double InClaimedLifetimeSeconds)
 	: MaxPlayers(FMath::Max(1, InMaxPlayers))
-	, TokenLifetimeSeconds(FMath::Max(0.01, InTokenLifetimeSeconds))
+	, PendingLifetimeSeconds(FMath::Max(0.01, InPendingLifetimeSeconds))
+	, ClaimedLifetimeSeconds(FMath::Max(0.01, InClaimedLifetimeSeconds))
 {
 }
 
@@ -26,7 +30,7 @@ bool FRaidReservationLedger::TryReserve(double NowSeconds, FString& OutToken)
 	while (Records.Contains(OutToken));
 
 	FRaidReservationRecord& Record = Records.Add(OutToken);
-	Record.ExpiresAtSeconds = NowSeconds + TokenLifetimeSeconds;
+	Record.ExpiresAtSeconds = NowSeconds + PendingLifetimeSeconds;
 	return true;
 }
 
@@ -41,7 +45,7 @@ bool FRaidReservationLedger::TryClaim(const FString& Token, double NowSeconds)
 	}
 
 	Record->State = ERaidReservationRecordState::Claimed;
-	Record->ExpiresAtSeconds = NowSeconds + TokenLifetimeSeconds;
+	Record->ExpiresAtSeconds = NowSeconds + ClaimedLifetimeSeconds;
 	return true;
 }
 
@@ -57,6 +61,24 @@ bool FRaidReservationLedger::TryCommitClaimed(const FString& Token)
 	Records.Remove(Token);
 	++ActivePlayers;
 	return true;
+}
+
+bool FRaidReservationLedger::ReleaseReservation(const FString& Token)
+{
+	FScopeLock Lock(&Mutex);
+	return Records.Remove(Token) > 0;
+}
+
+void FRaidReservationLedger::GetClaimedTokens(TArray<FString>& OutTokens) const
+{
+	FScopeLock Lock(&Mutex);
+	for (const TPair<FString, FRaidReservationRecord>& Pair : Records)
+	{
+		if (Pair.Value.State == ERaidReservationRecordState::Claimed)
+		{
+			OutTokens.Add(Pair.Key);
+		}
+	}
 }
 
 bool FRaidReservationLedger::ReleaseActivePlayer()
