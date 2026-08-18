@@ -7,6 +7,7 @@
 
 #include "Drone.h"
 #include "DronePart.h"
+#include "Balance/BalanceSandboxGameMode.h"
 #include "Raid/DronePartInventory.h"
 #include "Raid/DronePartSelectWidget.h"
 #include "Raid/DroneDataTableRows.h"
@@ -8228,6 +8229,150 @@ bool FDroneReportStoreTest::RunTest(const FString& Parameters)
 		GameMode->GetDroneReportDataListForServer().Num(), 0);
 
 	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// Balance Sandbox: 반복 시험의 핵심 계약은 "초기화가 공유 재고를 원래대로 돌려놓는다"이다.
+// 초기화가 부품을 흘리면 몇 번 돌리는 사이에 재고가 말라 밸런스 수치가 아니라 재고 부족을
+// 시험하게 된다. 반환은 새 경로가 아니라 기존 반환 매니저를 그대로 타야 한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxSelectionRestartTest,
+	"DroneProto.BALANCE.Sandbox.RestartReturnsPartsAndRevivesDrone",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxSelectionRestartTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("BalanceSandboxRestartWorld"), ReturnManager);
+	TestNotNull(TEXT("test world is created"), Context.World);
+	TestNotNull(TEXT("inventory actor is spawned"), Context.Inventory);
+	TestNotNull(TEXT("player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("return manager is created"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !Context.Drone || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+
+	const int32 CoreStockAtStart = Context.Inventory->GetCurrentCount(CoreZenith);
+	const int32 PulseStockAtStart = Context.Inventory->GetCurrentCount(PulseLaser);
+
+	TestTrue(TEXT("the sandbox run consumes a core"), Context.Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("the sandbox run consumes a weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("the sandbox run reaches battle"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("the shared stock is drawn down during the run"),
+		Context.Inventory->GetCurrentCount(CoreZenith), CoreStockAtStart - 1);
+
+	// 살아 있는 드론으로 초기화한다. 죽은 뒤에 초기화하면 사망 반환(RETURN-05)이 이미
+	// 부품을 되돌려 놓아 초기화 자신의 반환 경로가 가려진다.
+	TestTrue(TEXT("the selection phase restarts"),
+		Context.PC->RestartSelectionPhaseForServer(FName(TEXT("BalanceSandboxTest"))));
+
+	// 계약 1 — 공유 재고가 시작값으로 돌아온다.
+	TestEqual(TEXT("restart returns the core to the shared stock"),
+		Context.Inventory->GetCurrentCount(CoreZenith), CoreStockAtStart);
+	TestEqual(TEXT("restart returns the weapon to the shared stock"),
+		Context.Inventory->GetCurrentCount(PulseLaser), PulseStockAtStart);
+
+	// 계약 2 — 다음 시험을 시작할 수 있는 상태로 되돌아온다.
+	TestFalse(TEXT("restart leaves the drone alive"), Context.Drone->IsDead());
+	TestEqual(TEXT("restart restores the drone to full health"),
+		Context.Drone->GetHealth(), Context.Drone->GetMaxHealth());
+	TestEqual(TEXT("restart returns the player to the selection phase"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::Selecting);
+
+	// 계약 3 — 슬롯이 비어 다음 조합을 새로 고를 수 있다.
+	TestEqual(TEXT("restart clears the selected core slot"),
+		Context.PC->GetSelectedPartIDBySlot(EPartSlot::Core), FName(NAME_None));
+	TestEqual(TEXT("restart clears the equipped core slot"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::Core), FName(NAME_None));
+	TestEqual(TEXT("restart clears the drone internal core slot"),
+		Context.Drone->GetEquippedCorePartIDForTest(), FName(NAME_None));
+
+	// 계약 4 — 리포트 1회 제한이 풀려 다음 시험에서 다시 만들 수 있다.
+	TestFalse(TEXT("restart clears the one-report-per-player lock"),
+		Context.PC->HasDroneReportGeneratedForTest());
+
+	// 같은 부품으로 곧바로 다시 시험할 수 있어야 반복이 성립한다.
+	TestTrue(TEXT("the returned core can be consumed again"), Context.Inventory->TryConsumePart(CoreZenith));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("the next sandbox run reaches battle again"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::InBattle);
+
+	// 두 번째 시험은 사망으로 끝낸다. Ready가 사망한 Pawn을 거부하므로(DeadPawn) 초기화가
+	// 사망을 풀지 못하면 그 다음 시험을 시작할 수 없다.
+	Context.Drone->ApplyDamageForServer(100000, FName(TEXT("BalanceSandboxTest")));
+	TestTrue(TEXT("the drone is dead after the second run"), Context.Drone->IsDead());
+
+	TestTrue(TEXT("the selection phase restarts after death"),
+		Context.PC->RestartSelectionPhaseForServer(FName(TEXT("BalanceSandboxTest"))));
+	TestFalse(TEXT("restart revives the dead drone"), Context.Drone->IsDead());
+
+	// 사망 반환(RETURN-05)이 이미 되돌린 부품을 초기화가 한 번 더 되돌리면 안 된다.
+	TestEqual(TEXT("restart after death does not double-return the core"),
+		Context.Inventory->GetCurrentCount(CoreZenith), CoreStockAtStart);
+
+	TestTrue(TEXT("a third sandbox run can start after death"),
+		Context.Inventory->TryConsumePart(CoreZenith));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("the third sandbox run reaches battle"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::InBattle);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// Balance Sandbox: 별칭은 기획자가 콘솔에서 쓰는 유일한 입력 표면이라 실제 PartID와 어긋나면
+// 조용히 다른 부품을 시험하게 된다. 별칭이 아닌 입력은 그대로 통과시켜 기존 선택 경로가
+// 판정하게 둔다(STOCK-06).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxPartAliasTest,
+	"DroneProto.BALANCE.Sandbox.PartAliasResolvesToRealPartID",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxPartAliasTest::RunTest(const FString& Parameters)
+{
+	FName Resolved = NAME_None;
+
+	TestTrue(TEXT("zenith alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("zenith"), Resolved));
+	TestEqual(TEXT("zenith alias maps to the core part"), Resolved, ADronePartInventory::GetCoreZenithPartID());
+
+	TestTrue(TEXT("booster alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("Booster"), Resolved));
+	TestEqual(TEXT("booster alias is case insensitive"), Resolved, ADronePartInventory::GetCoreBoosterPartID());
+
+	TestTrue(TEXT("drain alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT(" drain "), Resolved));
+	TestEqual(TEXT("drain alias ignores surrounding spaces"), Resolved, ADronePartInventory::GetCoreDrainPartID());
+
+	TestTrue(TEXT("pulse alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("pulse"), Resolved));
+	TestEqual(TEXT("pulse alias maps to the weapon part"), Resolved, ADronePartInventory::GetPulseLaserPartID());
+
+	TestTrue(TEXT("fracture alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("fracture"), Resolved));
+	TestEqual(TEXT("fracture alias maps to the weapon part"), Resolved, ADronePartInventory::GetFractureBurstPartID());
+
+	TestTrue(TEXT("vector alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("vector"), Resolved));
+	TestEqual(TEXT("vector alias maps to the weapon part"), Resolved, ADronePartInventory::GetVectorCannonPartID());
+
+	TestTrue(TEXT("none alias resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("none"), Resolved));
+	TestEqual(TEXT("none alias means an empty slot"), Resolved, FName(NAME_None));
+
+	TestTrue(TEXT("an empty string resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(FString(), Resolved));
+	TestEqual(TEXT("an empty string means an empty slot"), Resolved, FName(NAME_None));
+
+	// 별칭 목록에 없는 입력은 실제 PartID로 넘긴다 — 존재 여부 판정은 기존 선택 경로 소관이다.
+	TestTrue(TEXT("an unknown token resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("WEAPON_001"), Resolved));
+	TestEqual(TEXT("an unknown token passes through as a PartID"), Resolved, FName(TEXT("WEAPON_001")));
+
 	return true;
 }
 

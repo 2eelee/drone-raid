@@ -857,6 +857,32 @@ void ADrone::ClearEquippedLoadoutForServer(FName Reason)
 		Reason.IsNone() ? TEXT("Cleanup") : *Reason.ToString());
 }
 
+void ADrone::ResetForSelectionPhaseForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] ResetForSelectionPhaseForServer rejected: server authority required"));
+		return;
+	}
+
+	ClearEquippedLoadoutForServer(Reason.IsNone() ? FName(TEXT("SelectionReset")) : Reason);
+
+	bIsDead = false;
+	ResetCombatRuntimeStateForReason(Reason.IsNone() ? FName(TEXT("SelectionReset")) : Reason);
+	// RecalculateStats는 InBattle이면 스스로 거부한다(풀피 회복 버그 차단). 호출자가 선택 단계로
+	// 되돌린 뒤에 부르므로 여기서는 통과하고 Health가 MaxHealth로 복구된다.
+	RecalculateStats();
+	RefreshMoveSpeedForServer();
+	ForceNetUpdate();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] DroneSelectionReset Drone=%s Reason=%s Health=%.0f MaxHealth=%d Dead=%s"),
+		*GetName(),
+		Reason.IsNone() ? TEXT("SelectionReset") : *Reason.ToString(),
+		Health,
+		MaxHealth,
+		bIsDead ? TEXT("true") : TEXT("false"));
+}
+
 FDroneCombatRecord ADrone::GetCombatRecordForServer() const
 {
 	if (!HasAuthority())

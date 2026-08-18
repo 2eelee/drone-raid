@@ -734,6 +734,49 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 	Client_NotifyPartSelectionResult(Slot, NewPartID, true, PreviousPartID.IsNone() ? TEXT("Selected") : TEXT("Replaced"));
 }
 
+bool ARaidPlayerController::RestartSelectionPhaseForServer(FName Reason)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] RestartSelectionPhaseForServer rejected: server authority required"));
+		return false;
+	}
+
+	const FName ResolvedReason = Reason.IsNone() ? FName(TEXT("SelectionRestart")) : Reason;
+
+	// 순서가 중요하다. 반환을 먼저 해야 슬롯이 비고, 슬롯이 빈 뒤에 상태를 되돌려야
+	// 다음 Ready가 빈 선택에서 다시 시작한다. 반환은 기존 매니저 경로를 그대로 탄다.
+	ReturnEquippedPartsForServer(EDronePartReturnReason::RaidEnd);
+	ReturnSelectedPartsForServer(EDronePartReturnReason::RaidEnd);
+
+	StopSelectionTimerForServer(ResolvedReason.ToString(), false);
+	SetPlayerSelectionStateForServer(EPlayerSelectionState::Selecting);
+
+	// 드론 복구는 상태를 선택 단계로 되돌린 뒤에 해야 한다 — RecalculateStats가 InBattle이면
+	// 스스로 거부하기 때문이다.
+	if (ADrone* ControlledDrone = Cast<ADrone>(GetPawn()))
+	{
+		ControlledDrone->ResetForSelectionPhaseForServer(ResolvedReason);
+	}
+
+	ClearBossTargetForServer(ResolvedReason);
+
+	bDroneReportGenerated = false;
+	LastDroneReportData = FDroneReportData();
+
+	StartSelectionTimerForServer();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SelectionRestart PC=%s Reason=%s SelectionState=%s Core=%s Left=%s Right=%s"),
+		*BuildControllerLogString(this),
+		*ResolvedReason.ToString(),
+		ToPlayerSelectionStateLogString(PlayerSelectionState),
+		*SelectedCorePartID.ToString(),
+		*SelectedLeftWeaponPartID.ToString(),
+		*SelectedRightWeaponPartID.ToString());
+
+	return true;
+}
+
 void ARaidPlayerController::Server_RequestCancelPart_Implementation(EPartSlot Slot)
 {
 	if (!HasAuthority())

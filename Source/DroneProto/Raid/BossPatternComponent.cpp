@@ -532,6 +532,27 @@ void UBossPatternComponent::DestroyActivePatternActorForServer()
 	ActiveTelemetryPatternStartTime = 0.0f;
 }
 
+void UBossPatternComponent::SetNextPatternForServer(EBossPatternKind NextPatternKind, FName Reason)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Client] SetNextPatternForServer rejected: server authority required"));
+		return;
+	}
+
+	if (NextPatternKind == EBossPatternKind::None)
+	{
+		return;
+	}
+
+	const EBossPatternKind PreviousNextPattern = NextPattern;
+	NextPattern = NextPatternKind;
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern NextPatternOverride Previous=%s New=%s Reason=%s"),
+		ToPatternName(PreviousNextPattern),
+		ToPatternName(NextPattern),
+		Reason.IsNone() ? TEXT("Unspecified") : *Reason.ToString());
+}
+
 void UBossPatternComponent::ClearHitLockForServer(FString PlayerKey)
 {
 	HitLockTimerHandles.Remove(PlayerKey);

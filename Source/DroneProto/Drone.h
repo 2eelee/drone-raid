@@ -85,6 +85,12 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
 	void ClearEquippedLoadoutForServer(FName Reason);
 
+	// 드론을 전투 이전 상태로 되돌린다 — 장착 해제, 사망 해제, HP 복구, 전투 기록 초기화.
+	// Ready가 사망한 Pawn을 거부하므로(DeadPawn) 재시험을 위해서는 사망 해제가 선행돼야 한다.
+	// 반환은 이 함수가 하지 않는다. 공유 재고는 기존 반환 경로만 건드린다.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
+	void ResetForSelectionPhaseForServer(FName Reason);
+
 	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
 	void RequestAttackBoss();
 

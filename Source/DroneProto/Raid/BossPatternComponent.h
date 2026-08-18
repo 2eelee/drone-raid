@@ -24,6 +24,10 @@ public:
 	void NotifyPopulationChangedForServer(FName Reason);
 	bool CopyResolvedConfig(FBossPatternResolvedConfig& OutConfig) const;
 
+	// 다음에 실행할 패턴을 지정한다. 루프 순서(PATTERN-01)를 바꾸지 않고 시작점만 옮기며,
+	// 밸런스 반복 시험에서 특정 패턴으로 바로 가기 위한 진입점이다.
+	void SetNextPatternForServer(EBossPatternKind NextPatternKind, FName Reason);
+
 #if WITH_DEV_AUTOMATION_TESTS
 	EBossPatternServerState GetServerStateForTest() const;
 	EBossPatternKind GetCurrentPatternForTest() const;

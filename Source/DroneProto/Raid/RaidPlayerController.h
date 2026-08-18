@@ -203,6 +203,13 @@ public:
 	void SetEquippedPartIDForSlotForServer(EPartSlot Slot, FName PartID);
 	bool ReturnSelectedPartsForServer(EDronePartReturnReason Reason);
 	bool ReturnEquippedPartsForServer(EDronePartReturnReason Reason);
+
+	// 이 컨트롤러를 선택 단계로 되돌린다 — 보유 부품을 기존 반환 경로로 되돌리고, 드론을
+	// 전투 이전 상태로 복구하고, 리포트 1회 제한을 풀고, 선택 타이머를 다시 건다.
+	// 재고 변경은 전부 기존 반환 매니저를 그대로 탄다. 밸런스 반복 시험용 진입점이며
+	// 프로덕션 입장·전투 경로에서는 호출하지 않는다.
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid")
+	bool RestartSelectionPhaseForServer(FName Reason);
 	bool ReturnSingleSelectedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	bool ReturnSingleEquippedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	void FinalizeRaidEndForServer(FName Reason);
