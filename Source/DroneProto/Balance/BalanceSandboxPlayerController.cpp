@@ -49,7 +49,7 @@ void ABalanceSandboxPlayerController::BalancePattern(FString PatternAlias)
 {
 	if (ABalanceSandboxGameMode* SandboxGameMode = GetSandboxGameMode())
 	{
-		SandboxGameMode->SetSandboxNextPatternForServer(PatternAlias);
+		SandboxGameMode->RunSandboxPatternForServer(PatternAlias);
 	}
 }
 

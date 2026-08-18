@@ -857,6 +857,36 @@ void ADrone::ClearEquippedLoadoutForServer(FName Reason)
 		Reason.IsNone() ? TEXT("Cleanup") : *Reason.ToString());
 }
 
+FDroneCoreCalculationResult ADrone::GetCoreCalculationSnapshot() const
+{
+	FDroneCoreCalculationInput Input;
+	Input.CoreType = ResolveCoreTypeForServer(EquippedCorePartID);
+	Input.CurrentHP = Health;
+	Input.MaxHP = static_cast<float>(MaxHealth);
+	Input.AccumulatedMoveDistanceMeters = BoosterAccumulatedMoveDistanceMeters;
+
+	// 표가 이미 해석돼 있으면 그 값을 쓴다. 아직이면 canonical 기본값으로 계산한다 —
+	// 여기서 표를 해석하지 않는 이유는 조회가 상태를 만들면 안 되기 때문이다.
+	return bDroneCombatConfigResolved
+		? FDroneCombatRules::CalculateCoreBonus(Input, CachedDroneCombatConfig)
+		: FDroneCombatRules::CalculateCoreBonus(Input);
+}
+
+int32 ADrone::GetPulseAttackCount(bool bIsLeftWeapon) const
+{
+	return bIsLeftWeapon ? LeftPulseAttackCount : RightPulseAttackCount;
+}
+
+float ADrone::GetVectorAccumulatedMoveDistance() const
+{
+	return VectorAccumulatedMoveDistanceMeters;
+}
+
+float ADrone::GetBoosterAccumulatedMoveDistance() const
+{
+	return BoosterAccumulatedMoveDistanceMeters;
+}
+
 void ADrone::ResetForSelectionPhaseForServer(FName Reason)
 {
 	if (!HasAuthority())
@@ -2273,6 +2303,18 @@ void ADrone::HandleAttackBossForServer()
 	{
 		ResetVectorMoveDistanceForServer(FName(TEXT("VectorAttack")));
 	}
+
+	// 밸런스 상태 패널이 읽을 분해값을 남긴다. 이미 계산된 값을 옮겨 담기만 하며
+	// 새로 계산하지 않는다 — 아래 AttackCalc 로그가 싣는 값과 같은 것들이다.
+	LastAttackBreakdown.bHasAttacked = true;
+	LastAttackBreakdown.LeftWeaponDamage = LeftWeaponDamage;
+	LastAttackBreakdown.RightWeaponDamage = RightWeaponDamage;
+	LastAttackBreakdown.FinalDamage = FinalDamage;
+	LastAttackBreakdown.DamageDealt = DamageDealt;
+	LastAttackBreakdown.HealAmount = HealAmount;
+	LastAttackBreakdown.CoreAttackModifier = CoreResult.CoreAttackModifier;
+	LastAttackBreakdown.CoreBonusAttackModifier = CoreResult.CoreBonusAttackModifier;
+
 	EmitAttackResolvedForServer(TEXT("Hit"), NAME_None, FinalDamage, DamageDealt, HealAmount, BossHPBeforeAttack, Boss->GetCurrentHP());
 
 	UE_LOG(LogTemp, Log, TEXT("[Server] Drone ZAttack: Drone=%s CorePartID=%s LeftWeaponPartID=%s RightWeaponPartID=%s LeftDamage=%.2f RightDamage=%.2f TotalWeaponDamage=%.2f CoreAttackModifier=%.2f CoreBonusAttackModifier=%.2f FinalDamage=%.2f BossHP=%.2f/%.2f"),
@@ -4171,6 +4213,9 @@ void ADrone::RefreshMoveSpeedForServer()
 
 void ADrone::ResetCombatRuntimeStateForReason(FName Reason)
 {
+	// 밸런스 상태 패널이 읽는 마지막 공격 기록도 함께 비운다. 남겨 두면 초기화 뒤에
+	// 이전 시험의 피해값이 그대로 보여 새 조합의 결과로 오독된다.
+	LastAttackBreakdown = FDroneLastAttackBreakdown();
 	LeftPulseAttackCount = 0;
 	RightPulseAttackCount = 0;
 	CancelDodgeForServer(Reason);

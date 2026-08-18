@@ -734,6 +734,13 @@ void ARaidPlayerController::Server_RequestSelectPart_Implementation(EPartSlot Sl
 	Client_NotifyPartSelectionResult(Slot, NewPartID, true, PreviousPartID.IsNone() ? TEXT("Selected") : TEXT("Replaced"));
 }
 
+bool ARaidPlayerController::AreDroneReportDataTablesLoaded() const
+{
+	return DroneReportBonusDataTable != nullptr
+		&& DroneReportSettingsDataTable != nullptr
+		&& DroneReportGradeDataTable != nullptr;
+}
+
 bool ARaidPlayerController::RestartSelectionPhaseForServer(FName Reason)
 {
 	if (!HasAuthority())

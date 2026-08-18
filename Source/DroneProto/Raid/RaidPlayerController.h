@@ -210,6 +210,10 @@ public:
 	// 프로덕션 입장·전투 경로에서는 호출하지 않는다.
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid")
 	bool RestartSelectionPhaseForServer(FName Reason);
+
+	// DroneReport 밸런스 표 3종이 모두 로드됐는지. 밸런스 상태 패널 조회용이다.
+	UFUNCTION(BlueprintPure, Category = "Raid|Report")
+	bool AreDroneReportDataTablesLoaded() const;
 	bool ReturnSingleSelectedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	bool ReturnSingleEquippedPartForServer(EPartSlot Slot, EDronePartReturnReason Reason);
 	void FinalizeRaidEndForServer(FName Reason);

@@ -879,6 +879,40 @@ void ARaidBoss::FireBossPatternOnceForTest()
 }
 #endif
 
+void ARaidBoss::ApplyVisualProxySize(float VisualWidthMeters, float VisualHeightMeters, FName Reason)
+{
+	constexpr float MetersToCm = 100.0f;
+	// 엔진 기본 구체는 지름 100cm다. 지름 기준으로 나눠야 폭/높이가 그대로 미터가 된다.
+	constexpr float EngineBasicSphereDiameterCm = 100.0f;
+
+	const float SafeWidthMeters = FMath::Max(1.0f, VisualWidthMeters);
+	const float SafeHeightMeters = FMath::Max(1.0f, VisualHeightMeters);
+	const float WidthScale = (SafeWidthMeters * MetersToCm) / EngineBasicSphereDiameterCm;
+	const float HeightScale = (SafeHeightMeters * MetersToCm) / EngineBasicSphereDiameterCm;
+
+	if (PrototypeVisualMesh)
+	{
+		// 폭과 높이가 달라 비균등 스케일이다. 충돌은 원래대로 꺼 둔 채 유지한다 —
+		// 보스 피격은 단일 판정(BOSS-15)이라 시각 크기와 무관하다.
+		PrototypeVisualMesh->SetRelativeScale3D(FVector(WidthScale, WidthScale, HeightScale));
+		PrototypeVisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		PrototypeVisualMesh->SetGenerateOverlapEvents(false);
+	}
+
+	if (PrototypeVisualLabel)
+	{
+		const float HalfHeightCm = (SafeHeightMeters * MetersToCm) * 0.5f;
+		PrototypeVisualLabel->SetRelativeLocation(FVector(0.0f, 0.0f, HalfHeightCm + 120.0f));
+		PrototypeVisualLabel->SetWorldSize(FMath::Clamp(HalfHeightCm * 0.18f, 80.0f, 240.0f));
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossVisualProxy Boss=%s WidthMeters=%.1f HeightMeters=%.1f ApproachLimitMeters=8 Reason=%s"),
+		*GetName(),
+		SafeWidthMeters,
+		SafeHeightMeters,
+		Reason.IsNone() ? TEXT("Unspecified") : *Reason.ToString());
+}
+
 void ARaidBoss::ApplyPrototypeVisualSettings()
 {
 	const float SafeRadiusCm = FMath::Max(50.0f, PrototypeVisualRadiusCm);

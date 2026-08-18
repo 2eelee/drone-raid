@@ -71,6 +71,40 @@ struct FDroneOwnerMoveSync
 
 class ATutorialPlayerController;
 
+/**
+ * 마지막 Z 공격 한 번의 피해 분해값. 밸런스 시험에서 "왜 이 수치가 나왔는지"를 보기 위한
+ * 기록이며, 공격 경로가 이미 계산해 로그로 내보내던 값을 그대로 담는다. 새로 계산하지 않는다.
+ */
+USTRUCT(BlueprintType)
+struct FDroneLastAttackBreakdown
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	bool bHasAttacked = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float LeftWeaponDamage = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float RightWeaponDamage = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float FinalDamage = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float DamageDealt = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float HealAmount = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float CoreAttackModifier = 1.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	float CoreBonusAttackModifier = 1.0f;
+};
+
 UCLASS()
 class DRONEPROTO_API ADrone : public APawn
 {
@@ -90,6 +124,30 @@ public:
 	// 반환은 이 함수가 하지 않는다. 공유 재고는 기존 반환 경로만 건드린다.
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Drone|Loadout")
 	void ResetForSelectionPhaseForServer(FName Reason);
+
+	/** 마지막 공격의 피해 분해값. 밸런스 상태 패널 조회용이며 값은 공격 경로가 채운다. */
+	UFUNCTION(BlueprintPure, Category = "Drone|Combat")
+	const FDroneLastAttackBreakdown& GetLastAttackBreakdown() const { return LastAttackBreakdown; }
+
+	/** 펄스 3타 카운터. 슬롯별로 센다(WEAPON-03). */
+	UFUNCTION(BlueprintPure, Category = "Drone|Combat")
+	int32 GetPulseAttackCount(bool bIsLeftWeapon) const;
+
+	/** 벡터 캐논 보너스에 쓰는 누적 이동 거리(m). 공격마다 0으로 되감긴다(WEAPON-05). */
+	UFUNCTION(BlueprintPure, Category = "Drone|Combat")
+	float GetVectorAccumulatedMoveDistance() const;
+
+	/** 부스터 코어 보정에 쓰는 누적 이동 거리(m). 벡터와 분리돼 있다. */
+	UFUNCTION(BlueprintPure, Category = "Drone|Combat")
+	float GetBoosterAccumulatedMoveDistance() const;
+
+	/** 코어·무기 DataTable 해석 결과. `None`이면 표 값을 쓰는 중이다. */
+	// UENUM이 아니라 순수 C++ enum이라 UFUNCTION으로 노출할 수 없다. 밸런스 패널은 C++에서 읽는다.
+	EDroneCombatDataFallbackReason GetCombatDataFallbackReason() const { return DroneCombatDataFallbackReason; }
+
+	// 현재 상태 기준 코어 계산 결과. 기존 규칙 함수(FDroneCombatRules::CalculateCoreBonus)를
+	// 그대로 쓰고 상태 변경도 로그도 하지 않는다 — 밸런스 패널이 주기적으로 불러도 안전하다.
+	FDroneCoreCalculationResult GetCoreCalculationSnapshot() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Drone|Combat")
 	void RequestAttackBoss();
@@ -287,6 +345,8 @@ private:
 	// ---- Replicated Stats (부품 합산 결과만 복제) ----
 	UPROPERTY(ReplicatedUsing = OnRep_Health)
 	float Health = 100.0f;
+
+	FDroneLastAttackBreakdown LastAttackBreakdown;
 
 	UPROPERTY(Replicated)
 	int32 MaxHealth = 100;

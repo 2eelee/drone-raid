@@ -39,6 +39,21 @@ ABalanceSandboxGameMode::ABalanceSandboxGameMode()
 	PlayerControllerClass = ABalanceSandboxPlayerController::StaticClass();
 }
 
+ARaidBoss* ABalanceSandboxGameMode::EnsureRaidBossForServer()
+{
+	// 스폰·등록은 전부 기존 경로다. 여기서는 확보된 보스에 프록시 크기만 입힌다.
+	ARaidBoss* Boss = Super::EnsureRaidBossForServer();
+	if (Boss)
+	{
+		Boss->ApplyVisualProxySize(
+			BossProxyVisualWidthMeters,
+			BossProxyVisualHeightMeters,
+			FName(TEXT("BalanceSandbox")));
+	}
+
+	return Boss;
+}
+
 bool ABalanceSandboxGameMode::TryResolvePartAlias(const FString& Alias, FName& OutPartID)
 {
 	const FString Trimmed = Alias.TrimStartAndEnd();
@@ -253,6 +268,26 @@ bool ABalanceSandboxGameMode::SetSandboxNextPatternForServer(const FString& Patt
 
 	PatternComponent->SetNextPatternForServer(NextKind, FName(TEXT("BalanceSandbox")));
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SandboxPattern Result=Success Requested=%s"), *PatternAlias);
+	return true;
+}
+
+bool ABalanceSandboxGameMode::RunSandboxPatternForServer(const FString& PatternAlias)
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	if (!SetSandboxNextPatternForServer(PatternAlias))
+	{
+		return false;
+	}
+
+	// 루프가 멈춰 있으면(전투 전, 초기화 직후) 여기서 시작한다. 이미 돌고 있으면 기존 진행을
+	// 끊지 않고 지정한 패턴이 다음 차례에 나온다 — 패턴 순서 계약(PATTERN-01)을 건드리지 않는다.
+	StartBossPatternsForServer();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SandboxPatternRun Result=Success Requested=%s"), *PatternAlias);
 	return true;
 }
 

@@ -8,6 +8,7 @@
 #include "Drone.h"
 #include "DronePart.h"
 #include "Balance/BalanceSandboxGameMode.h"
+#include "Balance/BalanceSandboxWidget.h"
 #include "Raid/DronePartInventory.h"
 #include "Raid/DronePartSelectWidget.h"
 #include "Raid/DroneDataTableRows.h"
@@ -8373,6 +8374,268 @@ bool FBalanceSandboxPartAliasTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("an unknown token resolves"), ABalanceSandboxGameMode::TryResolvePartAlias(TEXT("WEAPON_001"), Resolved));
 	TestEqual(TEXT("an unknown token passes through as a PartID"), Resolved, FName(TEXT("WEAPON_001")));
 
+	return true;
+}
+
+// Balance Sandbox 상태 패널: 패널은 저장된 사본이 아니라 실제 전투 상태를 읽어야 한다.
+// 값이 어긋나면 기획자가 DataTable을 고친 뒤 "왜 이 수치인지"를 잘못된 근거로 판단하게 된다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxStatusGettersTest,
+	"DroneProto.BALANCE.SandboxUI.StatusGettersReadLiveCombatState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxStatusGettersTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("BalanceSandboxStatusWorld"), ReturnManager);
+	TestNotNull(TEXT("test world is created"), Context.World);
+	TestNotNull(TEXT("player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("inventory actor is spawned"), Context.Inventory);
+	if (!Context.World || !Context.PC || !Context.Drone || !Context.Inventory)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName DrainCore = ADronePartInventory::GetCoreDrainPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+
+	// 공격 전에는 마지막 공격 기록이 비어 있어야 한다.
+	TestFalse(TEXT("no attack is recorded before the first shot"),
+		Context.Drone->GetLastAttackBreakdown().bHasAttacked);
+	TestEqual(TEXT("the pulse counter starts empty on the left slot"),
+		Context.Drone->GetPulseAttackCount(true), 0);
+	TestEqual(TEXT("the pulse counter starts empty on the right slot"),
+		Context.Drone->GetPulseAttackCount(false), 0);
+
+	TestTrue(TEXT("the status test consumes a core"), Context.Inventory->TryConsumePart(DrainCore));
+	TestTrue(TEXT("the status test consumes a weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, DrainCore);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	// [PLAYER] — 장착 뒤 HP는 스탯 재계산 결과를 그대로 읽는다.
+	TestEqual(TEXT("the panel reads the drone health"), Context.Drone->GetHealth(), Context.Drone->GetMaxHealth());
+	TestTrue(TEXT("the panel reads a positive move speed"), Context.Drone->GetCurrentMoveSpeed() > 0.0f);
+
+	// 코어 스냅샷은 기존 규칙 함수 결과이며 조회가 상태를 바꾸지 않아야 한다.
+	const FDroneCoreCalculationResult FirstSnapshot = Context.Drone->GetCoreCalculationSnapshot();
+	const FDroneCoreCalculationResult SecondSnapshot = Context.Drone->GetCoreCalculationSnapshot();
+	TestTrue(TEXT("the core snapshot is stable across reads"),
+		FMath::IsNearlyEqual(FirstSnapshot.CoreAttackModifier, SecondSnapshot.CoreAttackModifier));
+	TestTrue(TEXT("the drain core applies its attack modifier"),
+		FirstSnapshot.CoreAttackModifier < 1.0f);
+	TestEqual(TEXT("reading the snapshot does not advance the pulse counter"),
+		Context.Drone->GetPulseAttackCount(true), 0);
+
+	// [STOCK] — 패널은 공유 재고를 그대로 읽는다.
+	TestEqual(TEXT("the panel reads the drawn-down core stock"),
+		Context.Inventory->GetCurrentCount(DrainCore),
+		Context.Inventory->GetMaxCount(DrainCore) - 1);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// Balance Sandbox 상태 패널: 초기화 뒤에도 이전 시험의 누적값이 남으면 새 조합의 결과로 오독된다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxStatusResetTest,
+	"DroneProto.BALANCE.SandboxUI.StatusClearsAfterRestart",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxStatusResetTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("BalanceSandboxStatusResetWorld"), ReturnManager);
+	TestNotNull(TEXT("test world is created"), Context.World);
+	TestNotNull(TEXT("player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("inventory actor is spawned"), Context.Inventory);
+	if (!Context.World || !Context.PC || !Context.Drone || !Context.Inventory)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// 공격이 실제로 일어나야 마지막 공격 기록이 채워진다. 기록을 손으로 채우면 초기화가
+	// 지우는지 검증할 수 없다 — 실제 공격 경로를 태운다.
+	ARaidBoss* Boss = Context.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("boss is spawned"), Boss);
+	if (!Boss || !Context.GameState)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	// 보스 접근 제한 클램프를 피하도록 떨어뜨린다.
+	Boss->SetActorLocation(FVector(-2000.0f, 0.0f, 0.0f));
+	Context.GameState->SetRaidBossForServer(Boss);
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("the reset test consumes a weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	Context.Drone->RequestAttackBoss();
+
+	// 실제 공격이 남긴 상태가 패널이 읽는 값이다.
+	TestTrue(TEXT("the attack is recorded before the restart"),
+		Context.Drone->GetLastAttackBreakdown().bHasAttacked);
+	TestTrue(TEXT("the attack produced final damage"),
+		Context.Drone->GetLastAttackBreakdown().FinalDamage > 0.0f);
+	TestEqual(TEXT("the attack advanced the left pulse counter"),
+		Context.Drone->GetPulseAttackCount(true), 1);
+	TestTrue(TEXT("the attack accumulated boss damage in the record"),
+		Context.Drone->GetCombatRecordForServer().BossDamage > 0.0f);
+
+	TestTrue(TEXT("the selection phase restarts"),
+		Context.PC->RestartSelectionPhaseForServer(FName(TEXT("BalanceSandboxStatusTest"))));
+
+	// 계약 — 초기화 뒤 패널이 읽는 값이 전부 새 상태다.
+	TestFalse(TEXT("restart clears the last attack record"),
+		Context.Drone->GetLastAttackBreakdown().bHasAttacked);
+	TestTrue(TEXT("restart clears the last final damage"),
+		FMath::IsNearlyZero(Context.Drone->GetLastAttackBreakdown().FinalDamage));
+	TestEqual(TEXT("restart clears the left pulse counter"),
+		Context.Drone->GetPulseAttackCount(true), 0);
+	TestEqual(TEXT("restart clears the right pulse counter"),
+		Context.Drone->GetPulseAttackCount(false), 0);
+	TestTrue(TEXT("restart clears the vector move distance"),
+		FMath::IsNearlyZero(Context.Drone->GetVectorAccumulatedMoveDistance()));
+	TestTrue(TEXT("restart clears the booster move distance"),
+		FMath::IsNearlyZero(Context.Drone->GetBoosterAccumulatedMoveDistance()));
+	TestEqual(TEXT("restart clears the equipped core shown in the panel"),
+		Context.Drone->GetEquippedCorePartIDForTest(), FName(NAME_None));
+	TestEqual(TEXT("restart restores the health shown in the panel"),
+		Context.Drone->GetHealth(), Context.Drone->GetMaxHealth());
+	TestEqual(TEXT("restart returns the weapon to the stock shown in the panel"),
+		Context.Inventory->GetCurrentCount(PulseLaser),
+		Context.Inventory->GetMaxCount(PulseLaser));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// Balance Sandbox UI: 콤보 박스 후보가 별칭 해석과 어긋나면 기획자가 고른 것과 다른 부품이
+// 적용된다. UI가 내놓는 모든 후보가 실제 PartID로 해석되는지 고정한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxWidgetOptionsTest,
+	"DroneProto.BALANCE.SandboxUI.OptionsResolveToRealParts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxWidgetOptionsTest::RunTest(const FString& Parameters)
+{
+	const TArray<FString> CoreOptions = UBalanceSandboxWidget::GetCoreOptions();
+	const TArray<FString> WeaponOptions = UBalanceSandboxWidget::GetWeaponOptions();
+
+	TestEqual(TEXT("the core list offers None and three cores"), CoreOptions.Num(), 4);
+	TestEqual(TEXT("the weapon list offers None and three weapons"), WeaponOptions.Num(), 4);
+	TestEqual(TEXT("the core list starts with the empty slot"), CoreOptions[0], FString(TEXT("None")));
+	TestEqual(TEXT("the weapon list starts with the empty slot"), WeaponOptions[0], FString(TEXT("None")));
+
+	// 후보 하나하나가 별칭 해석을 통과해야 UI에서 고른 값이 그대로 서버 경로로 간다.
+	auto VerifyOptionResolves = [this](const TArray<FString>& Options, const TCHAR* ListName)
+	{
+		for (const FString& Option : Options)
+		{
+			FName Resolved = NAME_None;
+			const bool bResolved = ABalanceSandboxGameMode::TryResolvePartAlias(Option, Resolved);
+			TestTrue(FString::Printf(TEXT("%s option '%s' resolves"), ListName, *Option), bResolved);
+
+			if (Option == TEXT("None"))
+			{
+				TestEqual(TEXT("the None option means an empty slot"), Resolved, FName(NAME_None));
+			}
+			else
+			{
+				TestNotEqual(
+					FString::Printf(TEXT("%s option '%s' maps to a real part"), ListName, *Option),
+					Resolved,
+					FName(NAME_None));
+			}
+		}
+	};
+
+	VerifyOptionResolves(CoreOptions, TEXT("core"));
+	VerifyOptionResolves(WeaponOptions, TEXT("weapon"));
+
+	// 코어 후보는 코어 ID로, 무기 후보는 무기 ID로 가야 한다 — 슬롯 타입이 어긋나면 선택이 거부된다.
+	FName ResolvedCore = NAME_None;
+	ABalanceSandboxGameMode::TryResolvePartAlias(CoreOptions[1], ResolvedCore);
+	TestEqual(TEXT("the first core option is Zenith"), ResolvedCore, ADronePartInventory::GetCoreZenithPartID());
+
+	FName ResolvedWeapon = NAME_None;
+	ABalanceSandboxGameMode::TryResolvePartAlias(WeaponOptions[1], ResolvedWeapon);
+	TestEqual(TEXT("the first weapon option is Pulse"), ResolvedWeapon, ADronePartInventory::GetPulseLaserPartID());
+
+	return true;
+}
+
+// Balance Sandbox 보스 프록시: 기획 크기(폭 18m / 높이 16m)를 눈으로 가늠하기 위한 시각 스케일이며,
+// 접근 제한 8m와 패턴 시작 반경은 이 값과 무관하게 유지돼야 한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxBossProxyTest,
+	"DroneProto.BALANCE.Sandbox.BossProxyScalesVisualOnly",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxBossProxyTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BalanceSandboxBossProxyWorld")));
+	TestNotNull(TEXT("test world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidBoss* Boss = World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("boss is spawned"), Boss);
+	if (!Boss)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	const float MaxHPBeforeProxy = Boss->GetMaxHP();
+	const float CurrentHPBeforeProxy = Boss->GetCurrentHP();
+
+	Boss->ApplyVisualProxySize(
+		ABalanceSandboxGameMode::BossProxyVisualWidthMeters,
+		ABalanceSandboxGameMode::BossProxyVisualHeightMeters,
+		FName(TEXT("BalanceSandboxTest")));
+
+	UStaticMeshComponent* VisualMesh = Boss->FindComponentByClass<UStaticMeshComponent>();
+	TestNotNull(TEXT("the boss has a visual mesh component"), VisualMesh);
+	if (VisualMesh)
+	{
+		// 엔진 기본 구체는 지름 100cm다. 폭 18m면 XY 스케일 18, 높이 16m면 Z 스케일 16이다.
+		const FVector ProxyScale = VisualMesh->GetRelativeScale3D();
+		TestTrue(TEXT("the proxy width matches the 18m spec"), FMath::IsNearlyEqual(ProxyScale.X, 18.0f, 0.01f));
+		TestTrue(TEXT("the proxy depth matches the width"), FMath::IsNearlyEqual(ProxyScale.Y, 18.0f, 0.01f));
+		TestTrue(TEXT("the proxy height matches the 16m spec"), FMath::IsNearlyEqual(ProxyScale.Z, 16.0f, 0.01f));
+
+		// 시각 프록시는 판정을 만들지 않는다. 보스 피격은 단일 판정(BOSS-15)이다.
+		TestEqual(TEXT("the proxy mesh stays collision free"),
+			VisualMesh->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+	}
+
+	// 전투 기준값은 시각 스케일과 무관해야 한다.
+	TestEqual(TEXT("the proxy does not change boss max HP"), Boss->GetMaxHP(), MaxHPBeforeProxy);
+	TestEqual(TEXT("the proxy does not change boss current HP"), Boss->GetCurrentHP(), CurrentHPBeforeProxy);
+	TestTrue(TEXT("the boss stays at the map center"), Boss->GetActorLocation().IsNearlyZero());
+
+	// 드론의 접근 제한은 보스 외형이 아니라 자기 상수를 쓴다 — 프록시가 8m를 건드리지 않는다.
+	ADrone* Drone = World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("drone is spawned"), Drone);
+	if (Drone)
+	{
+		const FVector InsideBossPosition(200.0f, 0.0f, 0.0f);
+		const FVector ClampedPosition = Drone->ClampPositionOutsideBossCenterForServer(InsideBossPosition);
+		const float ClampedDistanceMeters = FVector::Dist2D(ClampedPosition, FVector::ZeroVector) * 0.01f;
+		TestTrue(TEXT("the approach limit stays at 8m under the 18m proxy"),
+			FMath::IsNearlyEqual(ClampedDistanceMeters, 8.0f, 0.05f));
+	}
+
+	World->DestroyWorld(false);
 	return true;
 }
 

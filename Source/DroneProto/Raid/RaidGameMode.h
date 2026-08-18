@@ -50,7 +50,7 @@ public:
 	// 어긋나고 빈 레이드가 무기한 유지된다. 불일치를 감지해 **타이머만** 재시작한다 —
 	// 보스 패턴의 인원 0 대기 상태는 건드리지 않는다.
 	bool DetectAndRecoverRaidTimerMismatchForServer();
-	ARaidBoss* EnsureRaidBossForServer();
+	virtual ARaidBoss* EnsureRaidBossForServer();
 
 	// Battle 전이 시 모든 보스의 패턴 타이머 시작/정지 오케스트레이션. 개별 타이머는 Boss가 소유한다.
 	void StartBossPatternsForServer();

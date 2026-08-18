@@ -24,6 +24,9 @@ class DRONEPROTO_API ABalanceSandboxGameMode : public ARaidGameMode
 public:
 	ABalanceSandboxGameMode();
 
+	// 보스를 확보한 뒤 임시 프록시 크기를 입힌다. 스폰 경로 자체는 그대로 두고 시각만 얹는다.
+	virtual ARaidBoss* EnsureRaidBossForServer() override;
+
 	/** 코어/좌/우를 한 번에 지정한다. 슬롯마다 기존 선택 RPC를 그대로 타므로 재고 차감·교체 계약이 유지된다. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
 	bool ApplySandboxLoadoutForServer(const FString& CoreAlias, const FString& LeftWeaponAlias, const FString& RightWeaponAlias);
@@ -40,6 +43,10 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
 	bool SetSandboxNextPatternForServer(const FString& PatternAlias);
 
+	/** 지정한 패턴을 바로 돌린다 — 다음 패턴을 정하고 루프가 멈춰 있으면 시작한다. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
+	bool RunSandboxPatternForServer(const FString& PatternAlias);
+
 	/** 보스에게 실제 피해 경로로 피해를 넣는다. 기여도 집계와 사망 처리가 그대로 동작한다. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
 	bool DamageSandboxBossForServer(float DamageAmount);
@@ -50,6 +57,10 @@ public:
 
 	/** 별칭(zenith/booster/drain/pulse/fracture/vector) 또는 실제 PartID를 해석한다. `none`은 빈 슬롯이다. */
 	static bool TryResolvePartAlias(const FString& Alias, FName& OutPartID);
+
+	/** 기획 원문 기준 임시 프록시 크기(폭 18m / 높이 16m). 접근 제한 8m와는 무관한 시각값이다. */
+	static constexpr float BossProxyVisualWidthMeters = 18.0f;
+	static constexpr float BossProxyVisualHeightMeters = 16.0f;
 
 	/** 첫 번째 로컬 `ARaidPlayerController`를 돌려준다. 샌드박스는 단일 플레이어 기준이다. */
 	class ARaidPlayerController* GetSandboxPlayerControllerForServer() const;

@@ -52,6 +52,13 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Raid|Boss|Stun")
 	void SetStunnedForServer(bool bInStunned, FName Reason);
 
+	// 최종 보스 에셋이 없는 동안 기획 크기(보스 원문 `:303-307` 높이 16m / 폭 18m)를 눈으로
+	// 가늠하기 위한 임시 프록시 크기다. 시각 컴포넌트의 스케일만 바꾸며 접근 제한(8m),
+	// 패턴 시작 반경, 피격·타겟 기준점은 하나도 건드리지 않는다.
+	// 컴포넌트 스케일은 복제되지 않으므로 단일 프로세스(PIE/Standalone) 표현용이다.
+	UFUNCTION(BlueprintCallable, Category = "Raid|Boss|Visual")
+	void ApplyVisualProxySize(float VisualWidthMeters, float VisualHeightMeters, FName Reason);
+
 	UFUNCTION(BlueprintPure, Category = "Raid|Boss|Stun")
 	bool IsStunned() const;
 

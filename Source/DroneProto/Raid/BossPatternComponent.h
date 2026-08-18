@@ -28,6 +28,10 @@ public:
 	// 밸런스 반복 시험에서 특정 패턴으로 바로 가기 위한 진입점이다.
 	void SetNextPatternForServer(EBossPatternKind NextPatternKind, FName Reason);
 
+	// 밸런스 상태 패널 조회용. 상태를 바꾸지 않는다.
+	EBossPatternKind GetCurrentPattern() const { return CurrentPattern; }
+	bool IsPatternDataTableInUse() const { return bResolvedConfigReady; }
+
 #if WITH_DEV_AUTOMATION_TESTS
 	EBossPatternServerState GetServerStateForTest() const;
 	EBossPatternKind GetCurrentPatternForTest() const;
