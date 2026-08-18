@@ -109,6 +109,18 @@ bool UBossPatternComponent::StartForServer()
 		return false;
 	}
 
+	// 원문 예외 4.1(PATTERN-11): BossID 또는 Boss 객체가 Null이면 패턴 요청을 거부하고
+	// 레이드 상태를 확인한다. 지금까지는 owner cast 실패가 조용히 통과해, 보스가 아닌 액터에
+	// 붙은 컴포넌트도 패턴을 시작할 수 있었다.
+	if (!Cast<ARaidBoss>(Owner))
+	{
+		const ARaidGameState* RaidGameState = World->GetGameState<ARaidGameState>();
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] BossPattern StartRejected Reason=BossNull Owner=%s RaidState=%d"),
+			*Owner->GetName(),
+			RaidGameState ? static_cast<int32>(RaidGameState->RaidState) : -1);
+		return false;
+	}
+
 	bRunning = true;
 	ActivePlayerCount = CountActivePlayersForServer();
 	if (ActivePlayerCount <= 0)
@@ -172,7 +184,7 @@ bool UBossPatternComponent::TryApplyPatternDamageForServer(ADrone* Target, int32
 	ARaidPlayerController* PlayerController = Target ? Cast<ARaidPlayerController>(Target->GetController()) : nullptr;
 	const ARaidGameState* RaidGameState = GetWorld() ? GetWorld()->GetGameState<ARaidGameState>() : nullptr;
 	if (!Owner || !Owner->HasAuthority() || !bRunning || ServerState != EBossPatternServerState::Active
-		|| !Boss || Boss->IsDefeated() || !Target || !Target->HasAuthority() || DamageAmount <= 0
+		|| !Boss || Boss->IsDefeated() || Boss->GetBossState() != EBossState::Battle || !Target || !Target->HasAuthority() || DamageAmount <= 0
 		|| Target->IsDead() || !PlayerController || PlayerController->GetPawn() != Target
 		|| PlayerController->GetPlayerSelectionState() != EPlayerSelectionState::InBattle
 		|| !RaidGameState || RaidGameState->RaidState != ERaidState::Battle)
@@ -327,6 +339,14 @@ bool UBossPatternComponent::AdvanceForServer(int32 ExpectedSerial)
 	if (Boss->IsDefeated())
 	{
 		StopForServer(FName(TEXT("BossDead")));
+		return true;
+	}
+
+	// 원문 예외 4.2(PATTERN-12): BossState가 Battle이 아니면 패턴을 중지하고 활성 오브젝트를 제거한다.
+	// 기존 중지 경로는 ERaidState::End와 IsDefeated()뿐이라 보스 상태 enum 자체를 보는 가드가 없었다.
+	if (Boss->GetBossState() != EBossState::Battle)
+	{
+		StopForServer(FName(TEXT("BossStateNotBattle")));
 		return true;
 	}
 

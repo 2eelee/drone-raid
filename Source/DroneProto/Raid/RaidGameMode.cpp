@@ -19,6 +19,9 @@
 
 namespace
 {
+// 타이머 불일치 감시 주기. 제한 시간(분 단위)에 비해 촘촘하면서 서버 tick 비용이 무시할 만한 값이다.
+constexpr float RaidTimerWatchdogIntervalSeconds = 5.0f;
+
 FString ResolveBalanceTelemetryVersion()
 {
 	FString BalanceVersion;
@@ -99,6 +102,15 @@ void ARaidGameMode::BeginPlay()
 	{
 		return;
 	}
+
+	// Battle 전환과 타이머 시작이 갈라진 상태를 주기적으로 감시한다(BOSS-13·POP-08).
+	// GameState 확보 실패로 아래에서 조기 반환하더라도 감시는 유지돼야 하므로 여기서 건다.
+	GetWorldTimerManager().SetTimer(
+		RaidTimerWatchdogTimerHandle,
+		this,
+		&ARaidGameMode::HandleRaidTimerWatchdogTickForServer,
+		RaidTimerWatchdogIntervalSeconds,
+		true);
 
 	ARaidGameState* GS = GetGameState<ARaidGameState>();
 	if (!GS)
@@ -768,6 +780,51 @@ void ARaidGameMode::SetAllBossStatesForServer(EBossState NewBossState, FName Rea
 	{
 		It->SetBossStateForServer(NewBossState, Reason);
 	}
+}
+
+bool ARaidGameMode::IsRaidTimeLimitTimerActiveForServer() const
+{
+	const UWorld* World = GetWorld();
+	return World && World->GetTimerManager().IsTimerActive(RaidTimeLimitTimerHandle);
+}
+
+bool ARaidGameMode::DetectAndRecoverRaidTimerMismatchForServer()
+{
+	if (!HasAuthority())
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	const ARaidGameState* GS = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!World || !GS)
+	{
+		return false;
+	}
+
+	// Battle이 아니면 타이머가 없는 것이 정상이다. 특히 End에서 되살리면 종료된 레이드가 다시 돈다.
+	if (GS->RaidState != ERaidState::Battle)
+	{
+		return false;
+	}
+
+	// 이미 만료돼 종료 절차가 도는 중이면 재시작이 아니라 그대로 두는 것이 맞다.
+	if (bRaidTimeLimitExpiredForServer || IsRaidTimeLimitTimerActiveForServer())
+	{
+		return false;
+	}
+
+	// 원문 예외 4.5는 재시작과 전투 시작 롤백을 모두 허용한다. 롤백은 이미 입장한 플레이어의
+	// 전투 상태까지 되돌려야 해 부작용이 크므로 재시작을 택한다.
+	UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] RaidTimerMismatch Reason=BattleWithoutTimer Recovery=Restart RaidState=%d"),
+		static_cast<int32>(GS->RaidState));
+	StartRaidTimeLimitTimerForServer();
+	return true;
+}
+
+void ARaidGameMode::HandleRaidTimerWatchdogTickForServer()
+{
+	DetectAndRecoverRaidTimerMismatchForServer();
 }
 
 void ARaidGameMode::StartRaidTimeLimitTimerForServer()

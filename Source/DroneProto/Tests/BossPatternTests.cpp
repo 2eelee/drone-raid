@@ -2854,4 +2854,101 @@ bool FDroneStellarRemnantDamageIgnoresTargetBoundsTest::RunTest(const FString& P
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternNullBossRejectTest,
+	"DroneProto.PATTERN11.Guard.NullBossRejectsPatternStart",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternNullBossRejectTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("PatternNullBossWorld")));
+	TestNotNull(TEXT("null boss world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidGameState* GameState = World->SpawnActor<ARaidGameState>();
+	if (GameState)
+	{
+		World->SetGameState(GameState);
+		GameState->SetRaidStateForServer(ERaidState::Battle);
+	}
+
+	// 보스가 아닌 액터에 붙은 패턴 컴포넌트를 만든다. 원문 예외 4.1은 Boss가 Null이면
+	// 패턴 요청을 거부하고 레이드 상태를 확인하라고 규정한다.
+	AActor* NonBossOwner = World->SpawnActor<AActor>();
+	TestNotNull(TEXT("non-boss owner is spawned"), NonBossOwner);
+	if (!NonBossOwner)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	UBossPatternComponent* Component = NewObject<UBossPatternComponent>(NonBossOwner);
+	TestNotNull(TEXT("pattern component is created"), Component);
+	if (!Component)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	Component->RegisterComponent();
+	Component->ResolvePatternDataForTest();
+
+	AddExpectedError(TEXT("Reason=BossNull"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	TestFalse(TEXT("pattern start is rejected when the owner is not a boss"), Component->StartForServer());
+	TestEqual(TEXT("rejected start leaves the component stopped"),
+		Component->GetServerStateForTest(),
+		EBossPatternServerState::Stopped);
+	TestNull(TEXT("rejected start spawns no pattern actor"), Component->GetActivePatternActorForTest());
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternNonBattleBossStateTest,
+	"DroneProto.PATTERN12.Guard.NonBattleBossStateStopsPattern",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternNonBattleBossStateTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("PatternBossStateWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component || !Context.Drone)
+	{
+		TestTrue(TEXT("boss state guard setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestEqual(TEXT("start puts the boss into Battle"), Context.Boss->GetBossState(), EBossState::Battle);
+	TestTrue(TEXT("first Corrupted becomes active"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("component is active"),
+		Context.Component->GetServerStateForTest(),
+		EBossPatternServerState::Active);
+	TestNotNull(TEXT("active pattern actor exists"), Context.Component->GetActivePatternActorForTest());
+
+	// 원문 예외 4.2와 피해 판정식(:758)은 둘 다 ERaidState가 아니라 EBossState를 본다.
+	// RaidState는 Battle 그대로 두고 보스 상태만 바꿔, 가드가 실제로 보스 상태를 보는지 고정한다.
+	Context.Boss->SetBossStateForServer(EBossState::Clear, FName(TEXT("Automation")));
+	TestEqual(TEXT("raid state stays Battle"), Context.GameState->RaidState, ERaidState::Battle);
+
+	TestFalse(TEXT("damage is refused while the boss state is not Battle"),
+		Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+
+	TestTrue(TEXT("transition handles the non-Battle boss state"),
+		Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("non-Battle boss state stops the pattern"),
+		Context.Component->GetServerStateForTest(),
+		EBossPatternServerState::Stopped);
+	TestNull(TEXT("non-Battle boss state removes the active object"),
+		Context.Component->GetActivePatternActorForTest());
+
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
 #endif

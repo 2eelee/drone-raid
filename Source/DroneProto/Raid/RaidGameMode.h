@@ -36,6 +36,13 @@ public:
 
 	void HandleBossDefeatedForServer();
 	void StartRaidTimeLimitTimerForServer();
+	void ClearRaidTimeLimitTimerForServer(FName Reason);
+	bool IsRaidTimeLimitTimerActiveForServer() const;
+
+	// 원문 예외 4.5(BOSS-13)·4.13(POP-08): Battle인데 RaidTimer가 돌지 않으면 제한 시간 계산이
+	// 어긋나고 빈 레이드가 무기한 유지된다. 불일치를 감지해 **타이머만** 재시작한다 —
+	// 보스 패턴의 인원 0 대기 상태는 건드리지 않는다.
+	bool DetectAndRecoverRaidTimerMismatchForServer();
 	ARaidBoss* EnsureRaidBossForServer();
 
 	// Battle 전이 시 모든 보스의 패턴 타이머 시작/정지 오케스트레이션. 개별 타이머는 Boss가 소유한다.
@@ -75,14 +82,15 @@ private:
 
 	FTimerHandle RaidTimeLimitTimerHandle;
 	bool bRaidTimeLimitExpiredForServer = false;
+	FTimerHandle RaidTimerWatchdogTimerHandle;
 
 	TSet<FString> GeneratedDroneReportPlayerKeys;
 	TMap<FString, float> PlayerBossDamageMap;
 	TMap<TWeakObjectPtr<AController>, TWeakObjectPtr<AActor>> PlayerStartAssignments;
 
 	bool EnsureDronePartReturnManagerForServer();
-	void ClearRaidTimeLimitTimerForServer(FName Reason);
 	void HandleRaidTimeLimitExpiredForServer();
+	void HandleRaidTimerWatchdogTickForServer();
 	void NotifyBossPatternPopulationAfterLogoutForServer();
 	void SetAllBossStatesForServer(EBossState NewBossState, FName Reason);
 	bool NotifyRaidSpawnFailedForServer(AController* Controller, FName Reason) const;

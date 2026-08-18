@@ -7970,4 +7970,100 @@ bool FRaidBossPositionCorrectionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidTimerMismatchRecoveryTest,
+	"DroneProto.BOSS13.Guard.BattleWithoutTimerIsRecovered",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidTimerMismatchRecoveryTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidTimerMismatchWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("timer mismatch game mode is spawned"), GameMode);
+	TestNotNull(TEXT("timer mismatch game state is spawned"), Context.GameState);
+	if (!GameMode || !Context.GameState)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// Battle인데 RaidTimer가 돌지 않는 상태를 만든다. 원문 예외 4.5는 이때 재시작 또는
+	// 전투 시작 롤백을 요구하는데, 지금까지는 새 Ready가 들어올 때만 재시작됐다.
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	TestFalse(TEXT("no raid timer is running yet"), GameMode->IsRaidTimeLimitTimerActiveForServer());
+
+	AddExpectedError(TEXT("RaidTimerMismatch"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	TestTrue(TEXT("Battle without a timer is detected and recovered"),
+		GameMode->DetectAndRecoverRaidTimerMismatchForServer());
+	TestTrue(TEXT("recovery restarts the raid timer"), GameMode->IsRaidTimeLimitTimerActiveForServer());
+	TestTrue(TEXT("recovery publishes a future raid end time"),
+		Context.GameState->GetRaidTimeEndServerTime() > Context.World->GetTimeSeconds());
+
+	TestFalse(TEXT("a running timer is not a mismatch"),
+		GameMode->DetectAndRecoverRaidTimerMismatchForServer());
+
+	// Battle이 아니면 감시 대상이 아니다. 종료된 레이드의 타이머를 되살리면 안 된다.
+	GameMode->ClearRaidTimeLimitTimerForServer(FName(TEXT("Automation")));
+	Context.GameState->SetRaidStateForServer(ERaidState::End);
+	TestFalse(TEXT("a raid that already ended is not recovered"),
+		GameMode->DetectAndRecoverRaidTimerMismatchForServer());
+	TestFalse(TEXT("ended raid keeps the timer cleared"), GameMode->IsRaidTimeLimitTimerActiveForServer());
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEmptyRaidTimerRecoveryTest,
+	"DroneProto.POP08.Guard.EmptyRaidRecoversTimerAndKeepsPatternPaused",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEmptyRaidTimerRecoveryTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("EmptyRaidTimerWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("empty raid game mode is spawned"), GameMode);
+	TestNotNull(TEXT("empty raid game state is spawned"), Context.GameState);
+	if (!GameMode || !Context.GameState)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	ARaidBoss* Boss = Context.World->SpawnActor<ARaidBoss>();
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	TestNotNull(TEXT("empty raid boss pattern component exists"), Component);
+	if (!Boss || !Component)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	Component->ResolvePatternDataForTest();
+
+	// 아무도 InBattle이 아니므로 패턴은 즉시 인원 0 대기로 들어간다.
+	TestTrue(TEXT("boss pattern starts"), Boss->StartBossPatternForServer());
+	TestEqual(TEXT("empty raid pauses the boss pattern"),
+		Component->GetServerStateForTest(),
+		EBossPatternServerState::PausedNoPlayers);
+
+	AddExpectedError(TEXT("RaidTimerMismatch"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	// 원문 예외 4.13: 인원 0 + 타이머 미가동이면 빈 레이드가 무기한 유지되므로 타이머만 재시작하고
+	// 보스 패턴은 중지 상태로 둔다.
+	TestTrue(TEXT("empty raid still recovers the raid timer"),
+		GameMode->DetectAndRecoverRaidTimerMismatchForServer());
+	TestTrue(TEXT("empty raid timer is running"), GameMode->IsRaidTimeLimitTimerActiveForServer());
+	TestEqual(TEXT("timer recovery does not resume the boss pattern"),
+		Component->GetServerStateForTest(),
+		EBossPatternServerState::PausedNoPlayers);
+	TestNull(TEXT("paused pattern stays without an active object"),
+		Component->GetActivePatternActorForTest());
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
 #endif
