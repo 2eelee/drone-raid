@@ -75,6 +75,19 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Drone Parts")
 	bool GetPartType(FName PartID, EDronePartType& OutType) const;
 
+	// 16인 레이드 전제: 코어는 인원수만큼 16개, 무기는 좌·우 슬롯이 있어 32개다.
+	// 이 총량은 지금까지 DataTable 행 MaxCount의 합이라는 부수 효과로만 성립했고,
+	// 표가 바뀌면 조용히 깨졌다. 기대값을 상수로 고정한다 (STOCK-09).
+	static constexpr int32 ExpectedCoreTotalCount = 16;
+	static constexpr int32 ExpectedWeaponTotalCount = 32;
+
+	UFUNCTION(BlueprintPure, Category = "Drone Parts")
+	int32 GetTotalMaxCountByType(EDronePartType PartType) const;
+
+	// 총량이 기대값과 다르면 Warning만 남기고 재고는 고치지 않는다.
+	// 서버가 임의로 보정하면 기획 데이터의 오류를 코드가 덮어써 원인이 감춰진다.
+	bool ValidateStockTotalsForServer() const;
+
 	UFUNCTION(BlueprintPure, Category = "Drone Parts|Part IDs")
 	static FName GetCoreZenithPartID();
 

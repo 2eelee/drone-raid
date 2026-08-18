@@ -21,6 +21,7 @@ void ADronePartInventory::BeginPlay()
 	if (HasAuthority())
 	{
 		InitializeDefaultStocks();
+		ValidateStockTotalsForServer();
 	}
 }
 
@@ -324,4 +325,35 @@ const FDronePartStock* ADronePartInventory::FindStock(FName PartID) const
 	{
 		return Stock.PartID == PartID;
 	});
+}
+
+int32 ADronePartInventory::GetTotalMaxCountByType(EDronePartType PartType) const
+{
+	int32 TotalMaxCount = 0;
+	for (const FDronePartStock& Stock : PartStocks)
+	{
+		if (Stock.PartType == PartType)
+		{
+			TotalMaxCount += Stock.MaxCount;
+		}
+	}
+
+	return TotalMaxCount;
+}
+
+bool ADronePartInventory::ValidateStockTotalsForServer() const
+{
+	const int32 CoreTotal = GetTotalMaxCountByType(EDronePartType::Core);
+	const int32 WeaponTotal = GetTotalMaxCountByType(EDronePartType::Weapon);
+	const bool bIsValid = CoreTotal == ExpectedCoreTotalCount && WeaponTotal == ExpectedWeaponTotalCount;
+
+	if (!bIsValid)
+	{
+		// 재고를 고치지 않는다. 여기서 보정하면 기획 데이터의 오류가 로그에서만 사라진다.
+		UE_LOG(LogTemp, Warning,
+			TEXT("[DR_SUMMARY] StockTotalsInvalid CoreTotal=%d ExpectedCoreTotal=%d WeaponTotal=%d ExpectedWeaponTotal=%d StockNum=%d"),
+			CoreTotal, ExpectedCoreTotalCount, WeaponTotal, ExpectedWeaponTotalCount, PartStocks.Num());
+	}
+
+	return bIsValid;
 }

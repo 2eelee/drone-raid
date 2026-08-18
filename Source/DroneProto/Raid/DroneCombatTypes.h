@@ -470,6 +470,19 @@ struct DRONEPROTO_API FDroneCombatRules
 		return Result;
 	}
 
+	// 원문 전투 계산식: FinalDamage = (좌 무기 피해 + 우 무기 피해) x CoreAttackModifier x CoreBonusAttackModifier.
+	// 이 식은 `Drone.cpp`의 공격 경로에만 인라인으로 존재해 액터를 세우지 않고는 결합 방식을 고정할 수 없었다.
+	// 규칙을 여기로 옮기고 호출부가 이 함수만 쓰게 한다 (FINALDAMAGE-01).
+	static float CalculateFinalDamage(
+		float LeftWeaponDamage,
+		float RightWeaponDamage,
+		float CoreAttackModifier,
+		float CoreBonusAttackModifier)
+	{
+		const float TotalWeaponDamage = LeftWeaponDamage + RightWeaponDamage;
+		return TotalWeaponDamage * CoreAttackModifier * CoreBonusAttackModifier;
+	}
+
 	static float CalculateDrainHeal(float DamageDealt)
 	{
 		return CalculateDrainHeal(DamageDealt, MakeCanonicalConfig());
@@ -492,6 +505,25 @@ struct DRONEPROTO_API FDroneCombatRules
 
 struct DRONEPROTO_API FDroneReportRules
 {
+	// 원문 `:787-794`의 항목별 상한과 총합이다. 이전에는 총합 1000이 다섯 값의 합으로만 성립하는
+	// 부수 효과여서, DataTable이 `BonusScoreCap`을 완화하면 총합이 조용히 1000을 넘고
+	// `GRADE-01`의 S=850 컷이 의미를 잃었다. 관계를 상수로 고정하고 아래 static_assert로 강제한다.
+	static constexpr float SurvivalScoreCap = 200.0f;
+	static constexpr float BossDamageScoreCap = 350.0f;
+	static constexpr float MoveScoreCap = 100.0f;
+	static constexpr float HealScoreCap = 100.0f;
+	static constexpr int32 CanonicalBonusScoreCap = 250;
+	static constexpr float TotalScoreCap = 1000.0f;
+
+	static_assert(
+		SurvivalScoreCap + BossDamageScoreCap + MoveScoreCap + HealScoreCap
+			+ static_cast<float>(CanonicalBonusScoreCap) == TotalScoreCap,
+		"항목별 상한의 합은 총합 상한 1000과 같아야 한다 (SCORE-08).");
+
+	// 원문 §4(2): 전투 참가 시간이 30초 미만이면 보너스를 지급하지 않는다.
+	// 이전에는 규칙별 `MinCombatDuration` 최솟값의 부수 효과였고, 표가 완화되면 조용히 깨졌다.
+	static constexpr float MinimumBonusCombatDuration = 30.0f;
+
 	static FDroneReportResolvedConfig MakeCanonicalConfig()
 	{
 		FDroneReportResolvedConfig Config;
@@ -636,21 +668,33 @@ struct DRONEPROTO_API FDroneReportRules
 			? FMath::Clamp(Report.BossDamage / BossMaxHP, 0.0f, 1.0f)
 			: 0.0f;
 
-		const float SurvivalScore = FMath::Min((Report.SurvivalTime / 180.0f) * 200.0f, 200.0f);
-		const float BossDamageScore = Report.BossDamage > KINDA_SMALL_NUMBER
-			? FMath::Min((Report.BossDamageRatio / 0.08f) * 350.0f, 350.0f)
+		const float SurvivalScore = FMath::Min((Report.SurvivalTime / 180.0f) * SurvivalScoreCap, SurvivalScoreCap);
+		// 원문 §4(1): 보스 데미지가 0이면 보스 데미지 점수를 0으로 두고 이동·회복 점수도 0으로 제한한다.
+		const bool bHasBossDamage = Report.BossDamage > KINDA_SMALL_NUMBER;
+		const float BossDamageScore = bHasBossDamage
+			? FMath::Min((Report.BossDamageRatio / 0.08f) * BossDamageScoreCap, BossDamageScoreCap)
 			: 0.0f;
-		const bool bHasMinimumBossContribution = Report.BossDamageRatio >= 0.01f;
+		const bool bHasMinimumBossContribution = bHasBossDamage && Report.BossDamageRatio >= 0.01f;
 		const float MoveScore = bHasMinimumBossContribution
-			? FMath::Min((Report.MoveDistance / 600.0f) * 100.0f, 100.0f)
+			? FMath::Min((Report.MoveDistance / 600.0f) * MoveScoreCap, MoveScoreCap)
 			: 0.0f;
 		const float HealScore = bHasMinimumBossContribution
-			? FMath::Min((Report.HealAmount / 60.0f) * 100.0f, 100.0f)
+			? FMath::Min((Report.HealAmount / 60.0f) * HealScoreCap, HealScoreCap)
 			: 0.0f;
 
+		// 원문 §4(1)(2)의 두 차단 조건은 DataTable 임계값과 독립된 계약이다.
+		// 표가 완화돼도 여기서 막히므로 조용히 깨지지 않는다.
+		const bool bBonusEligible = bHasBossDamage
+			&& Report.CombatDuration >= MinimumBonusCombatDuration;
+
 		int32 RawBonusScore = 0;
-		const auto AddBonus = [&Report, &RawBonusScore](const FDroneReportBonusRule& Rule, int32 Score)
+		const auto AddBonus = [&Report, &RawBonusScore, bBonusEligible](const FDroneReportBonusRule& Rule, int32 Score)
 		{
+			if (!bBonusEligible)
+			{
+				return;
+			}
+
 			const int32 AppliedScore = FMath::Min(Score, Rule.MaxScore);
 			if (AppliedScore <= 0)
 			{
@@ -746,9 +790,12 @@ struct DRONEPROTO_API FDroneReportRules
 			}
 		}
 
-		Report.BonusScore = FMath::Min(RawBonusScore, ActiveConfig->BonusScoreCap);
+		// DataTable이 `BonusScoreCap`을 완화해도 총합은 canonical 상한을 넘지 않는다.
+		Report.BonusScore = FMath::Min3(RawBonusScore, ActiveConfig->BonusScoreCap, CanonicalBonusScoreCap);
 		const float BasePerformanceScore = SurvivalScore + BossDamageScore + MoveScore + HealScore;
-		Report.ReportScore = BasePerformanceScore + static_cast<float>(Report.BonusScore);
+		Report.ReportScore = FMath::Min(
+			BasePerformanceScore + static_cast<float>(Report.BonusScore),
+			TotalScoreCap);
 		Report.Grade = CalculateGrade(Report.ReportScore, *ActiveConfig);
 		return Report;
 	}

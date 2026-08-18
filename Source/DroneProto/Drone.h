@@ -232,6 +232,7 @@ public:
 	float GetVectorAccumulatedMoveDistanceForTest() const;
 	float GetBoosterAccumulatedMoveDistanceForTest() const;
 	FDroneCombatRecord GetCombatRecordForTest() const;
+	void SetCombatRecordForTest(const FDroneCombatRecord& InCombatRecord);
 	FVector2D GetLastServerMoveInputForTest() const;
 	bool CacheMoveInputForDodgeForTest(FVector2D RawAxis);
 	FVector2D GetCachedMoveInputForDodgeForTest() const;

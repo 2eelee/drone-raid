@@ -1520,6 +1520,12 @@ FDroneCombatRecord ADrone::GetCombatRecordForTest() const
 	return BuildCombatRecordSnapshotForServer();
 }
 
+void ADrone::SetCombatRecordForTest(const FDroneCombatRecord& InCombatRecord)
+{
+	// 리포트 경로 테스트가 전투를 실제로 진행하지 않고도 명세에 맞는 전투 기록을 세울 수 있게 한다.
+	CombatRecord = InCombatRecord;
+}
+
 FVector2D ADrone::GetLastServerMoveInputForTest() const
 {
 	return LastServerMoveInput;
@@ -2096,7 +2102,7 @@ void ADrone::HandleAttackBossForServer()
 	const float RightWeaponDamage = RightWeaponResult.WeaponDamage;
 	const float TotalWeaponDamage = LeftWeaponDamage + RightWeaponDamage;
 	const FDroneCoreCalculationResult CoreResult = CalculateCoreForServer(EquippedCorePartID);
-	const float FinalDamage = TotalWeaponDamage * CoreResult.CoreAttackModifier * CoreResult.CoreBonusAttackModifier;
+	const float FinalDamage = FDroneCombatRules::CalculateFinalDamage(LeftWeaponDamage, RightWeaponDamage, CoreResult.CoreAttackModifier, CoreResult.CoreBonusAttackModifier);
 
 	const float BossHPBeforeAttack = Boss->GetCurrentHP();
 	if (FinalDamage <= KINDA_SMALL_NUMBER)

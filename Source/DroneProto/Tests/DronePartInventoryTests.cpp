@@ -2072,6 +2072,18 @@ bool FDronePOR24ReportDataTableControllerSourceTest::RunTest(const FString& Para
 	NoDamage->MinBossDamageRatio = 0.0f;
 	NoDamage->MaxScore = 77;
 
+
+	// 원문 §4(2)는 전투 30초 미만이면 어떤 보너스도 지급하지 않으므로, 빈 전투 기록으로는
+	// 어떤 DataTable 값을 넣어도 보너스가 나오지 않는다. 이 테스트의 목적은 표 해석 경로 확인이니
+	// 게이트를 통과하는 최소한의 기록을 세운다. DamagePerMinute는 1%로 두어 High DPS가 함께
+	// 붙지 않게 하고, No Damage 하나만 남겨 표에서 온 77점인지 본다.
+	FDroneCombatRecord SeededRecord;
+	SeededRecord.BossDamage = 3000.0f;
+	SeededRecord.BossMaxHP = 60000.0f;
+	SeededRecord.CombatStartTime = 1.0f;
+	SeededRecord.CombatEndTime = 301.0f;
+	SeededRecord.DamageTakenCount = 0;
+	Context.Drone->SetCombatRecordForTest(SeededRecord);
 	Context.PC->SetDroneReportDataTablesForTest(Fixture.Bonus, Fixture.Settings, Fixture.Grade);
 	TestTrue(TEXT("first server request creates a report from the configured table set"),
 		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
@@ -7691,6 +7703,267 @@ bool FDroneReturnLogDefaultReasonTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("saved log keeps the explicit reason"),
 			static_cast<int32>(ReturnManager->GetReturnLogs()[0].ReturnReason),
 			static_cast<int32>(EDronePartReturnReason::Cancel));
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportTotalScoreCapTest,
+	"DroneProto.SCORE08.Invariant.TotalScoreCapIsEnforced",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportTotalScoreCapTest::RunTest(const FString& Parameters)
+{
+	// 총합 1000은 다섯 항목 상한의 합으로만 성립하는 부수 효과였다. 이 관계를 상수로 고정한다.
+	TestEqual(TEXT("survival cap is 200"), FDroneReportRules::SurvivalScoreCap, 200.0f);
+	TestEqual(TEXT("boss damage cap is 350"), FDroneReportRules::BossDamageScoreCap, 350.0f);
+	TestEqual(TEXT("move cap is 100"), FDroneReportRules::MoveScoreCap, 100.0f);
+	TestEqual(TEXT("heal cap is 100"), FDroneReportRules::HealScoreCap, 100.0f);
+	TestEqual(TEXT("canonical bonus cap is 250"), FDroneReportRules::CanonicalBonusScoreCap, 250);
+	TestEqual(TEXT("total cap is 1000"), FDroneReportRules::TotalScoreCap, 1000.0f);
+	TestEqual(TEXT("item caps sum to the total cap"),
+		FDroneReportRules::SurvivalScoreCap
+			+ FDroneReportRules::BossDamageScoreCap
+			+ FDroneReportRules::MoveScoreCap
+			+ FDroneReportRules::HealScoreCap
+			+ static_cast<float>(FDroneReportRules::CanonicalBonusScoreCap),
+		FDroneReportRules::TotalScoreCap);
+
+	// DataTable이 BonusScoreCap을 완화해도 총합은 1000을 넘지 않아야 한다.
+	FDroneReportResolvedConfig InflatedConfig = FDroneReportRules::MakeCanonicalConfig();
+	InflatedConfig.BonusScoreCap = 5000;
+	for (FDroneReportBonusRule& Rule : InflatedConfig.BonusRules)
+	{
+		Rule.MaxScore = 1000;
+		Rule.PrimaryScore = 1000;
+		Rule.SecondaryScore = 1000;
+		Rule.PrimaryMinCombatDuration = 0.0f;
+		Rule.SecondaryMinCombatDuration = 0.0f;
+		Rule.PrimaryMinBossDamageRatio = 0.0f;
+		Rule.SecondaryMinBossDamageRatio = 0.0f;
+		Rule.PrimaryMinDamagePerMinute = 0.0f;
+		Rule.SecondaryMinDamagePerMinute = 0.0f;
+		Rule.PrimaryMinMoveDistance = 0.0f;
+		Rule.SecondaryMinMovePerMinute = 0.0f;
+		Rule.PrimaryMinHealAmount = 0.0f;
+		Rule.SecondaryMinHealAmount = 0.0f;
+		Rule.bRequiresBossDefeated = false;
+		Rule.bRequiresAlive = false;
+		Rule.MaxDamageTakenCount = 999;
+		Rule.LateJoinBossHPThresholdRatio = 0.0f;
+	}
+
+	FDroneCombatRecord MaxedRecord;
+	MaxedRecord.SurvivalTime = 100000.0f;
+	MaxedRecord.BossDamage = 60000.0f;
+	MaxedRecord.BossMaxHP = 60000.0f;
+	MaxedRecord.MoveDistance = 100000.0f;
+	MaxedRecord.HealAmount = 100000.0f;
+	MaxedRecord.CombatStartTime = 0.0f;
+	MaxedRecord.CombatEndTime = 180.0f;
+	MaxedRecord.bIsAliveAtReport = true;
+	MaxedRecord.DamageTakenCount = 0;
+
+	const FDroneReportData InflatedReport =
+		FDroneReportRules::BuildReportData(MaxedRecord, true, InflatedConfig);
+	TestTrue(TEXT("inflated bonus table cannot push the total past 1000"),
+		InflatedReport.ReportScore <= FDroneReportRules::TotalScoreCap + KINDA_SMALL_NUMBER);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportBonusGateTest,
+	"DroneProto.SCORE06.Invariant.ZeroDamageAndShortCombatBlockBonuses",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportBonusGateTest::RunTest(const FString& Parameters)
+{
+	// 게이트가 DataTable 임계값의 부수 효과가 아니라 독립 계약임을 고정한다.
+	FDroneReportResolvedConfig PermissiveConfig = FDroneReportRules::MakeCanonicalConfig();
+	for (FDroneReportBonusRule& Rule : PermissiveConfig.BonusRules)
+	{
+		Rule.PrimaryMinCombatDuration = 0.0f;
+		Rule.SecondaryMinCombatDuration = 0.0f;
+		Rule.PrimaryMinBossDamageRatio = 0.0f;
+		Rule.SecondaryMinBossDamageRatio = 0.0f;
+		Rule.PrimaryMinDamagePerMinute = 0.0f;
+		Rule.SecondaryMinDamagePerMinute = 0.0f;
+		Rule.PrimaryMinMoveDistance = 0.0f;
+		Rule.SecondaryMinMovePerMinute = 0.0f;
+		Rule.PrimaryMinHealAmount = 0.0f;
+		Rule.SecondaryMinHealAmount = 0.0f;
+		Rule.bRequiresBossDefeated = false;
+		Rule.bRequiresAlive = false;
+	}
+
+	// (1) 보스 데미지 0
+	FDroneCombatRecord ZeroDamage;
+	ZeroDamage.SurvivalTime = 180.0f;
+	ZeroDamage.BossDamage = 0.0f;
+	ZeroDamage.BossMaxHP = 60000.0f;
+	ZeroDamage.MoveDistance = 600.0f;
+	ZeroDamage.HealAmount = 60.0f;
+	ZeroDamage.CombatStartTime = 0.0f;
+	ZeroDamage.CombatEndTime = 180.0f;
+	ZeroDamage.bIsAliveAtReport = true;
+
+	const FDroneReportData ZeroDamageReport =
+		FDroneReportRules::BuildReportData(ZeroDamage, true, PermissiveConfig);
+	TestEqual(TEXT("zero boss damage scores no boss damage points"), ZeroDamageReport.BossDamage, 0.0f);
+	TestEqual(TEXT("zero boss damage pays no bonus"), ZeroDamageReport.BonusScore, 0);
+	TestEqual(TEXT("zero boss damage lists no achieved bonus"), ZeroDamageReport.AchievedBonusList.Num(), 0);
+
+	// (2) 전투 참가 시간 30초 미만
+	FDroneCombatRecord ShortCombat;
+	ShortCombat.SurvivalTime = 29.0f;
+	ShortCombat.BossDamage = 30000.0f;
+	ShortCombat.BossMaxHP = 60000.0f;
+	ShortCombat.MoveDistance = 600.0f;
+	ShortCombat.HealAmount = 60.0f;
+	ShortCombat.CombatStartTime = 0.0f;
+	ShortCombat.CombatEndTime = 29.0f;
+	ShortCombat.bIsAliveAtReport = true;
+
+	const FDroneReportData ShortCombatReport =
+		FDroneReportRules::BuildReportData(ShortCombat, true, PermissiveConfig);
+	TestEqual(TEXT("combat under 30 seconds pays no bonus"), ShortCombatReport.BonusScore, 0);
+	TestTrue(TEXT("combat under 30 seconds still scores boss damage"), ShortCombatReport.ReportScore > 0.0f);
+
+	// (3) 30초 이상 + 데미지 있음이면 보너스가 지급된다 (게이트가 과잉 차단하지 않는지)
+	FDroneCombatRecord Eligible;
+	Eligible.SurvivalTime = 180.0f;
+	Eligible.BossDamage = 30000.0f;
+	Eligible.BossMaxHP = 60000.0f;
+	Eligible.MoveDistance = 600.0f;
+	Eligible.HealAmount = 60.0f;
+	Eligible.CombatStartTime = 0.0f;
+	Eligible.CombatEndTime = 180.0f;
+	Eligible.bIsAliveAtReport = true;
+
+	const FDroneReportData EligibleReport =
+		FDroneReportRules::BuildReportData(Eligible, true, PermissiveConfig);
+	TestTrue(TEXT("eligible combat still earns a bonus"), EligibleReport.BonusScore > 0);
+
+	TestEqual(TEXT("minimum bonus combat duration is 30 seconds"),
+		FDroneReportRules::MinimumBonusCombatDuration, 30.0f);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartStockTotalsTest,
+	"DroneProto.STOCK09.Invariant.CoreAndWeaponTotals",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartStockTotalsTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("StockTotalsWorld")));
+	TestNotNull(TEXT("stock totals world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ADronePartInventory* Inventory = World->SpawnActor<ADronePartInventory>();
+	TestNotNull(TEXT("stock totals inventory is spawned"), Inventory);
+	if (!Inventory)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	// 16인 레이드 전제: 코어 총 16개, 무기(좌+우) 총 32개.
+	TestEqual(TEXT("expected core total is 16"), ADronePartInventory::ExpectedCoreTotalCount, 16);
+	TestEqual(TEXT("expected weapon total is 32"), ADronePartInventory::ExpectedWeaponTotalCount, 32);
+	TestEqual(TEXT("core max total matches the raid capacity"),
+		Inventory->GetTotalMaxCountByType(EDronePartType::Core),
+		ADronePartInventory::ExpectedCoreTotalCount);
+	TestEqual(TEXT("weapon max total matches the raid capacity"),
+		Inventory->GetTotalMaxCountByType(EDronePartType::Weapon),
+		ADronePartInventory::ExpectedWeaponTotalCount);
+	TestTrue(TEXT("stock totals validate cleanly"), Inventory->ValidateStockTotalsForServer());
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneFinalDamageCompositionTest,
+	"DroneProto.FINALDAMAGE01.Invariant.MultiplicativeComposition",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneFinalDamageCompositionTest::RunTest(const FString& Parameters)
+{
+	// FinalDamage = TotalWeaponDamage x CoreAttackModifier x CoreBonusAttackModifier
+	// 세 항의 결합(합산 -> 곱 -> 곱)을 직접 고정한다. 덧셈으로 바뀌거나 항이 빠지면 여기서 깨진다.
+	const float LeftWeaponDamage = 30.0f;
+	const float RightWeaponDamage = 20.0f;
+	const float CoreAttackModifier = 1.20f;
+	const float CoreBonusAttackModifier = 1.50f;
+
+	const float TotalWeaponDamage = LeftWeaponDamage + RightWeaponDamage;
+	const float FinalDamage = FDroneCombatRules::CalculateFinalDamage(
+		LeftWeaponDamage,
+		RightWeaponDamage,
+		CoreAttackModifier,
+		CoreBonusAttackModifier);
+
+	TestEqual(TEXT("weapon damage is summed before the core multipliers"), TotalWeaponDamage, 50.0f);
+	TestEqual(TEXT("final damage composes both core multipliers"), FinalDamage, 90.0f);
+
+	// 배율이 덧셈으로 바뀌면 50 * (1.2 + 1.5) = 135가 되어 위 기대값과 갈린다.
+	TestNotEqual(TEXT("final damage is not an additive composition"),
+		FinalDamage,
+		TotalWeaponDamage * (CoreAttackModifier + CoreBonusAttackModifier));
+
+	// 코어가 없으면 두 배율 모두 1.00이므로 무기 합산이 그대로 최종 피해다 (CORE-01).
+	TestEqual(TEXT("no core keeps the summed weapon damage"),
+		FDroneCombatRules::CalculateFinalDamage(LeftWeaponDamage, RightWeaponDamage, 1.0f, 1.0f),
+		TotalWeaponDamage);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossPositionCorrectionTest,
+	"DroneProto.BOSS14.Guard.BossPositionIsCorrectedToMapCenter",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossPositionCorrectionTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("BossPositionCorrectionWorld"));
+	// 합성 월드는 InitGame을 거치지 않아 GetAuthGameMode()가 비어 있다. 이 파일의 기존 관례대로 직접 스폰한다.
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	TestNotNull(TEXT("boss position world is created"), Context.World);
+	TestNotNull(TEXT("boss position game mode is available"), GameMode);
+	if (!Context.World || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// 맵에 사전 배치된 보스가 원점이 아닌 경우를 만든다. EnsureRaidBossForServer는 첫 액터를 그대로 채택한다.
+	const FVector OffCenter(1234.0f, -5678.0f, 900.0f);
+	ARaidBoss* PlacedBoss = Context.World->SpawnActor<ARaidBoss>(ARaidBoss::StaticClass(), OffCenter, FRotator::ZeroRotator);
+	TestNotNull(TEXT("off-center boss is spawned"), PlacedBoss);
+	if (!PlacedBoss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	AddExpectedError(TEXT("BossPositionCorrected"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	ARaidBoss* EnsuredBoss = GameMode->EnsureRaidBossForServer();
+	TestEqual(TEXT("the placed boss is adopted"), EnsuredBoss, PlacedBoss);
+	if (EnsuredBoss)
+	{
+		TestTrue(TEXT("adopted boss is corrected to the map center"),
+			EnsuredBoss->GetActorLocation().Equals(FVector::ZeroVector, 1.0f));
 	}
 
 	DestroyDroneSelectionTestContext(Context);

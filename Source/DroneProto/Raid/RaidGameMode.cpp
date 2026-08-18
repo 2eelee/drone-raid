@@ -183,6 +183,20 @@ ARaidBoss* ARaidGameMode::EnsureRaidBossForServer()
 		return nullptr;
 	}
 
+	// BOSS-14: 보스는 맵 중앙(원점)에 있어야 한다. 패턴 액터가 보스 트랜스폼을 스냅샷해 스폰되고
+	// PlayerStart 4개도 원점 기준 35m·90° 간격으로 배치돼 있어, 보스가 어긋나면 패턴 평면과
+	// 진입 배치가 함께 틀어진다. 직접 스폰 경로는 항상 원점이지만 맵 사전 배치 보스를 채택하는
+	// 경로는 그 액터의 트랜스폼을 그대로 받으므로 여기서 보정한다.
+	constexpr float BossCenterToleranceCm = 1.0f;
+	const FVector AdoptedBossLocation = ExistingBoss->GetActorLocation();
+	if (!AdoptedBossLocation.Equals(FVector::ZeroVector, BossCenterToleranceCm))
+	{
+		ExistingBoss->SetActorLocation(FVector::ZeroVector);
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] BossPositionCorrected Name=%s From=%s To=X=0.0 Y=0.0 Z=0.0"),
+			*ExistingBoss->GetName(),
+			*AdoptedBossLocation.ToCompactString());
+	}
+
 	GS->SetRaidBossForServer(ExistingBoss);
 	UE_LOG(LogTemp, Log, TEXT("[Server] RaidBoss ready: Source=BattleStart Name=%s Replicates=%s"),
 		*ExistingBoss->GetName(),
