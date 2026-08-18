@@ -1496,6 +1496,85 @@ bool FDroneBossPatternPopulationPauseRestartTest::RunTest(const FString& Paramet
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneRaidEmptyRaidKeepsBattleAndTimerTest,
+	"DroneProto.POP.EmptyRaidKeepsBattleAndTimer",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneRaidEmptyRaidKeepsBattleAndTimerTest::RunTest(const FString& Parameters)
+{
+	// POP-01(원문 :447, :629-632, :766-769)과 POP-06(원문 :23, :512, :520, :778-780)을 함께 고정한다.
+	// 인원 0은 패턴만 멈추고 되감을 뿐 레이드를 끝내지 않는다. 실패는 제한 시간이 만료됐는데
+	// 보스가 살아 있을 때만 성립한다. 두 계약 모두 "그런 경로가 없다"로만 성립하고 있어
+	// 향후 0명 종료 처리가 추가돼도 기존 테스트는 통과한다. 이 테스트가 그 구멍을 막는다.
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("EmptyRaidNotFailureWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidGameMode* GameMode = World ? World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Component)
+	{
+		Component->ResolvePatternDataForTest();
+	}
+	TestNotNull(TEXT("empty raid world is created"), World);
+	TestNotNull(TEXT("empty raid game state exists"), GameState);
+	TestNotNull(TEXT("empty raid game mode exists"), GameMode);
+	TestNotNull(TEXT("empty raid boss exists"), Boss);
+	TestNotNull(TEXT("empty raid pattern component exists"), Component);
+	if (!World || !GameState || !GameMode || !Boss || !Component)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetRaidBossForServer(Boss);
+	GameState->SetRaidStateForServer(ERaidState::Battle);
+	GameMode->StartRaidTimeLimitTimerForServer();
+	TestTrue(TEXT("battle starts the raid time limit"), GameMode->IsRaidTimeLimitTimerActiveForTest());
+
+	const FBossPatternTestPlayer OnlyPlayer = SpawnBossPatternTestPlayer(World, true);
+	TestNotNull(TEXT("empty raid test player exists"), OnlyPlayer.Drone);
+	if (!OnlyPlayer.Drone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	TestTrue(TEXT("single player enters the first delay"), Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("running loop holds a live pattern"), Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+
+	const float BossHealthBeforeEmpty = Boss->GetCurrentHP();
+	OnlyPlayer.Drone->ApplyDamageForServer(OnlyPlayer.Drone->GetMaxHealth() + 1, FName(TEXT("EmptyRaidLastDeath")));
+	TickBossPatternTimers(World, KINDA_SMALL_NUMBER);
+
+	// POP-01: 루프를 멈추고 오브젝트를 지운 뒤 다음 패턴을 Corrupted로 되감는다.
+	// 구현에는 PatternIndex 변수가 없고 CurrentPattern/NextPattern 쌍이 그 역할을 한다.
+	TestEqual(TEXT("empty raid stops the pattern loop"), Component->GetServerStateForTest(), EBossPatternServerState::PausedNoPlayers);
+	TestEqual(TEXT("empty raid clears the current pattern"), Component->GetCurrentPatternForTest(), EBossPatternKind::None);
+	TestEqual(TEXT("empty raid rewinds the loop to Corrupted"), Component->GetNextPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("empty raid clears pattern objects"), CountPatternActors(World), 0);
+
+	// POP-01·POP-06: 레이드 타이머는 계속 돌고 레이드는 Battle로 유지된다.
+	TestTrue(TEXT("empty raid keeps the raid timer running"), GameMode->IsRaidTimeLimitTimerActiveForTest());
+	TestEqual(TEXT("empty raid is not a raid failure"), GameState->RaidState, ERaidState::Battle);
+	TestEqual(TEXT("empty raid preserves boss HP"), Boss->GetCurrentHP(), BossHealthBeforeEmpty);
+	TestTrue(TEXT("empty raid leaves the boss alive"), Boss->GetCurrentHP() > 0.0f);
+
+	// 빈 레이드에 다시 사람이 들어와도 실패로 굳지 않고 루프가 Corrupted부터 재개된다.
+	const FBossPatternTestPlayer ReturningPlayer = SpawnBossPatternTestPlayer(World, true);
+	TestNotNull(TEXT("returning player exists"), ReturningPlayer.Drone);
+	TestEqual(TEXT("empty raid resumes instead of failing"), Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestEqual(TEXT("resumed raid is still in battle"), GameState->RaidState, ERaidState::Battle);
+	TestTrue(TEXT("resumed raid still has its timer"), GameMode->IsRaidTimeLimitTimerActiveForTest());
+	// 실패 판정(제한 시간 만료 + 보스 생존)은 STATE-04 소관이며 기존 타이머 테스트가 고정한다.
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneCorruptedActinoAnalyticGeometryTest,
 	"DroneProto.BossPattern.CorruptedActino.AnalyticGeometry",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

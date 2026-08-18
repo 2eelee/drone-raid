@@ -217,4 +217,59 @@ bool FRaidRemoteSessionTokenizedTravelTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidEntryNormalStageOrderTest,
+	"DroneProto.RaidEntry.Session.NormalEntryStageOrder",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidEntryNormalStageOrderTest::RunTest(const FString& Parameters)
+{
+	// ENTRY-19(원문 :156-158): 정상 입장은 서버 입장 성공 → 맵 로드 시작 → 맵 로드 완료 → 플레이어 생성
+	// 순서로만 진행한다. 각 단계의 구현은 흩어져 있고 순서 자체를 고정하는 계약이 없었다.
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	URaidSessionSubsystem* Session = NewObject<URaidSessionSubsystem>(GameInstance);
+	URemoteRaidAssignment* Assignment = NewObject<URemoteRaidAssignment>(Session);
+	TestNotNull(TEXT("stage order session is created"), Session);
+	TestNotNull(TEXT("stage order assignment is created"), Assignment);
+	if (!GameInstance || !Session || !Assignment)
+	{
+		return false;
+	}
+
+	Assignment->SetServersForTest({
+		FRaidServerDefinition{TEXT("A"), 0, TEXT("http://127.0.0.1:7787/raid/reservations")},
+	});
+	Session->SetAssignmentForTest(Assignment);
+	Session->SetSuppressTravelForTest(true);
+
+	// 1단계 경계: 서버 입장이 성공하지 않으면 맵 로드 단계로 넘어가지 않는다.
+	Assignment->SetResponsesForTest({FRaidAssignmentHttpTestResponse{false, 0, TEXT("")}});
+	Session->RequestRaidEntry(TEXT("A"));
+	TestFalse(TEXT("failed admission does not start map load"), Session->WasTravelRequestedForTest());
+	TestFalse(TEXT("failed admission does not arm the load watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+
+	// 2단계 경계: 입장이 승인된 뒤에야 맵 로드가 시작되고 그 시작과 함께 감시가 켜진다.
+	Session->ResetTravelRequestedForTest();
+	Assignment->SetResponsesForTest({
+		FRaidAssignmentHttpTestResponse{
+			true,
+			201,
+			TEXT("{\"result\":\"success\",\"slot\":\"A\",\"gameEndpoint\":\"127.0.0.1:7777\",\"token\":\"token-a\",\"currentPlayers\":0,\"maxPlayers\":16,\"reason\":\"\"}")},
+	});
+	Session->RequestRaidEntry(TEXT("A"));
+	TestTrue(TEXT("granted admission starts map load"), Session->WasTravelRequestedForTest());
+	TestEqual(TEXT("granted admission starts map load exactly once"), Session->GetTravelRequestCountForTest(), 1);
+	TestTrue(TEXT("map load start arms the watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+
+	// 3단계 경계: 로드 완료 통지 전에는 감시가 유지되고, 완료가 감시를 해제한다.
+	// 감시가 살아 있는 동안은 아직 플레이어 생성 단계가 아니다.
+	TestEqual(TEXT("map load in flight reports no failure"), Session->GetRaidLoadFailureHandleCountForTest(), 0);
+	Session->CompleteRaidLoadForTest();
+	TestFalse(TEXT("map load completion disarms the watchdog"), Session->IsRaidLoadWatchdogActiveForTest());
+	TestEqual(TEXT("normal stage order never reports a load failure"), Session->GetRaidLoadFailureHandleCountForTest(), 0);
+	TestEqual(TEXT("completed load does not re-request travel"), Session->GetTravelRequestCountForTest(), 1);
+
+	return true;
+}
+
 #endif
