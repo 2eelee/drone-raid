@@ -876,6 +876,27 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 		return false;
 	}
 
+	// LOADOUT-04: 원문의 UpdateLoadout(장착 변경 갱신)에 해당하는 트리거가 현행 설계에는 없다.
+	// Ready 이후 선택·취소·재확정이 잠기므로 장착 상태에서 이 함수가 다시 불릴 경로가 없고,
+	// 여기서는 이전 장착 부품을 재고로 되돌리지 않는다. 전투 중 교체를 도입하면 반환을
+	// 함께 넣어야 하므로, 덮어쓰기가 실제로 일어나면 조용히 지나가지 않고 관측 가능하게 남긴다.
+	const bool bHasEquippedLoadout =
+		!EquippedCorePartID.IsNone()
+		|| !EquippedLeftWeaponPartID.IsNone()
+		|| !EquippedRightWeaponPartID.IsNone();
+	if (bHasEquippedLoadout)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("[DR_SUMMARY] LoadoutOverwrite Drone=%s PreviousCore=%s PreviousLeft=%s PreviousRight=%s NewCore=%s NewLeft=%s NewRight=%s Reason=NoReturnPath"),
+			*GetName(),
+			*EquippedCorePartID.ToString(),
+			*EquippedLeftWeaponPartID.ToString(),
+			*EquippedRightWeaponPartID.ToString(),
+			*CorePartID.ToString(),
+			*LeftWeaponPartID.ToString(),
+			*RightWeaponPartID.ToString());
+	}
+
 	FDronePartStats CoreStats;
 	FDronePartStats LeftStats;
 	FDronePartStats RightStats;

@@ -8231,4 +8231,112 @@ bool FDroneReportStoreTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// LOADOUT-04: 원문 `:205` UpdateLoadout(장착 변경 갱신)에 해당하는 트리거가 현행 설계에 없다는 것을
+// 계약으로 고정한다. Ready 이후 선택·취소·재확정이 모두 잠기므로 드론의 장착 상태를 바꿀 입구가 없다.
+// 기존 잠금 테스트(`LockedRequestsDoNotChangeStock`)는 PlayerController 슬롯과 재고만 확인하고
+// 드론이 실제로 들고 있는 장착 정보는 보지 않아, 전투 중 재장착을 도입해도 통과한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneLoadoutHasNoUpdatePathTest,
+	"DroneProto.LOADOUT04.Loadout.NoUpdatePathAfterReady",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneLoadoutHasNoUpdatePathTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneLoadoutUpdatePathWorld"));
+	TestNotNull(TEXT("test world is created"), Context.World);
+	TestNotNull(TEXT("inventory actor is spawned"), Context.Inventory);
+	TestNotNull(TEXT("player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.Inventory || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	TestTrue(TEXT("the selected weapon is consumed before Ready"),
+		Context.Inventory->TryConsumePart(PulseLaser));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("Ready locks the player into battle"),
+		Context.PC->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Ready is the only path that writes the drone loadout"),
+		Context.Drone->GetEquippedLeftWeaponPartIDForTest(), PulseLaser);
+
+	const FName EquippedCoreAfterReady = Context.Drone->GetEquippedCorePartIDForTest();
+	const FName EquippedLeftAfterReady = Context.Drone->GetEquippedLeftWeaponPartIDForTest();
+	const FName EquippedRightAfterReady = Context.Drone->GetEquippedRightWeaponPartIDForTest();
+	const int32 PulseCountAfterReady = Context.Inventory->GetCurrentCount(PulseLaser);
+	const int32 VectorCountAfterReady = Context.Inventory->GetCurrentCount(VectorCannon);
+
+	// 장착 상태를 바꿀 수 있는 요청을 모두 보낸다. 하나라도 통과하면 UpdateLoadout 경로가 생긴 것이다.
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::RightWeapon, VectorCannon);
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::LeftWeapon, VectorCannon);
+	Context.PC->Server_RequestCancelPart_Implementation(EPartSlot::LeftWeapon);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("locked requests do not change the equipped core"),
+		Context.Drone->GetEquippedCorePartIDForTest(), EquippedCoreAfterReady);
+	TestEqual(TEXT("locked requests do not change the equipped left weapon"),
+		Context.Drone->GetEquippedLeftWeaponPartIDForTest(), EquippedLeftAfterReady);
+	TestEqual(TEXT("locked requests do not change the equipped right weapon"),
+		Context.Drone->GetEquippedRightWeaponPartIDForTest(), EquippedRightAfterReady);
+	TestEqual(TEXT("locked requests do not move the shared stock"),
+		Context.Inventory->GetCurrentCount(PulseLaser), PulseCountAfterReady);
+	TestEqual(TEXT("locked requests do not consume a replacement weapon"),
+		Context.Inventory->GetCurrentCount(VectorCannon), VectorCountAfterReady);
+
+	// 장착 정보를 비우는 경로는 존재한다 — 사망·접속 종료·레이드 종료 정리뿐이다(LOADOUT-03).
+	Context.Drone->ClearEquippedLoadoutForServer(FName(TEXT("Automation")));
+	TestEqual(TEXT("clearing the loadout empties the equipped left weapon"),
+		Context.Drone->GetEquippedLeftWeaponPartIDForTest(), FName(NAME_None));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// LOADOUT-04: ApplyLoadout은 이전 장착 부품을 재고로 되돌리지 않는다. 지금은 재적용 경로가 없어
+// 안전하지만, 전투 중 교체를 도입하면 반환을 함께 넣어야 한다. 그 전제를 테스트로 남긴다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneLoadoutReapplyDoesNotReturnPartsTest,
+	"DroneProto.LOADOUT04.Loadout.ReapplyDoesNotReturnPreviousParts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneLoadoutReapplyDoesNotReturnPartsTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneLoadoutReapplyWorld"));
+	TestNotNull(TEXT("test world is created"), Context.World);
+	TestNotNull(TEXT("inventory actor is spawned"), Context.Inventory);
+	TestNotNull(TEXT("drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.Inventory || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	TestTrue(TEXT("the first weapon is consumed"), Context.Inventory->TryConsumePart(PulseLaser));
+	TestTrue(TEXT("the first loadout applies"),
+		Context.Drone->ApplyLoadout(NAME_None, PulseLaser, NAME_None));
+
+	const int32 PulseCountAfterFirstApply = Context.Inventory->GetCurrentCount(PulseLaser);
+
+	TestTrue(TEXT("the replacement weapon is consumed"), Context.Inventory->TryConsumePart(VectorCannon));
+	TestTrue(TEXT("re-applying a different loadout still succeeds"),
+		Context.Drone->ApplyLoadout(NAME_None, VectorCannon, NAME_None));
+
+	TestEqual(TEXT("re-applying overwrites the equipped weapon"),
+		Context.Drone->GetEquippedLeftWeaponPartIDForTest(), VectorCannon);
+	TestEqual(TEXT("re-applying does not return the previous weapon to the shared stock"),
+		Context.Inventory->GetCurrentCount(PulseLaser), PulseCountAfterFirstApply);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
 #endif
