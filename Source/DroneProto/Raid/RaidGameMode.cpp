@@ -463,6 +463,12 @@ void ARaidGameMode::Logout(AController* Exiting)
 				RaidPC->ReturnEquippedPartsForServer(EDronePartReturnReason::Disconnect);
 			}
 
+			// PlayerController가 파괴되면 슬롯 정보가 사라져 복구 수단이 없어진다. 파괴 전 마지막 재처리 기회다.
+			if (EnsureDronePartReturnManagerForServer() && DronePartReturnManager)
+			{
+				DronePartReturnManager->RetryPendingReturnsForServer(RaidPC, FName(TEXT("Logout")));
+			}
+
 			if (ADrone* Drone = Cast<ADrone>(RaidPC->GetPawn()))
 			{
 				Drone->ClearEquippedLoadoutForServer(FName(TEXT("Disconnect")));
@@ -596,6 +602,9 @@ void ARaidGameMode::ReturnAllEquippedPartsForRaidEnd(FName Reason)
 			RaidPC->FinalizeRaidEndForServer(Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 		}
 	}
+
+	// 레이드 종료는 공유 재고를 되돌릴 마지막 경계다. 여기서 실패한 반환은 이후 회수할 트리거가 없다.
+	DronePartReturnManager->RetryPendingReturnsForServer(nullptr, Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 
 	SetAllBossStatesForServer(EBossState::Clear, Reason.IsNone() ? FName(TEXT("RaidEnd")) : Reason);
 	if (BalanceTelemetry)

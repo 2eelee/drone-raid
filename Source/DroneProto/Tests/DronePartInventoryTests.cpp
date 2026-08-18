@@ -7429,4 +7429,272 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReturnRetryPartialFailureTest,
+	"DroneProto.RETURN14.ReturnRetry.PartialFailureKeepsFailedSlot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReturnRetryPartialFailureTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("ReturnRetryPartialFailureWorld"), ReturnManager);
+	TestNotNull(TEXT("partial failure world is created"), Context.World);
+	TestNotNull(TEXT("partial failure inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("partial failure player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("partial failure return manager is created"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName InvalidPart = FName(TEXT("RETURN14_InvalidPart"));
+
+	TestTrue(TEXT("partial failure consumes a valid core"), Context.Inventory->TryConsumePart(CoreZenith));
+	const int32 CoreCountAfterConsume = Context.Inventory->GetCurrentCount(CoreZenith);
+
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, InvalidPart);
+
+	AddExpectedError(TEXT("ReturnPart Failed: Invalid PartID"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	const FDronePartReturnBatchResult BatchResult =
+		ReturnManager->ReturnSelectedPartsBatch(Context.PC, EDronePartReturnReason::Disconnect);
+
+	TestEqual(TEXT("valid slot is returned"), BatchResult.SucceededCount, 1);
+	TestTrue(TEXT("batch reports a failure"), BatchResult.HasFailure());
+	TestEqual(TEXT("exactly one slot failed"), BatchResult.FailedSlots.Num(), 1);
+	TestTrue(TEXT("left weapon is the failed slot"), BatchResult.FailedSlots.Contains(EPartSlot::LeftWeapon));
+
+	TestEqual(TEXT("succeeded slot is cleared"),
+		Context.PC->GetSelectedPartIDBySlot(EPartSlot::Core),
+		NAME_None);
+	TestEqual(TEXT("failed slot keeps its part id"),
+		Context.PC->GetSelectedPartIDBySlot(EPartSlot::LeftWeapon),
+		InvalidPart);
+	TestEqual(TEXT("valid core count is restored"),
+		Context.Inventory->GetCurrentCount(CoreZenith),
+		CoreCountAfterConsume + 1);
+	TestEqual(TEXT("failed slot is registered as pending"), ReturnManager->GetPendingReturnCount(), 1);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReturnRetryRecoversWithErrorReasonTest,
+	"DroneProto.RETURN16.ReturnRetry.PendingReturnIsRetriedWithErrorReason",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReturnRetryRecoversWithErrorReasonTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("ReturnRetryRecoveryWorld"), ReturnManager);
+	TestNotNull(TEXT("retry recovery world is created"), Context.World);
+	TestNotNull(TEXT("retry recovery inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("retry recovery player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("retry recovery return manager is created"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("retry recovery consumes a weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	const int32 CountAfterConsume = Context.Inventory->GetCurrentCount(PulseLaser);
+	Context.PC->SetEquippedPartIDForSlotForServer(EPartSlot::RightWeapon, PulseLaser);
+
+	// 서버 오류 주입: 인벤토리를 잃은 상태에서 반환하면 ValidateReturn이 결정적으로 실패한다.
+	AddExpectedError(TEXT("ReturnPart Failed: Inventory missing"), EAutomationExpectedErrorFlags::Contains, 0);
+	ReturnManager->Initialize(nullptr);
+	const FDronePartReturnBatchResult FailedBatch =
+		ReturnManager->ReturnEquippedPartsBatch(Context.PC, EDronePartReturnReason::RaidEnd);
+
+	TestTrue(TEXT("server error batch reports a failure"), FailedBatch.HasFailure());
+	TestEqual(TEXT("server error returns nothing"), FailedBatch.SucceededCount, 0);
+	TestEqual(TEXT("failed slot keeps its part id"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		PulseLaser);
+	TestEqual(TEXT("server error does not change stock"),
+		Context.Inventory->GetCurrentCount(PulseLaser),
+		CountAfterConsume);
+	TestEqual(TEXT("server error registers one pending return"), ReturnManager->GetPendingReturnCount(), 1);
+
+	// 오류 복구 후 재처리
+	ReturnManager->Initialize(Context.Inventory);
+	const FDronePartReturnRetryResult RetryResult =
+		ReturnManager->RetryPendingReturnsForServer(Context.PC, FName(TEXT("RaidEnd")));
+
+	TestEqual(TEXT("retry recovers the pending return"), RetryResult.RecoveredCount, 1);
+	TestEqual(TEXT("retry reports nothing unrecoverable"), RetryResult.UnrecoverableCount, 0);
+	TestEqual(TEXT("retry clears the pending queue"), ReturnManager->GetPendingReturnCount(), 0);
+	TestEqual(TEXT("retry restores the stock"),
+		Context.Inventory->GetCurrentCount(PulseLaser),
+		CountAfterConsume + 1);
+	TestEqual(TEXT("retry clears the recovered slot"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon),
+		NAME_None);
+
+	bool bFoundErrorReasonLog = false;
+	for (const FReturnedDronePartLog& Log : ReturnManager->GetReturnLogs())
+	{
+		if (Log.ReturnReason == EDronePartReturnReason::Error && Log.bIsProcessed && Log.DronePartID == PulseLaser)
+		{
+			bFoundErrorReasonLog = true;
+			break;
+		}
+	}
+	TestTrue(TEXT("recovery return is logged with the Error reason"), bFoundErrorReasonLog);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReturnRetrySkipsEmptySlotTest,
+	"DroneProto.RETURN16.ReturnRetry.RetrySkipsAlreadyEmptySlot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReturnRetrySkipsEmptySlotTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("ReturnRetrySkipEmptyWorld"), ReturnManager);
+	TestNotNull(TEXT("retry skip world is created"), Context.World);
+	TestNotNull(TEXT("retry skip inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("retry skip player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("retry skip return manager is created"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("retry skip consumes a weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	Context.PC->SetEquippedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+
+	AddExpectedError(TEXT("ReturnPart Failed: Inventory missing"), EAutomationExpectedErrorFlags::Contains, 0);
+	ReturnManager->Initialize(nullptr);
+	ReturnManager->ReturnEquippedPartsBatch(Context.PC, EDronePartReturnReason::Disconnect);
+	TestEqual(TEXT("retry skip registers one pending return"), ReturnManager->GetPendingReturnCount(), 1);
+
+	// 재처리 전에 정상 경로가 먼저 반환을 끝낸 상황을 만든다.
+	ReturnManager->Initialize(Context.Inventory);
+	TestTrue(TEXT("normal path returns the part first"),
+		ReturnManager->ReturnSingleEquippedPart(Context.PC, EPartSlot::LeftWeapon, EDronePartReturnReason::Disconnect));
+	const int32 CountAfterNormalReturn = Context.Inventory->GetCurrentCount(PulseLaser);
+	TestEqual(TEXT("normal path clears the slot"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon),
+		NAME_None);
+
+	const FDronePartReturnRetryResult RetryResult =
+		ReturnManager->RetryPendingReturnsForServer(Context.PC, FName(TEXT("RaidEnd")));
+
+	TestEqual(TEXT("retry skips the already empty slot"), RetryResult.SkippedCount, 1);
+	TestEqual(TEXT("retry recovers nothing"), RetryResult.RecoveredCount, 0);
+	TestEqual(TEXT("retry does not increase the stock twice"),
+		Context.Inventory->GetCurrentCount(PulseLaser),
+		CountAfterNormalReturn);
+	TestEqual(TEXT("retry clears the pending queue"), ReturnManager->GetPendingReturnCount(), 0);
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReturnRetryUnrecoverableTest,
+	"DroneProto.RETURN16.ReturnRetry.UnrecoverableEmitsSummary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReturnRetryUnrecoverableTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("ReturnRetryUnrecoverableWorld"), ReturnManager);
+	TestNotNull(TEXT("unrecoverable world is created"), Context.World);
+	TestNotNull(TEXT("unrecoverable inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("unrecoverable player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("unrecoverable return manager is created"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName InvalidPart = FName(TEXT("RETURN16_InvalidPart"));
+	Context.PC->SetEquippedPartIDForSlotForServer(EPartSlot::Core, InvalidPart);
+
+	AddExpectedError(TEXT("ReturnPart Failed: Invalid PartID"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	const FDronePartReturnBatchResult FailedBatch =
+		ReturnManager->ReturnEquippedPartsBatch(Context.PC, EDronePartReturnReason::RaidEnd);
+	TestTrue(TEXT("invalid part batch reports a failure"), FailedBatch.HasFailure());
+	TestEqual(TEXT("invalid part registers one pending return"), ReturnManager->GetPendingReturnCount(), 1);
+
+	const FDronePartReturnRetryResult RetryResult =
+		ReturnManager->RetryPendingReturnsForServer(Context.PC, FName(TEXT("RaidEnd")));
+
+	TestEqual(TEXT("retry cannot recover an invalid part"), RetryResult.UnrecoverableCount, 1);
+	TestEqual(TEXT("retry recovers nothing"), RetryResult.RecoveredCount, 0);
+	TestEqual(TEXT("unrecoverable pending is not left behind"), ReturnManager->GetPendingReturnCount(), 0);
+	TestEqual(TEXT("unrecoverable slot keeps its part id"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::Core),
+		InvalidPart);
+
+	FString ReturnManagerSource;
+	const FString ReturnManagerPath = FPaths::Combine(
+		FPaths::ProjectDir(),
+		TEXT("Source/DroneProto/Raid/DronePartReturnManager.cpp"));
+	TestTrue(TEXT("return manager source is readable"),
+		FFileHelper::LoadFileToString(ReturnManagerSource, *ReturnManagerPath));
+	TestTrue(TEXT("unrecoverable summary log exists"),
+		ReturnManagerSource.Contains(TEXT("[DR_SUMMARY] ReturnUnrecoverable")));
+	TestTrue(TEXT("partial failure summary log exists"),
+		ReturnManagerSource.Contains(TEXT("[DR_SUMMARY] ReturnPartial")));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReturnLogDefaultReasonTest,
+	"DroneProto.RETURN17.ReturnLog.DefaultReasonIsUnspecified",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReturnLogDefaultReasonTest::RunTest(const FString& Parameters)
+{
+	const FReturnedDronePartLog DefaultLog;
+	TestEqual(TEXT("default return reason is Unspecified, not Error"),
+		static_cast<int32>(DefaultLog.ReturnReason),
+		static_cast<int32>(EDronePartReturnReason::Unspecified));
+	TestFalse(TEXT("default log is not marked processed"), DefaultLog.bIsProcessed);
+
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("ReturnLogDefaultReasonWorld"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	TestTrue(TEXT("default reason test consumes a weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	TestTrue(TEXT("cancel return succeeds"),
+		ReturnManager->ReturnSingleSelectedPart(Context.PC, EPartSlot::LeftWeapon, EDronePartReturnReason::Cancel));
+
+	TestEqual(TEXT("one log is written"), ReturnManager->GetReturnLogs().Num(), 1);
+	if (ReturnManager->GetReturnLogs().Num() == 1)
+	{
+		TestEqual(TEXT("saved log keeps the explicit reason"),
+			static_cast<int32>(ReturnManager->GetReturnLogs()[0].ReturnReason),
+			static_cast<int32>(EDronePartReturnReason::Cancel));
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
 #endif

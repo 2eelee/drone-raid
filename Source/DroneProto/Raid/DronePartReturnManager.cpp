@@ -37,9 +37,37 @@ const TCHAR* ToReturnReasonLogString(EDronePartReturnReason Reason)
 		return TEXT("RaidEnd");
 	case EDronePartReturnReason::Error:
 		return TEXT("Error");
+	case EDronePartReturnReason::Unspecified:
+		return TEXT("Unspecified");
 	default:
 		return TEXT("Unknown");
 	}
+}
+
+const TCHAR* ToReturnSourceLogString(EDronePartReturnSource Source)
+{
+	switch (Source)
+	{
+	case EDronePartReturnSource::Selected:
+		return TEXT("Selected");
+	case EDronePartReturnSource::Equipped:
+		return TEXT("Equipped");
+	default:
+		return TEXT("Unknown");
+	}
+}
+
+const EPartSlot ReturnSlotOrder[] = {EPartSlot::Core, EPartSlot::LeftWeapon, EPartSlot::RightWeapon};
+
+FString BuildSlotListLogString(const TArray<EPartSlot>& Slots)
+{
+	TArray<FString> Names;
+	Names.Reserve(Slots.Num());
+	for (const EPartSlot Slot : Slots)
+	{
+		Names.Add(ToReturnSlotLogString(Slot));
+	}
+	return FString::Join(Names, TEXT(","));
 }
 
 const TCHAR* ToReturnSummaryLogName(EDronePartReturnReason Reason)
@@ -63,20 +91,215 @@ void UDronePartReturnManager::Initialize(ADronePartInventory* InInventory)
 
 bool UDronePartReturnManager::ReturnSelectedParts(ARaidPlayerController* PC, EDronePartReturnReason Reason)
 {
-	bool bReturnedAny = false;
-	bReturnedAny |= ReturnSingleSelectedPart(PC, EPartSlot::Core, Reason);
-	bReturnedAny |= ReturnSingleSelectedPart(PC, EPartSlot::LeftWeapon, Reason);
-	bReturnedAny |= ReturnSingleSelectedPart(PC, EPartSlot::RightWeapon, Reason);
-	return bReturnedAny;
+	return ReturnSelectedPartsBatch(PC, Reason).ReturnedAny();
 }
 
 bool UDronePartReturnManager::ReturnEquippedParts(ARaidPlayerController* PC, EDronePartReturnReason Reason)
 {
-	bool bReturnedAny = false;
-	bReturnedAny |= ReturnSingleEquippedPart(PC, EPartSlot::Core, Reason);
-	bReturnedAny |= ReturnSingleEquippedPart(PC, EPartSlot::LeftWeapon, Reason);
-	bReturnedAny |= ReturnSingleEquippedPart(PC, EPartSlot::RightWeapon, Reason);
-	return bReturnedAny;
+	return ReturnEquippedPartsBatch(PC, Reason).ReturnedAny();
+}
+
+FDronePartReturnBatchResult UDronePartReturnManager::ReturnSelectedPartsBatch(
+	ARaidPlayerController* PC,
+	EDronePartReturnReason Reason)
+{
+	return ReturnPartsBatchInternal(PC, Reason, EDronePartReturnSource::Selected);
+}
+
+FDronePartReturnBatchResult UDronePartReturnManager::ReturnEquippedPartsBatch(
+	ARaidPlayerController* PC,
+	EDronePartReturnReason Reason)
+{
+	return ReturnPartsBatchInternal(PC, Reason, EDronePartReturnSource::Equipped);
+}
+
+FDronePartReturnBatchResult UDronePartReturnManager::ReturnPartsBatchInternal(
+	ARaidPlayerController* PC,
+	EDronePartReturnReason Reason,
+	EDronePartReturnSource Source)
+{
+	FDronePartReturnBatchResult Result;
+
+	for (const EPartSlot Slot : ReturnSlotOrder)
+	{
+		// 빈 슬롯은 실패가 아니라 skip이다. 반환 시도 전에 판정해야 둘을 구분할 수 있다.
+		const bool bAlreadyEmpty = IsSlotAlreadyEmptyForSource(PC, Slot, Source);
+		const FName PartID = GetPartIDForSource(PC, Slot, Source);
+
+		if (ReturnSinglePartForSource(PC, Slot, Source, Reason))
+		{
+			Result.SucceededCount++;
+			continue;
+		}
+
+		if (!PC || bAlreadyEmpty)
+		{
+			continue;
+		}
+
+		Result.FailedSlots.Add(Slot);
+		RegisterPendingReturn(PC, Slot, Source, PartID);
+	}
+
+	if (Result.HasFailure())
+	{
+		// 부분 실패를 "다음 트리거까지 조용히 대기"가 아니라 즉시 관측 가능한 사건으로 만든다.
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] ReturnPartial PC=%s Source=%s Reason=%s Succeeded=%d Failed=%d Slots=%s"),
+			*BuildPlayerID(PC),
+			ToReturnSourceLogString(Source),
+			ToReturnReasonLogString(Reason),
+			Result.SucceededCount,
+			Result.FailedSlots.Num(),
+			*BuildSlotListLogString(Result.FailedSlots));
+	}
+
+	return Result;
+}
+
+FDronePartReturnRetryResult UDronePartReturnManager::RetryPendingReturnsForServer(
+	ARaidPlayerController* PC,
+	FName ContextReason)
+{
+	FDronePartReturnRetryResult Result;
+	const FString ContextText = ContextReason.IsNone() ? TEXT("Manual") : ContextReason.ToString();
+
+	for (int32 Index = PendingReturns.Num() - 1; Index >= 0; --Index)
+	{
+		const FPendingDronePartReturn Pending = PendingReturns[Index];
+		ARaidPlayerController* PendingPC = Pending.PlayerController.Get();
+
+		if (PC && PendingPC != PC)
+		{
+			continue;
+		}
+
+		if (!PendingPC)
+		{
+			// 슬롯을 확인할 대상이 사라져 중복 반환 여부를 판정할 수 없다. 조용히 지우지 않고 남긴다.
+			UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] ReturnUnrecoverable PC=%s Part=%s Slot=%s Source=%s Context=%s Reason=ControllerGone"),
+				*Pending.PlayerID,
+				*Pending.DronePartID.ToString(),
+				ToReturnSlotLogString(Pending.Slot),
+				ToReturnSourceLogString(Pending.Source),
+				*ContextText);
+			Result.UnrecoverableCount++;
+			PendingReturns.RemoveAt(Index);
+			continue;
+		}
+
+		// 중복 반환 방지의 단일 기준이다 — 슬롯이 비었으면 이미 반환된 것이므로 재고를 두 번 늘리지 않는다.
+		if (IsSlotAlreadyEmptyForSource(PendingPC, Pending.Slot, Pending.Source))
+		{
+			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnRetrySkipped PC=%s Slot=%s Source=%s Context=%s Reason=AlreadyEmpty"),
+				*BuildPlayerID(PendingPC),
+				ToReturnSlotLogString(Pending.Slot),
+				ToReturnSourceLogString(Pending.Source),
+				*ContextText);
+			Result.SkippedCount++;
+			PendingReturns.RemoveAt(Index);
+			continue;
+		}
+
+		if (ReturnSinglePartForSource(PendingPC, Pending.Slot, Pending.Source, EDronePartReturnReason::Error))
+		{
+			Result.RecoveredCount++;
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] ReturnUnrecoverable PC=%s Part=%s Slot=%s Source=%s Context=%s Reason=RetryFailed"),
+				*BuildPlayerID(PendingPC),
+				*Pending.DronePartID.ToString(),
+				ToReturnSlotLogString(Pending.Slot),
+				ToReturnSourceLogString(Pending.Source),
+				*ContextText);
+			Result.UnrecoverableCount++;
+		}
+
+		PendingReturns.RemoveAt(Index);
+	}
+
+	if (Result.RecoveredCount > 0 || Result.SkippedCount > 0 || Result.UnrecoverableCount > 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReturnRetry PC=%s Context=%s Recovered=%d Skipped=%d Unrecoverable=%d Pending=%d"),
+			PC ? *BuildPlayerID(PC) : TEXT("All"),
+			*ContextText,
+			Result.RecoveredCount,
+			Result.SkippedCount,
+			Result.UnrecoverableCount,
+			PendingReturns.Num());
+	}
+
+	return Result;
+}
+
+int32 UDronePartReturnManager::GetPendingReturnCount() const
+{
+	return PendingReturns.Num();
+}
+
+bool UDronePartReturnManager::IsSlotAlreadyEmptyForSource(
+	const ARaidPlayerController* PC,
+	EPartSlot Slot,
+	EDronePartReturnSource Source) const
+{
+	return Source == EDronePartReturnSource::Selected
+		? IsSelectedSlotAlreadyEmpty(PC, Slot)
+		: IsEquippedSlotAlreadyEmpty(PC, Slot);
+}
+
+FName UDronePartReturnManager::GetPartIDForSource(
+	const ARaidPlayerController* PC,
+	EPartSlot Slot,
+	EDronePartReturnSource Source) const
+{
+	if (!PC)
+	{
+		return NAME_None;
+	}
+
+	return Source == EDronePartReturnSource::Selected
+		? PC->GetSelectedPartIDBySlot(Slot)
+		: PC->GetEquippedPartIDBySlot(Slot);
+}
+
+bool UDronePartReturnManager::ReturnSinglePartForSource(
+	ARaidPlayerController* PC,
+	EPartSlot Slot,
+	EDronePartReturnSource Source,
+	EDronePartReturnReason Reason)
+{
+	return Source == EDronePartReturnSource::Selected
+		? ReturnSingleSelectedPart(PC, Slot, Reason)
+		: ReturnSingleEquippedPart(PC, Slot, Reason);
+}
+
+void UDronePartReturnManager::RegisterPendingReturn(
+	ARaidPlayerController* PC,
+	EPartSlot Slot,
+	EDronePartReturnSource Source,
+	FName PartID)
+{
+	if (!PC)
+	{
+		return;
+	}
+
+	// 같은 슬롯이 반복 실패해도 후보는 1건만 유지한다.
+	for (FPendingDronePartReturn& Existing : PendingReturns)
+	{
+		if (Existing.PlayerController.Get() == PC && Existing.Slot == Slot && Existing.Source == Source)
+		{
+			Existing.DronePartID = PartID;
+			return;
+		}
+	}
+
+	FPendingDronePartReturn& Pending = PendingReturns.AddDefaulted_GetRef();
+	Pending.PlayerController = PC;
+	Pending.Slot = Slot;
+	Pending.Source = Source;
+	Pending.DronePartID = PartID;
+	Pending.PlayerID = BuildPlayerID(PC);
 }
 
 bool UDronePartReturnManager::ReturnSingleSelectedPart(ARaidPlayerController* PC, EPartSlot Slot, EDronePartReturnReason Reason)
