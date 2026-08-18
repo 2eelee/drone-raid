@@ -24,6 +24,9 @@ public class DroneProto : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] {
 			"SlateCore",
+			"HTTP",
+			"HTTPServer",
+			"Json",
 			// FUniqueNetIdWrapper::ToString (DroneReport PlayerKey) 링크에 필요
 			"CoreOnline"
 		});

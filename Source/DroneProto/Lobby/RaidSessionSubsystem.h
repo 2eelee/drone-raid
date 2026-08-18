@@ -97,6 +97,7 @@ public:
 	FRaidAssignmentResult GetLastAssignmentResultForTest() const { return LastAssignmentResult; }
 	bool WasTravelRequestedForTest() const { return bTravelRequestedForTest; }
 	int32 GetTravelRequestCountForTest() const { return TravelRequestCountForTest; }
+	FString GetLastTravelTargetForTest() const { return LastTravelTargetForTest; }
 	void ResetTravelRequestedForTest();
 	void RetryRaidEntryForTest();
 	void ExpireMatchmakingWaitForTest();
@@ -140,6 +141,8 @@ private:
 	bool bRaidLoadFailureHandled = false;
 	bool bPendingLoadFailedPopupAfterLobbyReturn = false;
 	bool bLobbyReturnRequestedForLoadFailure = false;
+	bool bAssignmentRequestInFlight = false;
+	uint64 AssignmentRequestGeneration = 0;
 	FRaidAssignmentResult LastAssignmentResult;
 	FString Callsign = TEXT("AAA");
 	bool bHasCompletedTutorial = false;
@@ -157,10 +160,12 @@ private:
 	bool bTravelRequestedForTest = false;
 	int32 TravelRequestCountForTest = 0;
 	int32 RaidLoadFailureHandleCountForTest = 0;
+	FString LastTravelTargetForTest;
 #endif
 
 	UUserWidget* CreateAndShowPopup(TSubclassOf<UUserWidget> WidgetClass);
 	void EvaluateRaidEntry(bool bIsRetry);
+	void HandleAssignmentResolved(const FRaidAssignmentResult& Result, uint64 RequestGeneration);
 	void StartMatchmakingWait();
 	void StopMatchmakingRetry();
 	void HandleMatchmakingRetry();

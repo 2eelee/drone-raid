@@ -11,6 +11,8 @@
 #include "RaidGameState.h"
 #include "RaidPlayerController.h"
 #include "RaidPlayerState.h"
+#include "RaidServerAdmissionService.h"
+#include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerStart.h"
 #include "GameFramework/PlayerState.h"
 #include "Engine/World.h"
@@ -111,6 +113,30 @@ void ARaidGameMode::BeginPlay()
 		&ARaidGameMode::HandleRaidTimerWatchdogTickForServer,
 		RaidTimerWatchdogIntervalSeconds,
 		true);
+
+	// 입장 예약 게이트(ENTRY-03/09/12)는 GameState 확보 실패와 무관하게 켜져야 한다.
+	// bAdmissionRequired가 false로 남으면 예약 토큰 없는 접속이 그대로 통과하므로(fail-open)
+	// 아래 GameState 조기 반환보다 앞에 둔다.
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		bAdmissionRequired = true;
+		FString RaidSlot;
+		FString GameEndpoint;
+		int32 ReservationPort = 0;
+		FParse::Value(FCommandLine::Get(), TEXT("RaidSlot="), RaidSlot);
+		FParse::Value(FCommandLine::Get(), TEXT("RaidGameEndpoint="), GameEndpoint);
+		FParse::Value(FCommandLine::Get(), TEXT("RaidReservationPort="), ReservationPort);
+
+		AdmissionService = NewObject<URaidServerAdmissionService>(this);
+		if (!AdmissionService->Initialize(this, RaidSlot, static_cast<uint32>(FMath::Max(0, ReservationPort)), GameEndpoint))
+		{
+			AdmissionService = nullptr;
+			UE_LOG(LogTemp, Error, TEXT("[DR_SUMMARY] RaidAdmissionStartFailed Slot=%s ReservationPort=%d GameEndpoint=%s"),
+				*RaidSlot,
+				ReservationPort,
+				*GameEndpoint);
+		}
+	}
 
 	ARaidGameState* GS = GetGameState<ARaidGameState>();
 	if (!GS)
@@ -216,6 +242,68 @@ ARaidBoss* ARaidGameMode::EnsureRaidBossForServer()
 	return ExistingBoss;
 }
 
+void ARaidGameMode::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (AdmissionService)
+	{
+		AdmissionService->Shutdown();
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void ARaidGameMode::PreLogin(
+	const FString& Options,
+	const FString& Address,
+	const FUniqueNetIdRepl& UniqueId,
+	FString& ErrorMessage)
+{
+	Super::PreLogin(Options, Address, UniqueId, ErrorMessage);
+	if (!ErrorMessage.IsEmpty() || !bAdmissionRequired)
+	{
+		return;
+	}
+	ValidateRaidAdmission(Options, ErrorMessage);
+}
+
+void ARaidGameMode::ValidateRaidAdmission(const FString& Options, FString& OutErrorMessage)
+{
+	FName RejectReason;
+	if (!CanAcceptRaidJoinForServer(RejectReason, false))
+	{
+		OutErrorMessage = RejectReason.ToString();
+		return;
+	}
+	if (!AdmissionService)
+	{
+		OutErrorMessage = TEXT("RaidAdmissionUnavailable");
+		return;
+	}
+
+	const FString Slot = UGameplayStatics::ParseOption(Options, TEXT("RaidSlot"));
+	const FString Token = UGameplayStatics::ParseOption(Options, TEXT("RaidReservation"));
+	AdmissionService->TryClaim(Slot, Token, FPlatformTime::Seconds(), OutErrorMessage);
+}
+
+FString ARaidGameMode::InitNewPlayer(
+	APlayerController* NewPlayerController,
+	const FUniqueNetIdRepl& UniqueId,
+	const FString& Options,
+	const FString& Portal)
+{
+	FString ErrorMessage = Super::InitNewPlayer(NewPlayerController, UniqueId, Options, Portal);
+	if (!ErrorMessage.IsEmpty() || !bAdmissionRequired)
+	{
+		return ErrorMessage;
+	}
+
+	const FString Token = UGameplayStatics::ParseOption(Options, TEXT("RaidReservation"));
+	if (!AdmissionService || !AdmissionService->BindClaimedToken(NewPlayerController, Token))
+	{
+		return TEXT("RaidReservationInvalid");
+	}
+	return ErrorMessage;
+}
+
 bool ARaidGameMode::EnsureDronePartReturnManagerForServer()
 {
 	if (!HasAuthority())
@@ -250,19 +338,41 @@ void ARaidGameMode::PostLogin(APlayerController* NewPlayer)
 
 	if (HasAuthority())
 	{
-		FName RejectReason;
-		if (!CanAcceptRaidJoinForServer(RejectReason))
+		// 예약 서버에서는 정원·상태 판정을 PreLogin의 토큰 claim이 이미 마쳤으므로 여기서는 commit만 한다.
+		// 예약이 없는 구성(PIE·리슨)에서만 기존 CanAcceptRaidJoinForServer 게이트를 그대로 쓴다.
+		if (bAdmissionRequired)
 		{
-			UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=PostLogin"),
-				*BuildRaidGameModeControllerLogString(NewPlayer),
-				RejectReason.IsNone() ? TEXT("Unknown") : *RejectReason.ToString());
-			return;
+			if (!AdmissionService || !AdmissionService->CommitForPlayer(NewPlayer))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=ReservationCommitFailed Scope=PostLogin"),
+					*BuildRaidGameModeControllerLogString(NewPlayer));
+				NewPlayer->Destroy();
+				return;
+			}
+		}
+		else
+		{
+			FName RejectReason;
+			if (!CanAcceptRaidJoinForServer(RejectReason))
+			{
+				UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidJoinRejected PC=%s Reason=%s Scope=PostLogin"),
+					*BuildRaidGameModeControllerLogString(NewPlayer),
+					RejectReason.IsNone() ? TEXT("Unknown") : *RejectReason.ToString());
+				return;
+			}
 		}
 
 		if (ARaidGameState* GS = GetGameState<ARaidGameState>())
 		{
 			const bool bLateJoin = GS->RaidState == ERaidState::Battle;
-			GS->CurrentPlayers++;
+			if (bAdmissionRequired && AdmissionService)
+			{
+				GS->CurrentPlayers = AdmissionService->GetActivePlayers();
+			}
+			else
+			{
+				GS->CurrentPlayers++;
+			}
 			UE_LOG(LogTemp, Log, TEXT("[Server] PostLogin: CurrentPlayers = %d"), GS->CurrentPlayers);
 			if (GS->RaidState == ERaidState::Waiting)
 			{
@@ -503,7 +613,17 @@ void ARaidGameMode::Logout(AController* Exiting)
 
 		if (ARaidGameState* GS = GetGameState<ARaidGameState>())
 		{
-			GS->CurrentPlayers--;
+			if (bAdmissionRequired)
+			{
+				if (AdmissionService && AdmissionService->ReleasePlayer(Exiting))
+				{
+					GS->CurrentPlayers = AdmissionService->GetActivePlayers();
+				}
+			}
+			else
+			{
+				GS->CurrentPlayers = FMath::Max(0, GS->CurrentPlayers - 1);
+			}
 			UE_LOG(LogTemp, Log, TEXT("[Server] Logout: CurrentPlayers = %d"), GS->CurrentPlayers);
 		}
 	}
@@ -958,6 +1078,18 @@ bool ARaidGameMode::NotifyRaidSpawnFailedForTest(AController* Controller, FName 
 		}
 	}
 	return bNotified;
+}
+
+void ARaidGameMode::SetAdmissionServiceForTest(URaidServerAdmissionService* InService, bool bInAdmissionRequired)
+{
+	AdmissionService = InService;
+	bAdmissionRequired = bInAdmissionRequired;
+}
+
+void ARaidGameMode::ValidateRaidAdmissionForTest(const FString& Options, FString& OutErrorMessage)
+{
+	OutErrorMessage.Reset();
+	ValidateRaidAdmission(Options, OutErrorMessage);
 }
 #endif
 

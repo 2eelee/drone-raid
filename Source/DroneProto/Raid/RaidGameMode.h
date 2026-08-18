@@ -8,6 +8,7 @@
 class UDronePartReturnManager;
 class UBalanceTelemetryComponent;
 class ARaidBoss;
+class URaidServerAdmissionService;
 enum class EBossState : uint8;
 
 struct FDroneBossDamageContribution
@@ -25,6 +26,9 @@ public:
 	ARaidGameMode();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage) override;
+	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal = TEXT("")) override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void RestartPlayer(AController* NewPlayer) override;
 	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
@@ -76,6 +80,8 @@ public:
 	bool IsRaidTimeLimitTimerActiveForTest() const;
 	void ExpireRaidTimeLimitForTest();
 	bool NotifyRaidSpawnFailedForTest(AController* Controller, FName Reason);
+	void SetAdmissionServiceForTest(URaidServerAdmissionService* InService, bool bInAdmissionRequired);
+	void ValidateRaidAdmissionForTest(const FString& Options, FString& OutErrorMessage);
 #endif
 
 private:
@@ -88,6 +94,11 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Raid|Telemetry")
 	UBalanceTelemetryComponent* BalanceTelemetry = nullptr;
 
+	UPROPERTY()
+	TObjectPtr<URaidServerAdmissionService> AdmissionService;
+
+	bool bAdmissionRequired = false;
+
 	FTimerHandle RaidTimeLimitTimerHandle;
 	bool bRaidTimeLimitExpiredForServer = false;
 	FTimerHandle RaidTimerWatchdogTimerHandle;
@@ -98,6 +109,7 @@ private:
 	TMap<TWeakObjectPtr<AController>, TWeakObjectPtr<AActor>> PlayerStartAssignments;
 
 	bool EnsureDronePartReturnManagerForServer();
+	void ValidateRaidAdmission(const FString& Options, FString& OutErrorMessage);
 	void HandleRaidTimeLimitExpiredForServer();
 	void HandleRaidTimerWatchdogTickForServer();
 	void NotifyBossPatternPopulationAfterLogoutForServer();

@@ -14,7 +14,7 @@ public:
 
 	virtual FRaidAssignmentResult ResolveRaidAssignment(const FString& RequestedSlot) override;
 
-	bool IsSlotEnabled(const FString& SlotId) const;
+	virtual bool IsSlotEnabled(const FString& SlotId) const override;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	const TArray<FRaidServerCandidate>& GetCandidatesForTest() const { return Candidates; }

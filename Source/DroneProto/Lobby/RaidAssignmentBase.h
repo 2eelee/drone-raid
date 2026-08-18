@@ -5,6 +5,8 @@
 #include "ServerEndpoint.h"
 #include "RaidAssignmentBase.generated.h"
 
+DECLARE_DELEGATE_OneParam(FRaidAssignmentComplete, const FRaidAssignmentResult&);
+
 UCLASS(Abstract)
 class DRONEPROTO_API URaidAssignmentBase : public UObject
 {
@@ -13,6 +15,11 @@ class DRONEPROTO_API URaidAssignmentBase : public UObject
 public:
 	virtual FRaidAssignmentResult ResolveRaidAssignment(const FString& RequestedSlot)
 		PURE_VIRTUAL(URaidAssignmentBase::ResolveRaidAssignment, return FRaidAssignmentResult::Failed(ERaidEntryFailReason::ServerListFailed, TEXT("UnimplementedAssignment")););
+	virtual void ResolveRaidAssignmentAsync(
+		const FString& RequestedSlot,
+		double RemainingSeconds,
+		FRaidAssignmentComplete OnComplete);
+	virtual bool IsSlotEnabled(const FString& SlotId) const { return true; }
 
 	virtual FServerEndpoint ResolveServer(const FString& RequestedSlot);
 };

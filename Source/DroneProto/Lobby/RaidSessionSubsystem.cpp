@@ -6,6 +6,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "LocalAssignment.h"
 #include "RaidLobbyWidget.h"
+#include "RemoteRaidAssignment.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace
@@ -53,7 +54,9 @@ void URaidSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	Assignment = NewObject<ULocalAssignment>(this);
+	URemoteRaidAssignment* RemoteAssignment = NewObject<URemoteRaidAssignment>(this);
+	RemoteAssignment->InitializeFromSettings();
+	Assignment = RemoteAssignment;
 	LoadLocalProfile();
 
 	PostLoadMapDelegateHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(
@@ -265,32 +268,36 @@ void URaidSessionSubsystem::ClearActiveLobbyWidget(URaidLobbyWidget* InWidget)
 
 void URaidSessionSubsystem::RequestRaidEntry(const FString& SlotId)
 {
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryRequest Slot=%s AuthorityModel=LocalPrototype"), *SlotId);
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryRequest Slot=%s AuthorityModel=DedicatedReservation"), *SlotId);
 
 	StopMatchmakingRetry();
 	StopRaidLoadWatchdog();
 	bRaidLoadFailureHandled = false;
 	bPendingLoadFailedPopupAfterLobbyReturn = false;
 	bLobbyReturnRequestedForLoadFailure = false;
+	++AssignmentRequestGeneration;
+	bAssignmentRequestInFlight = false;
 	PendingRaidEntrySlotId = SlotId;
 	EvaluateRaidEntry(false);
 }
 
 bool URaidSessionSubsystem::IsSlotEnabled(const FString& SlotId) const
 {
-	if (const ULocalAssignment* LocalAssignment = Cast<ULocalAssignment>(Assignment))
-	{
-		return LocalAssignment->IsSlotEnabled(SlotId);
-	}
-
-	return false;
+	return Assignment && Assignment->IsSlotEnabled(SlotId);
 }
 
 void URaidSessionSubsystem::EvaluateRaidEntry(bool bIsRetry)
 {
+	if (bAssignmentRequestInFlight)
+	{
+		return;
+	}
+
+	double RemainingSeconds = MatchmakingTimeoutSeconds;
 	if (bIsRetry)
 	{
 		const double ElapsedSeconds = GetMatchmakingNowSeconds() - MatchmakingWaitStartTimeSeconds;
+		RemainingSeconds = MatchmakingTimeoutSeconds - ElapsedSeconds;
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryRetry Slot=%s ElapsedSeconds=%.2f TimeoutSeconds=%.2f"),
 			*PendingRaidEntrySlotId,
 			ElapsedSeconds,
@@ -318,7 +325,21 @@ void URaidSessionSubsystem::EvaluateRaidEntry(bool bIsRetry)
 		return;
 	}
 
-	const FRaidAssignmentResult Result = Assignment->ResolveRaidAssignment(PendingRaidEntrySlotId);
+	bAssignmentRequestInFlight = true;
+	const uint64 RequestGeneration = ++AssignmentRequestGeneration;
+	Assignment->ResolveRaidAssignmentAsync(
+		PendingRaidEntrySlotId,
+		RemainingSeconds,
+		FRaidAssignmentComplete::CreateUObject(this, &URaidSessionSubsystem::HandleAssignmentResolved, RequestGeneration));
+}
+
+void URaidSessionSubsystem::HandleAssignmentResolved(const FRaidAssignmentResult& Result, uint64 RequestGeneration)
+{
+	if (RequestGeneration != AssignmentRequestGeneration)
+	{
+		return;
+	}
+	bAssignmentRequestInFlight = false;
 	RecordAssignmentResult(Result);
 
 	switch (Result.Result)
@@ -429,6 +450,26 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 		return;
 	}
 
+	FString TravelTarget = Result.Endpoint.TravelTarget;
+	if (!Result.Endpoint.bIsLevelName)
+	{
+		if (Result.ReservationToken.IsEmpty())
+		{
+			const FRaidAssignmentResult MissingTokenResult = FRaidAssignmentResult::Failed(
+				ERaidEntryFailReason::MapLoadFailed,
+				TEXT("MissingReservationToken"),
+				Result.Endpoint,
+				Result.Availability);
+			RecordAssignmentResult(MissingTokenResult);
+			HandleRaidEntryFailure(MissingTokenResult);
+			return;
+		}
+		TravelTarget = FString::Printf(TEXT("%s?RaidSlot=%s?RaidReservation=%s"),
+			*Result.Endpoint.TravelTarget,
+			*Result.Endpoint.SlotId,
+			*Result.ReservationToken);
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidEntryTravel Slot=%s Target=%s bIsLevelName=%d"),
 		*Result.Endpoint.SlotId,
 		*Result.Endpoint.TravelTarget,
@@ -437,6 +478,7 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 #if WITH_DEV_AUTOMATION_TESTS
 	bTravelRequestedForTest = true;
 	++TravelRequestCountForTest;
+	LastTravelTargetForTest = TravelTarget;
 	if (bSuppressTravelForTest)
 	{
 		StartRaidLoadWatchdog(nullptr, Result.Endpoint);
@@ -465,7 +507,7 @@ void URaidSessionSubsystem::TravelToRaidEndpoint(const FRaidAssignmentResult& Re
 	else if (APlayerController* PC = World->GetFirstPlayerController())
 	{
 		StartRaidLoadWatchdog(World, Result.Endpoint);
-		PC->ClientTravel(Result.Endpoint.TravelTarget, TRAVEL_Absolute);
+		PC->ClientTravel(TravelTarget, TRAVEL_Absolute);
 	}
 	else
 	{
@@ -637,10 +679,14 @@ void URaidSessionSubsystem::RecordAssignmentResult(const FRaidAssignmentResult& 
 	LastAssignmentResult = Result;
 
 	const FString SelectedSlot = Result.SelectedSlotId.ToString();
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidAssignmentResult Result=%s Slot=%s ServerState=%s AuthorityModel=LocalPrototype SelectedSlot=%s FailReason=%s DebugReason=%s"),
+	const TCHAR* AuthorityModel = Assignment && Assignment->IsA<URemoteRaidAssignment>()
+		? TEXT("DedicatedReservation")
+		: TEXT("LocalPrototype");
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] RaidAssignmentResult Result=%s Slot=%s ServerState=%s AuthorityModel=%s SelectedSlot=%s FailReason=%s DebugReason=%s"),
 		ToRaidAssignmentResultText(Result.Result),
 		*SelectedSlot,
 		ToRaidServerStateText(Result.Availability.ServerState),
+		AuthorityModel,
 		*SelectedSlot,
 		ToRaidFailReasonText(Result.FailReason),
 		*Result.DebugReason);
@@ -738,6 +784,8 @@ void URaidSessionSubsystem::HideEntryPopups()
 
 void URaidSessionSubsystem::CancelMatchmaking()
 {
+	++AssignmentRequestGeneration;
+	bAssignmentRequestInFlight = false;
 	StopMatchmakingRetry();
 	StopRaidLoadWatchdog();
 	LastAssignmentResult = FRaidAssignmentResult::Canceled(TEXT("CancelMatchmaking"));
@@ -767,6 +815,7 @@ void URaidSessionSubsystem::ResetTravelRequestedForTest()
 {
 	bTravelRequestedForTest = false;
 	TravelRequestCountForTest = 0;
+	LastTravelTargetForTest.Reset();
 }
 
 void URaidSessionSubsystem::RetryRaidEntryForTest()
@@ -776,6 +825,8 @@ void URaidSessionSubsystem::RetryRaidEntryForTest()
 
 void URaidSessionSubsystem::ExpireMatchmakingWaitForTest()
 {
+	++AssignmentRequestGeneration;
+	bAssignmentRequestInFlight = false;
 	const FRaidAssignmentResult TimeoutResult = FRaidAssignmentResult::Failed(
 		ERaidEntryFailReason::NoServerAvailable,
 		TEXT("MatchmakingTimeout"));

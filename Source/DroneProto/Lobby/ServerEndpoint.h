@@ -149,7 +149,13 @@ struct DRONEPROTO_API FRaidAssignmentResult
 	UPROPERTY(BlueprintReadOnly)
 	FString DebugReason;
 
-	static FRaidAssignmentResult Success(const FRaidServerCandidate& Candidate, const FString& InDebugReason)
+	UPROPERTY(BlueprintReadOnly)
+	FString ReservationToken;
+
+	static FRaidAssignmentResult Success(
+		const FRaidServerCandidate& Candidate,
+		const FString& InDebugReason,
+		const FString& InReservationToken = FString())
 	{
 		FRaidAssignmentResult Out;
 		Out.Result = ERaidAssignmentResultType::Success;
@@ -164,6 +170,7 @@ struct DRONEPROTO_API FRaidAssignmentResult
 			? NAME_None
 			: FName(*Candidate.Endpoint.SlotId);
 		Out.DebugReason = InDebugReason;
+		Out.ReservationToken = InReservationToken;
 		return Out;
 	}
 

@@ -22,6 +22,7 @@
 #include "Raid/RaidGameMode.h"
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
+#include "Raid/RaidServerAdmissionService.h"
 #include "Lobby/LocalAssignment.h"
 #include "Lobby/RaidLobbyWidget.h"
 #include "Lobby/RaidSessionSubsystem.h"
@@ -5849,6 +5850,65 @@ bool FRaidServerCapacityJoinGateTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidServerAdmissionLifecycleTest,
+	"DroneProto.RaidEntry.Reservation.AdmissionLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidServerAdmissionLifecycleTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidServerAdmissionLifecycleWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	ResolveBossPatternForSyntheticWorld(Boss);
+
+	TestNotNull(TEXT("admission player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("admission game mode is spawned"), GameMode);
+	TestNotNull(TEXT("admission boss is spawned"), Boss);
+	if (!Context.World || !Context.GameState || !Context.PC || !GameMode || !Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.GameState->SetRaidBossForServer(Boss);
+	URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+	Admission->InitializeForTest(TEXT("A"));
+	GameMode->SetAdmissionServiceForTest(Admission, true);
+
+	FString ErrorMessage;
+	GameMode->ValidateRaidAdmissionForTest(TEXT(""), ErrorMessage);
+	TestEqual(TEXT("dedicated admission rejects a missing token"), ErrorMessage, FString(TEXT("RaidReservationMissing")));
+
+	const double NowSeconds = FPlatformTime::Seconds();
+	FString Token;
+	TestTrue(TEXT("test reservation is issued"), Admission->IssueReservationForTest(NowSeconds, Token));
+	ErrorMessage.Reset();
+	const FString Options = FString::Printf(TEXT("?RaidSlot=A?RaidReservation=%s"), *Token);
+	GameMode->ValidateRaidAdmissionForTest(Options, ErrorMessage);
+	TestTrue(TEXT("valid reservation passes PreLogin"), ErrorMessage.IsEmpty());
+	TestFalse(TEXT("claimed reservation rejects replay"), Admission->TryClaim(TEXT("A"), Token, NowSeconds + 1.0, ErrorMessage));
+
+	TestTrue(TEXT("claimed token binds to controller"), Admission->BindClaimedToken(Context.PC, Token));
+	TestTrue(TEXT("bound token commits for controller"), Admission->CommitForPlayer(Context.PC));
+	TestEqual(TEXT("commit makes one active player"), Admission->GetActivePlayers(), 1);
+	TestFalse(TEXT("same controller cannot commit twice"), Admission->CommitForPlayer(Context.PC));
+	TestTrue(TEXT("admitted controller release succeeds"), Admission->ReleasePlayer(Context.PC));
+	TestEqual(TEXT("release returns active count to zero"), Admission->GetActivePlayers(), 0);
+	TestFalse(TEXT("unadmitted controller release is ignored"), Admission->ReleasePlayer(Context.PC));
+
+	Context.GameState->SetRaidStateForServer(ERaidState::End);
+	FString EndToken;
+	TestTrue(TEXT("reservation can be prepared for ended-state check"), Admission->IssueReservationForTest(NowSeconds + 2.0, EndToken));
+	ErrorMessage.Reset();
+	const FString EndOptions = FString::Printf(TEXT("?RaidSlot=A?RaidReservation=%s"), *EndToken);
+	GameMode->ValidateRaidAdmissionForTest(EndOptions, ErrorMessage);
+	TestEqual(TEXT("ended raid rejects before token claim"), ErrorMessage, FString(TEXT("RaidEnded")));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidBossStateJoinGateTest,
 	"DroneProto.Q4.RaidBoss.BossStateJoinGate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -7184,8 +7244,8 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		LocalAssignmentSource.Contains(TEXT("[DR_SUMMARY] RaidServerState")));
 	TestTrue(TEXT("raid assignment result records server state"),
 		RaidSessionSubsystemSource.Contains(TEXT("ServerState=%s")));
-	TestTrue(TEXT("raid assignment result records local prototype authority"),
-		RaidSessionSubsystemSource.Contains(TEXT("AuthorityModel=LocalPrototype")));
+	TestTrue(TEXT("raid entry request records dedicated reservation authority"),
+		RaidSessionSubsystemSource.Contains(TEXT("AuthorityModel=DedicatedReservation")));
 	TestTrue(TEXT("raid server availability type exists outside RaidGameState"),
 		ServerEndpointSource.Contains(TEXT("FRaidServerAvailability")));
 	TestTrue(TEXT("raid entry travel summary log marker exists"),
