@@ -254,6 +254,12 @@ void ADronePartInventory::InitializeDefaultStocks()
 	}
 
 	InitializeFallbackStocks();
+
+	// 표 경로가 성공했을 때만 Source 로그가 있어 실패는 아무 흔적도 남지 않았다.
+	// 밸런싱에서 어느 값으로 도는지가 판단의 전제라 실패 쪽도 남긴다.
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] PartStocks Source=Fallback Table=%s StockNum=%d"),
+		PartCountDataTable ? *GetNameSafe(PartCountDataTable) : TEXT("None"),
+		PartStocks.Num());
 }
 
 bool ADronePartInventory::InitializeStocksFromPartCountDataTable()

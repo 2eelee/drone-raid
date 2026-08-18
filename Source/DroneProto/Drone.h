@@ -145,6 +145,12 @@ public:
 	// UENUM이 아니라 순수 C++ enum이라 UFUNCTION으로 노출할 수 없다. 밸런스 패널은 C++에서 읽는다.
 	EDroneCombatDataFallbackReason GetCombatDataFallbackReason() const { return DroneCombatDataFallbackReason; }
 
+	// 코어·무기 표를 한 번이라도 해석했는지. 해석 전에는 DroneCombatDataFallbackReason이
+	// 초기값(MissingCoreTable)이라 "아직 안 읽음"과 "표가 없음"이 구분되지 않는다.
+	// 이 값이 false인 동안의 사유는 판정 근거가 아니다.
+	UFUNCTION(BlueprintPure, Category = "Drone|Combat")
+	bool IsCombatDataResolved() const { return bDroneCombatConfigResolved; }
+
 	// 현재 상태 기준 코어 계산 결과. 기존 규칙 함수(FDroneCombatRules::CalculateCoreBonus)를
 	// 그대로 쓰고 상태 변경도 로그도 하지 않는다 — 밸런스 패널이 주기적으로 불러도 안전하다.
 	FDroneCoreCalculationResult GetCoreCalculationSnapshot() const;

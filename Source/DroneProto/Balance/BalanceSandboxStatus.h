@@ -155,7 +155,18 @@ struct FBalanceSandboxStatus
 	UPROPERTY(BlueprintReadOnly, Category = "Balance Sandbox|Data Source")
 	FName CombatDataFallbackReason = NAME_None;
 
-	/** 넷 중 하나라도 fallback이면 true. 패널에서 눈에 띄게 쓰라고 따로 둔다. */
+	/**
+	 * 표 상태를 실제로 판정할 수 있었는지. 드론이 없으면 코어·무기를, 보스가 없으면 패턴을
+	 * 읽을 대상이 없다. 이 값이 false인데 위 플래그가 false인 것은 "fallback"이 아니라
+	 * "아직 모름"이다 — 둘을 섞으면 부트스트랩 실패를 밸런스 데이터 문제로 오독한다.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Balance Sandbox|Data Source")
-	bool bAnyDataTableFallback = true;
+	bool bCombatDataSourceKnown = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Balance Sandbox|Data Source")
+	bool bPatternDataSourceKnown = false;
+
+	/** 판정 가능한 것 중 하나라도 fallback이면 true. */
+	UPROPERTY(BlueprintReadOnly, Category = "Balance Sandbox|Data Source")
+	bool bAnyDataTableFallback = false;
 };

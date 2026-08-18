@@ -27,6 +27,9 @@ public:
 	// 보스를 확보한 뒤 임시 프록시 크기를 입힌다. 스폰 경로 자체는 그대로 두고 시각만 얹는다.
 	virtual ARaidBoss* EnsureRaidBossForServer() override;
 
+	// BalanceMap 직접 진입에서 플레이어가 실제 드론을 possess했는지 한 줄로 남긴다.
+	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+
 	/** 코어/좌/우를 한 번에 지정한다. 슬롯마다 기존 선택 RPC를 그대로 타므로 재고 차감·교체 계약이 유지된다. */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
 	bool ApplySandboxLoadoutForServer(const FString& CoreAlias, const FString& LeftWeaponAlias, const FString& RightWeaponAlias);

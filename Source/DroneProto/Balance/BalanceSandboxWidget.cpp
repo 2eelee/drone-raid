@@ -419,12 +419,22 @@ FBalanceSandboxStatus UBalanceSandboxWidget::GetSandboxStatus() const
 		Status.SurvivalTimeSeconds = Record.SurvivalTime;
 		Status.HitCount = Record.DamageTakenCount;
 
-		// [DATA SOURCE] 코어·무기
-		const EDroneCombatDataFallbackReason FallbackReason = Drone->GetCombatDataFallbackReason();
-		const bool bCombatTablesInUse = FallbackReason == EDroneCombatDataFallbackReason::None;
-		Status.bCoreDataTableInUse = bCombatTablesInUse;
-		Status.bWeaponDataTableInUse = bCombatTablesInUse;
-		Status.CombatDataFallbackReason = bCombatTablesInUse ? FName(TEXT("None")) : FName(TEXT("Fallback"));
+		// [DATA SOURCE] 코어·무기 — 해석 전에는 판정하지 않는다.
+		// DroneCombatDataFallbackReason의 초기값이 MissingCoreTable이라 첫 해석 전에 그대로 읽으면
+		// "아직 안 읽음"이 "표가 없음"으로 보인다. 그 오독이 부트스트랩 문제를 데이터 문제로 만든다.
+		Status.bCombatDataSourceKnown = Drone->IsCombatDataResolved();
+		if (Status.bCombatDataSourceKnown)
+		{
+			const EDroneCombatDataFallbackReason FallbackReason = Drone->GetCombatDataFallbackReason();
+			const bool bCombatTablesInUse = FallbackReason == EDroneCombatDataFallbackReason::None;
+			Status.bCoreDataTableInUse = bCombatTablesInUse;
+			Status.bWeaponDataTableInUse = bCombatTablesInUse;
+			Status.CombatDataFallbackReason = bCombatTablesInUse ? FName(TEXT("None")) : FName(TEXT("Fallback"));
+		}
+		else
+		{
+			Status.CombatDataFallbackReason = FName(TEXT("Unresolved"));
+		}
 	}
 
 	// [RAID]
@@ -449,6 +459,7 @@ FBalanceSandboxStatus UBalanceSandboxWidget::GetSandboxStatus() const
 				break;
 			}
 			Status.bBossPatternDataTableInUse = PatternComponent->IsPatternDataTableInUse();
+			Status.bPatternDataSourceKnown = true;
 		}
 	}
 
@@ -474,10 +485,11 @@ FBalanceSandboxStatus UBalanceSandboxWidget::GetSandboxStatus() const
 		Status.bReportDataTableInUse = RaidPC->AreDroneReportDataTablesLoaded();
 	}
 
+	// 판정할 수 있었던 것만 fallback 여부에 넣는다. 드론·보스가 아직 없는 상태를
+	// fallback으로 표시하면 부트스트랩 문제를 데이터 문제로 오독하게 된다.
 	Status.bAnyDataTableFallback =
-		!Status.bCoreDataTableInUse
-		|| !Status.bWeaponDataTableInUse
-		|| !Status.bBossPatternDataTableInUse
+		(Status.bCombatDataSourceKnown && (!Status.bCoreDataTableInUse || !Status.bWeaponDataTableInUse))
+		|| (Status.bPatternDataSourceKnown && !Status.bBossPatternDataTableInUse)
 		|| !Status.bReportDataTableInUse;
 
 	return Status;
@@ -500,9 +512,11 @@ void UBalanceSandboxWidget::RefreshStatusPanel()
 		*Status.EquippedLeftWeaponPartID.ToString(),
 		*Status.EquippedRightWeaponPartID.ToString()));
 
-	SetIfBound(Text_Player, FString::Printf(TEXT("HP %d/%d  Speed %.0f  CoreAtk x%.3f  CoreBonus x%.3f"),
-		Status.CurrentHP, Status.MaxHP, Status.CurrentMoveSpeed,
-		Status.CoreAttackModifier, Status.CoreBonusAttackModifier));
+	SetIfBound(Text_Player, Status.bHasDrone
+		? FString::Printf(TEXT("HP %d/%d  Speed %.0f  CoreAtk x%.3f  CoreBonus x%.3f"),
+			Status.CurrentHP, Status.MaxHP, Status.CurrentMoveSpeed,
+			Status.CoreAttackModifier, Status.CoreBonusAttackModifier)
+		: FString(TEXT("드론 없음 — SandboxBootstrap 로그의 IsDrone 확인")));
 
 	SetIfBound(Text_LastAttack, Status.bHasAttacked
 		? FString::Printf(TEXT("L %.2f + R %.2f -> Final %.2f  Dealt %.2f  Heal %.2f"),
@@ -527,10 +541,20 @@ void UBalanceSandboxWidget::RefreshStatusPanel()
 		Status.ZenithStock, Status.BoosterStock, Status.DrainStock,
 		Status.PulseStock, Status.FractureStock, Status.VectorStock));
 
+	// 판정 불가(드론·보스 없음)를 fallback과 구분해 표시한다.
+	auto SourceLabel = [](bool bKnown, bool bInUse) -> const TCHAR*
+	{
+		if (!bKnown)
+		{
+			return TEXT("-");
+		}
+		return bInUse ? TEXT("OK") : TEXT("FALLBACK");
+	};
+
 	SetIfBound(Text_DataSource, FString::Printf(TEXT("%s  Core %s / Weapon %s / Pattern %s / Report %s"),
 		Status.bAnyDataTableFallback ? TEXT("*** FALLBACK ***") : TEXT("DataTable"),
-		Status.bCoreDataTableInUse ? TEXT("OK") : TEXT("FALLBACK"),
-		Status.bWeaponDataTableInUse ? TEXT("OK") : TEXT("FALLBACK"),
-		Status.bBossPatternDataTableInUse ? TEXT("OK") : TEXT("FALLBACK"),
-		Status.bReportDataTableInUse ? TEXT("OK") : TEXT("FALLBACK")));
+		SourceLabel(Status.bCombatDataSourceKnown, Status.bCoreDataTableInUse),
+		SourceLabel(Status.bCombatDataSourceKnown, Status.bWeaponDataTableInUse),
+		SourceLabel(Status.bPatternDataSourceKnown, Status.bBossPatternDataTableInUse),
+		SourceLabel(true, Status.bReportDataTableInUse)));
 }

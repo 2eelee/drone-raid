@@ -2,6 +2,7 @@
 
 #include "Balance/BalanceSandboxPlayerController.h"
 #include "Drone.h"
+#include "UObject/ConstructorHelpers.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -37,6 +38,44 @@ ABalanceSandboxGameMode::ABalanceSandboxGameMode()
 {
 	// 샌드박스 콘솔 명령을 쓰려면 전용 컨트롤러가 필요하다. 그 외 동작은 전부 RaidGameMode 그대로다.
 	PlayerControllerClass = ABalanceSandboxPlayerController::StaticClass();
+
+	// BalanceMap 직접 진입의 핵심 부트스트랩이다.
+	// ARaidGameMode는 DefaultPawnClass를 정하지 않아 AGameModeBase 기본값(ADefaultPawn)이 스폰된다.
+	// 프로덕션 레이드 맵은 Blueprint GameMode에서 이 값을 지정하지만, BalanceMap은 이 C++
+	// GameMode를 직접 쓰므로 여기서 정해 주지 않으면 드론이 아닌 폰을 possess하게 되고
+	// Ready가 "Controlled pawn is not ADrone"으로 막혀 보스도 생기지 않는다.
+	// 스폰 경로 자체는 건드리지 않는다 — 기존 SpawnDefaultPawnAtTransform이 그대로 돈다.
+	static ConstructorHelpers::FClassFinder<ADrone> DronePawnClassFinder(TEXT("/Game/BP_Drone"));
+	DefaultPawnClass = ADrone::StaticClass();
+	if (DronePawnClassFinder.Succeeded())
+	{
+		DefaultPawnClass = DronePawnClassFinder.Class;
+	}
+}
+
+void ABalanceSandboxGameMode::HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer)
+{
+	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+
+	const ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(NewPlayer);
+	const ADrone* Drone = RaidPC ? Cast<ADrone>(RaidPC->GetPawn()) : nullptr;
+	const UWorld* World = GetWorld();
+	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	const ADronePartInventory* Inventory = RaidGameState ? RaidGameState->GetDronePartInventory() : nullptr;
+
+	// 부트스트랩이 어디서 끊겼는지 한 줄로 판정할 수 있게 남긴다.
+	UE_LOG(LogTemp, Log,
+		TEXT("[DR_SUMMARY] SandboxBootstrap PC=%s PawnClass=%s IsDrone=%s Inventory=%s SelectionState=%s CombatData=%s"),
+		*GetNameSafe(NewPlayer),
+		*GetNameSafe(DefaultPawnClass),
+		Drone ? TEXT("true") : TEXT("false"),
+		Inventory ? TEXT("Ready") : TEXT("Missing"),
+		RaidPC ? ARaidPlayerController::SelectionStateToLogString(RaidPC->GetPlayerSelectionState()) : TEXT("None"),
+		Drone
+			? (Drone->GetCombatDataFallbackReason() == EDroneCombatDataFallbackReason::None
+				? TEXT("DataTable")
+				: TEXT("Fallback"))
+			: TEXT("Unknown"));
 }
 
 ARaidBoss* ABalanceSandboxGameMode::EnsureRaidBossForServer()

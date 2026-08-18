@@ -8377,6 +8377,138 @@ bool FBalanceSandboxPartAliasTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Balance Sandbox 부트스트랩: BalanceMap 직접 진입의 실패 지점은 전부 한 곳에서 시작한다 —
+// ARaidGameMode가 DefaultPawnClass를 정하지 않아 AGameModeBase 기본값(ADefaultPawn)이 스폰되면
+// Ready가 "Controlled pawn is not ADrone"으로 막히고 보스도 생기지 않는다.
+// 샌드박스 GameMode가 그 값을 실제 드론으로 정해 두는지 고정한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxBootstrapPawnClassTest,
+	"DroneProto.BALANCE.Sandbox.BootstrapUsesRealDronePawn",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxBootstrapPawnClassTest::RunTest(const FString& Parameters)
+{
+	const ABalanceSandboxGameMode* SandboxDefaults = GetDefault<ABalanceSandboxGameMode>();
+	TestNotNull(TEXT("the sandbox game mode has defaults"), SandboxDefaults);
+	if (!SandboxDefaults)
+	{
+		return false;
+	}
+
+	TestNotNull(TEXT("the sandbox game mode declares a default pawn class"), SandboxDefaults->DefaultPawnClass.Get());
+	if (SandboxDefaults->DefaultPawnClass)
+	{
+		TestTrue(TEXT("the sandbox default pawn is a real ADrone"),
+			SandboxDefaults->DefaultPawnClass->IsChildOf(ADrone::StaticClass()));
+	}
+
+	// 프로덕션 RaidGameMode는 이 값을 정하지 않는다. 그 사실이 이 부트스트랩이 필요한 이유다.
+	const ARaidGameMode* RaidDefaults = GetDefault<ARaidGameMode>();
+	TestNotNull(TEXT("the raid game mode has defaults"), RaidDefaults);
+	if (RaidDefaults && RaidDefaults->DefaultPawnClass)
+	{
+		TestFalse(TEXT("the raid game mode still leaves the engine default pawn"),
+			RaidDefaults->DefaultPawnClass->IsChildOf(ADrone::StaticClass()));
+	}
+
+	TestTrue(TEXT("the sandbox game mode uses the sandbox player controller"),
+		SandboxDefaults->PlayerControllerClass
+			&& SandboxDefaults->PlayerControllerClass->IsChildOf(ARaidPlayerController::StaticClass()));
+
+	return true;
+}
+
+// Balance Sandbox 부트스트랩: 드론이 실제로 possess된 뒤 Loadout -> Ready -> Boss까지
+// 기존 경로로 이어지고, 확보된 보스에 프록시 크기가 입혀지는지 한 흐름으로 고정한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxBootstrapFlowTest,
+	"DroneProto.BALANCE.Sandbox.BootstrapReachesBossThroughReady",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxBootstrapFlowTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("BalanceSandboxBootstrapWorld"), ReturnManager);
+	TestNotNull(TEXT("test world is created"), Context.World);
+	TestNotNull(TEXT("player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("drone is spawned"), Context.Drone);
+	TestNotNull(TEXT("inventory actor is spawned"), Context.Inventory);
+	if (!Context.World || !Context.PC || !Context.Drone || !Context.Inventory || !Context.GameState)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// 1) 컨트롤러가 실제 드론을 들고 있다.
+	TestEqual(TEXT("the controller possesses the drone"),
+		Cast<ADrone>(Context.PC->GetPawn()), Context.Drone);
+
+	// 2) 선택 상태로 시작한다.
+	TestEqual(TEXT("bootstrap starts in the selection phase"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::Selecting);
+
+	// 3) 재고가 초기화돼 있다.
+	TestTrue(TEXT("the shared stock is initialised"),
+		Context.Inventory->GetCurrentCount(ADronePartInventory::GetCoreDrainPartID()) > 0);
+
+	// 4) 표 해석 전에는 사유가 판정 근거가 아니다. 초기값이 MissingCoreTable이라
+	//    "아직 안 읽음"과 "표가 없음"이 같은 값이며, 패널은 이 구간을 미해석으로 표시해야 한다.
+	TestFalse(TEXT("combat data is not resolved before the first calculation"),
+		Context.Drone->IsCombatDataResolved());
+
+	// 5) Ready가 보스를 만들려면 GameMode가 있어야 한다. 샌드박스 GameMode를 스폰하면
+	//    ProcessReadyForRaidForServer가 TActorIterator 폴백으로 이것을 찾는다.
+	//    보스를 따로 스폰하지 않는다 — 생성은 EnsureRaidBossForServer가 해야 한다.
+	ABalanceSandboxGameMode* SandboxGameMode = Context.World->SpawnActor<ABalanceSandboxGameMode>();
+	TestNotNull(TEXT("the sandbox game mode is spawned into the test world"), SandboxGameMode);
+	TestNull(TEXT("no boss exists before ready"), Context.GameState->GetRaidBoss());
+
+	// 6) 기존 선택 경로로 Loadout을 고른다.
+	const FName DrainCore = ADronePartInventory::GetCoreDrainPartID();
+	const FName FractureBurst = ADronePartInventory::GetFractureBurstPartID();
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::Core, DrainCore);
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::LeftWeapon, FractureBurst);
+	Context.PC->Server_RequestSelectPart_Implementation(EPartSlot::RightWeapon, FractureBurst);
+
+	TestEqual(TEXT("the core slot takes the requested part"),
+		Context.PC->GetSelectedPartIDBySlot(EPartSlot::Core), DrainCore);
+	TestEqual(TEXT("both weapon slots take the same weapon"),
+		Context.PC->GetSelectedPartIDBySlot(EPartSlot::RightWeapon), FractureBurst);
+
+	// 7) 기존 Ready 경로로 전투에 들어간다.
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("ready moves the player into battle"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("ready equips the requested core on the drone"),
+		Context.Drone->GetEquippedCorePartIDForTest(), DrainCore);
+
+	// 8) 보스는 Ready 안의 EnsureRaidBossForServer가 만든다. 샌드박스가 그 경로를
+	//    오버라이드하므로 확보와 동시에 프록시 크기까지 입혀진 상태여야 한다.
+	ARaidBoss* Boss = Context.GameState->GetRaidBoss();
+	TestNotNull(TEXT("ready creates the boss through the existing path"), Boss);
+
+	// 9) 프록시는 보스 확보 시점에 이미 입혀져 있어야 한다. 테스트가 다시 입히면
+	//    "샌드박스가 자동으로 적용한다"는 계약이 검증되지 않는다.
+	if (Boss)
+	{
+		if (const UStaticMeshComponent* VisualMesh = Boss->FindComponentByClass<UStaticMeshComponent>())
+		{
+			const FVector ProxyScale = VisualMesh->GetRelativeScale3D();
+			TestTrue(TEXT("the proxy keeps the 18m width"), FMath::IsNearlyEqual(ProxyScale.X, 18.0f, 0.01f));
+			TestTrue(TEXT("the proxy keeps the 16m height"), FMath::IsNearlyEqual(ProxyScale.Z, 16.0f, 0.01f));
+		}
+
+		const FVector ClampedPosition = Context.Drone->ClampPositionOutsideBossCenterForServer(
+			Boss->GetActorLocation() + FVector(100.0f, 0.0f, 0.0f));
+		const float ClampedDistanceMeters = FVector::Dist2D(ClampedPosition, Boss->GetActorLocation()) * 0.01f;
+		TestTrue(TEXT("the approach limit stays at 8m after the proxy"),
+			FMath::IsNearlyEqual(ClampedDistanceMeters, 8.0f, 0.05f));
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
 // Balance Sandbox 상태 패널: 패널은 저장된 사본이 아니라 실제 전투 상태를 읽어야 한다.
 // 값이 어긋나면 기획자가 DataTable을 고친 뒤 "왜 이 수치인지"를 잘못된 근거로 판단하게 된다.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
