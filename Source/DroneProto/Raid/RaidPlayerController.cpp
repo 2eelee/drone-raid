@@ -1083,7 +1083,7 @@ void ARaidPlayerController::Client_ReceiveDroneReport_Implementation(const FDron
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportClientReceived Player=%s Grade=%s BonusScore=%d"),
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportReceived Player=%s Grade=%s BonusScore=%d"),
 		*BuildControllerLogString(this),
 		ReportGradeToLogString(ReportData.Grade),
 		ReportData.BonusScore);
@@ -1648,22 +1648,32 @@ void ARaidPlayerController::HideDronePartSelectUI()
 
 void ARaidPlayerController::ShowDroneReportWidget(const FDroneReportData& ReportData)
 {
+	// 표시가 막히는 지점을 한 줄로 읽을 수 있어야 한다. 서버 생성(ReportCreated)과
+	// 수신(ReportReceived)이 정상인데도 화면이 비면, 원인은 전부 이 함수 안의 조기 반환이다.
+	const auto LogWidgetSkipped = [this, &ReportData](const TCHAR* Reason)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetSkipped Reason=%s Player=%s Grade=%s BonusScore=%d"),
+			Reason,
+			*BuildControllerLogString(this),
+			ReportGradeToLogString(ReportData.Grade),
+			ReportData.BonusScore);
+	};
+
 	if (!IsLocalController())
 	{
+		LogWidgetSkipped(TEXT("NotLocalController"));
 		return;
 	}
 
 	if (GetNetMode() == NM_DedicatedServer)
 	{
+		LogWidgetSkipped(TEXT("DedicatedServer"));
 		return;
 	}
 
 	if (!DroneReportWidgetClass)
 	{
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetMissingClass Player=%s Grade=%s BonusScore=%d"),
-			*BuildControllerLogString(this),
-			ReportGradeToLogString(ReportData.Grade),
-			ReportData.BonusScore);
+		LogWidgetSkipped(TEXT("NoWidgetClass"));
 		return;
 	}
 
@@ -1674,8 +1684,7 @@ void ARaidPlayerController::ShowDroneReportWidget(const FDroneReportData& Report
 
 	if (!CurrentDroneReportWidget)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[Client] ShowDroneReportWidget failed: widget could not be created Player=%s"),
-			*BuildControllerLogString(this));
+		LogWidgetSkipped(TEXT("CreateWidgetFailed"));
 		return;
 	}
 
@@ -1691,18 +1700,23 @@ void ARaidPlayerController::ShowDroneReportWidget(const FDroneReportData& Report
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		SetInputMode(InputMode);
 		CurrentDroneReportWidget->SetKeyboardFocus();
-
-		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetShown Player=%s Grade=%s BonusScore=%d"),
-			*BuildControllerLogString(this),
-			ReportGradeToLogString(ReportData.Grade),
-			ReportData.BonusScore);
-		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetRefreshed Player=%s Grade=%s BonusScore=%d"),
+	// 새로 띄웠든 이미 떠 있던 것을 갱신했든, 결과는 "화면에 리포트가 있다"로 같다.
+	// 필드는 RefreshReport의 결과가 아니라 "이 호출 전에 이미 떠 있었는가"다. RefreshReport는
+	// 반환값이 없다. 첫 표시는 항상 AlreadyVisible=false이며 그것이 정상이다.
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReportWidgetShown Player=%s Grade=%s BonusScore=%d AlreadyVisible=%s"),
 		*BuildControllerLogString(this),
 		ReportGradeToLogString(ReportData.Grade),
-		ReportData.BonusScore);
+		ReportData.BonusScore,
+		bAlreadyInViewport ? TEXT("true") : TEXT("false"));
+}
+
+bool ARaidPlayerController::TryHandleDroneReportConfirmedForLocalPlayer(UDroneReportWidget* ReportWidget)
+{
+	// 프로덕션 계약: 확인 → LobbyMap. 위젯의 기존 travel 경로를 그대로 태운다.
+	(void)ReportWidget;
+	return false;
 }
 
 void ARaidPlayerController::HideDroneReportWidget()
@@ -2001,10 +2015,26 @@ float ARaidPlayerController::GetSelectionServerTimeSeconds() const
 	return 0.0f;
 }
 
+bool ARaidPlayerController::ShouldAutoConfirmSelectionForServer() const
+{
+	// 원문 (7) "15초 종료 시 자동으로 현재 선택된 드론부품으로만 확정 — 바로 <전투 참가>".
+	// 프로덕션은 예외 없이 이 계약을 따른다.
+	return true;
+}
+
 void ARaidPlayerController::StartSelectionTimerForServer()
 {
 	if (!HasAuthority())
 	{
+		return;
+	}
+
+	if (!ShouldAutoConfirmSelectionForServer())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SelectTimerStart PC=%s Result=Skipped Reason=AutoConfirmDisabled SelectionState=%s RaidState=%s"),
+			*BuildControllerLogString(this),
+			ToPlayerSelectionStateLogString(PlayerSelectionState),
+			*GetRaidStateLogString(this));
 		return;
 	}
 

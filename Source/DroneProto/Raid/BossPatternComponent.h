@@ -28,6 +28,17 @@ public:
 	// 밸런스 반복 시험에서 특정 패턴으로 바로 가기 위한 진입점이다.
 	void SetNextPatternForServer(EBossPatternKind NextPatternKind, FName Reason);
 
+	// 밸런스 샌드박스의 수동 패턴 실행 진입점. 예약이 아니라 재시작이다 —
+	// 현재 패턴을 기존 종료 경로로 정리한 뒤 지정한 패턴을 그 자리에서 텔레그래프부터 시작한다.
+	//
+	// SetNextPatternForServer만으로는 자동 진행에 묻힌다. 패턴이 끝날 때 FinishActiveForServer가
+	// 교대 규칙대로 NextPattern을 무조건 덮어쓰기 때문에, 실행 중에 걸어 둔 예약은 반영되기 전에
+	// 사라진다. 수동 버튼이 "눌러도 바뀌지 않는" 이유가 그것이다.
+	//
+	// 자동 진행은 이 함수를 부르지 않으므로 패턴 순서·반복 계약(PATTERN-01)은 그대로다.
+	// 시작 조건은 자동 진행과 같은 기준(보스 생존·BossState Battle·RaidState Battle)을 쓴다.
+	bool RestartWithPatternForServer(EBossPatternKind PatternKind, FName Reason);
+
 	// 밸런스 상태 패널 조회용. 상태를 바꾸지 않는다.
 	EBossPatternKind GetCurrentPattern() const { return CurrentPattern; }
 	bool IsPatternDataTableInUse() const { return bResolvedConfigReady; }

@@ -8,6 +8,7 @@
 #include "Drone.h"
 #include "DronePart.h"
 #include "Balance/BalanceSandboxGameMode.h"
+#include "Balance/BalanceSandboxPlayerController.h"
 #include "Balance/BalanceSandboxWidget.h"
 #include "Raid/DronePartInventory.h"
 #include "Raid/DronePartSelectWidget.h"
@@ -7453,14 +7454,17 @@ bool FDroneRaidSummaryLogSourceTest::RunTest(const FString& Parameters)
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] GradeCalc Player=")));
 	TestTrue(TEXT("report duplicate summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportDuplicateIgnored Player=")));
+	// 리포트 표시 경로의 DR_SUMMARY는 네 태그로 고정한다 —
+	// ReportCreated(서버 생성) / ReportReceived(클라 수신) / ReportWidgetShown(표시 성공) /
+	// ReportWidgetSkipped Reason=(표시 중단). PIE에서 이 넷만 보면 어디서 끊겼는지 판정된다.
 	TestTrue(TEXT("report client received summary log marker exists"),
-		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportClientReceived Player=")));
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportReceived Player=")));
 	TestTrue(TEXT("report widget shown summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetShown Player=")));
-	TestTrue(TEXT("report widget refreshed summary log marker exists"),
-		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetRefreshed Player=")));
-	TestTrue(TEXT("report widget missing class summary log marker exists"),
-		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetMissingClass Player=")));
+	TestTrue(TEXT("report widget skipped summary log marker exists"),
+		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetSkipped Reason=%s Player=")));
+	TestTrue(TEXT("report widget skipped covers the missing widget class case"),
+		RaidPlayerControllerSource.Contains(TEXT("LogWidgetSkipped(TEXT(\"NoWidgetClass\"))")));
 	TestTrue(TEXT("report widget hidden summary log marker exists"),
 		RaidPlayerControllerSource.Contains(TEXT("[DR_SUMMARY] ReportWidgetHidden Player=")));
 	TestTrue(TEXT("report return-to-lobby button optional binding exists"),
@@ -8876,6 +8880,356 @@ bool FDroneLoadoutReapplyDoesNotReturnPartsTest::RunTest(const FString& Paramete
 		Context.Inventory->GetCurrentCount(PulseLaser), PulseCountAfterFirstApply);
 
 	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// Balance Sandbox 진입 직후 15초만 지나면 선택 타이머가 AutoReady를 통해 전투를
+// 시작시켜 보스 패턴까지 돌았다. 15초 자동 확정은 원문 (7)/3.(2)의 프로덕션 계약이므로
+// 그대로 두고, 시험자가 전투 시작 시점을 직접 잡아야 하는 샌드박스에서만 억제한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxSelectionAutoConfirmTest,
+	"DroneProto.BALANCE.Sandbox.SelectionAutoConfirmIsSandboxOnly",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxSelectionAutoConfirmTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BalanceSandboxAutoConfirmWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	TestNotNull(TEXT("auto confirm world is created"), World);
+	TestNotNull(TEXT("auto confirm game state exists"), GameState);
+	if (!World || !GameState)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+	World->SetGameState(GameState);
+
+	// 프로덕션 컨트롤러는 기획 계약대로 15초 타이머를 건다.
+	ARaidPlayerController* RaidPC = World->SpawnActor<ARaidPlayerController>();
+	ADrone* RaidDrone = World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("raid controller is spawned"), RaidPC);
+	TestNotNull(TEXT("raid drone is spawned"), RaidDrone);
+	if (!RaidPC || !RaidDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	RaidPC->Possess(RaidDrone);
+	TestEqual(TEXT("raid controller starts in selection"),
+		RaidPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+	RaidPC->Server_RequestStartSelectionTimer_Implementation();
+	TestTrue(TEXT("raid controller arms the 15 second auto confirm"),
+		RaidPC->GetSelectionEndServerTime() > 0.0f);
+
+	// 샌드박스 컨트롤러는 같은 요청을 받아도 자동 확정을 걸지 않는다.
+	ABalanceSandboxPlayerController* SandboxPC = World->SpawnActor<ABalanceSandboxPlayerController>();
+	ADrone* SandboxDrone = World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("sandbox controller is spawned"), SandboxPC);
+	TestNotNull(TEXT("sandbox drone is spawned"), SandboxDrone);
+	if (!SandboxPC || !SandboxDrone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	SandboxPC->Possess(SandboxDrone);
+	TestEqual(TEXT("sandbox controller starts in selection"),
+		SandboxPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+	SandboxPC->Server_RequestStartSelectionTimer_Implementation();
+	TestEqual(TEXT("sandbox controller arms no auto confirm"),
+		SandboxPC->GetSelectionEndServerTime(), 0.0f);
+	TestEqual(TEXT("sandbox controller stays in selection without input"),
+		SandboxPC->GetPlayerSelectionState(), EPlayerSelectionState::Selecting);
+
+	// 선택 단계 복귀(Reset 버튼 경로)에서도 카운트다운이 다시 걸리면 안 된다.
+	TestTrue(TEXT("sandbox selection phase restarts"),
+		SandboxPC->RestartSelectionPhaseForServer(FName(TEXT("SandboxAutoConfirmTest"))));
+	TestEqual(TEXT("sandbox restart arms no auto confirm"),
+		SandboxPC->GetSelectionEndServerTime(), 0.0f);
+
+	// 수동 Ready는 샌드박스에서도 그대로 동작해야 한다 — 억제한 것은 자동 확정뿐이다.
+	SandboxPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("sandbox manual ready still enters battle"),
+		SandboxPC->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+// Balance Sandbox 부트스트랩: DefaultPawnClass 때와 같은 형태의 결손을 막는다.
+//
+// DroneReportWidgetClass는 EditDefaultsOnly라 값이 BP_RaidPlayerController에만 들어 있고,
+// 샌드박스는 C++ 컨트롤러를 직접 쓴다. 그래서 서버가 리포트를 정상 생성하고
+// Client_ReceiveDroneReport까지 도달해도 ShowDroneReportWidget이 클래스 없음으로
+// 조기 반환해 사망 시 UI가 뜨지 않았다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxReportWidgetClassTest,
+	"DroneProto.BALANCE.Sandbox.ReportWidgetClassIsBootstrapped",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxReportWidgetClassTest::RunTest(const FString& Parameters)
+{
+	const ABalanceSandboxPlayerController* SandboxDefaults = GetDefault<ABalanceSandboxPlayerController>();
+	TestNotNull(TEXT("the sandbox controller has defaults"), SandboxDefaults);
+	if (!SandboxDefaults)
+	{
+		return false;
+	}
+
+	UClass* SandboxReportWidgetClass = SandboxDefaults->DroneReportWidgetClass.Get();
+	TestNotNull(TEXT("the sandbox bootstraps a drone report widget class"), SandboxReportWidgetClass);
+	if (SandboxReportWidgetClass)
+	{
+		TestTrue(TEXT("the bootstrapped class is a real DroneReportWidget"),
+			SandboxReportWidgetClass->IsChildOf(UDroneReportWidget::StaticClass()));
+		// 샌드박스 전용 복제 위젯을 만들지 않고 프로덕션 자산을 그대로 재사용한다.
+		TestTrue(TEXT("the sandbox reuses the production WBP_DroneReport"),
+			SandboxReportWidgetClass->GetPathName().Contains(TEXT("WBP_DroneReport")));
+	}
+
+	// 프로덕션 C++ CDO는 비워 둔다 — 값은 BP_RaidPlayerController가 준다.
+	// 여기에 값을 박으면 BP 설정을 덮을 수 있으므로 공통 강제 기본값을 두지 않는다는 계약이다.
+	const ARaidPlayerController* RaidDefaults = GetDefault<ARaidPlayerController>();
+	TestNotNull(TEXT("the production controller has defaults"), RaidDefaults);
+	if (RaidDefaults)
+	{
+		TestNull(TEXT("the production C++ controller still leaves the class to its Blueprint"),
+			RaidDefaults->DroneReportWidgetClass.Get());
+	}
+
+	// 샌드박스 GameMode가 실제로 이 컨트롤러를 쓰는지도 같이 고정한다 —
+	// 이 연결이 끊기면 부트스트랩 자체가 무의미해진다.
+	const ABalanceSandboxGameMode* SandboxGameModeDefaults = GetDefault<ABalanceSandboxGameMode>();
+	TestNotNull(TEXT("the sandbox game mode has defaults"), SandboxGameModeDefaults);
+	if (SandboxGameModeDefaults)
+	{
+		TestTrue(TEXT("the sandbox game mode uses the bootstrapped controller"),
+			SandboxGameModeDefaults->PlayerControllerClass
+				&& SandboxGameModeDefaults->PlayerControllerClass->IsChildOf(
+					ABalanceSandboxPlayerController::StaticClass()));
+	}
+
+	return true;
+}
+
+// DroneReport 확인 버튼의 종료 동작은 소유 컨트롤러가 가른다.
+// 프로덕션은 LobbyMap 이동(원문 계약), 샌드박스는 리포트만 닫고 BalanceMap에 남는다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportConfirmRoutingTest,
+	"DroneProto.D11.DroneReport.ConfirmRoutingByController",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportConfirmRoutingTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneReportConfirmRoutingWorld")));
+	TestNotNull(TEXT("confirm routing world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ARaidPlayerController* ProductionPC = World->SpawnActor<ARaidPlayerController>();
+	ABalanceSandboxPlayerController* SandboxPC = World->SpawnActor<ABalanceSandboxPlayerController>();
+	TestNotNull(TEXT("production controller is spawned"), ProductionPC);
+	TestNotNull(TEXT("sandbox controller is spawned"), SandboxPC);
+	if (!ProductionPC || !SandboxPC)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	// 소유자 연결 자체는 합성 월드에서 재현할 수 없다.
+	// UUserWidget::SetOwningPlayer는 FLocalPlayerContext를 만들고, 그 IsValid()는
+	// ULocalPlayer가 ViewportClient를 통해 World를 돌려줄 수 있을 때만 참이다.
+	// 따라서 여기서는 버튼→컨트롤러 홉을 직접 호출해 계약을 가르고,
+	// 확인 경로가 실제로 그 홉을 묻는지는 아래 소스 마커로 고정한다.
+
+	// ---- 1. 프로덕션: 확인을 가로채지 않아 기존 lobby-return 경로가 그대로 돌아야 한다 ----
+	UDroneReportWidget* ProductionWidget = NewObject<UDroneReportWidget>(World);
+	TestNotNull(TEXT("production report widget is created"), ProductionWidget);
+	if (!ProductionWidget)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	ProductionWidget->SetSuppressReturnToLobbyTravelForTest(true);
+
+	TestFalse(TEXT("the production controller never intercepts the confirm"),
+		ProductionPC->TryHandleDroneReportConfirmedForLocalPlayer(ProductionWidget));
+
+	ProductionWidget->RequestReturnToLobby();
+	TestEqual(TEXT("production confirm still requests the lobby travel"),
+		ProductionWidget->GetReturnToLobbyTravelRequestCountForTest(), 1);
+	TestTrue(TEXT("production confirm keeps the widget latched against double travel"),
+		ProductionWidget->IsReturnToLobbyRequestedForTest());
+	ProductionWidget->RequestReturnToLobby();
+	TestEqual(TEXT("production duplicate confirm is still ignored"),
+		ProductionWidget->GetReturnToLobbyTravelRequestCountForTest(), 1);
+
+	// ---- 2. 샌드박스: 확인을 가로채 lobby travel을 추가하지 않는다 ----
+	UDroneReportWidget* SandboxWidget = NewObject<UDroneReportWidget>(World);
+	TestNotNull(TEXT("sandbox report widget is created"), SandboxWidget);
+	if (!SandboxWidget)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	SandboxWidget->SetSuppressReturnToLobbyTravelForTest(true);
+
+	// 확인을 한 번 눌러 latch 상태를 만든다(이 위젯은 소유자가 없어 기본 경로 1회 기록).
+	SandboxWidget->RequestReturnToLobby();
+	const int32 TravelCountBeforeDismiss = SandboxWidget->GetReturnToLobbyTravelRequestCountForTest();
+	TestEqual(TEXT("the baseline confirm records one travel"), TravelCountBeforeDismiss, 1);
+	TestTrue(TEXT("the widget is latched after a confirm"),
+		SandboxWidget->IsReturnToLobbyRequestedForTest());
+
+	TestTrue(TEXT("the sandbox controller intercepts the confirm"),
+		static_cast<ARaidPlayerController*>(SandboxPC)->TryHandleDroneReportConfirmedForLocalPlayer(SandboxWidget));
+	TestEqual(TEXT("the sandbox dismiss adds no lobby travel"),
+		SandboxWidget->GetReturnToLobbyTravelRequestCountForTest(), TravelCountBeforeDismiss);
+
+	// ---- 3. 닫은 뒤 다음 회차를 위해 확인 상태가 되돌려진다 ----
+	TestFalse(TEXT("sandbox dismiss re-arms the widget for the next report"),
+		SandboxWidget->IsReturnToLobbyRequestedForTest());
+	SandboxWidget->RequestReturnToLobby();
+	TestEqual(TEXT("the re-armed widget can be confirmed again"),
+		SandboxWidget->GetReturnToLobbyTravelRequestCountForTest(), TravelCountBeforeDismiss + 1);
+
+	// ---- 4. 확인 경로가 실제로 소유 컨트롤러에게 먼저 묻는다 ----
+	// 위 단언들은 홉의 계약을 가르고, 이 마커는 버튼 경로가 그 홉을 타는지를 고정한다.
+	const FString WidgetSourcePath = FPaths::ProjectDir() / TEXT("Source/DroneProto/Raid/DroneReportWidget.cpp");
+	FString WidgetSource;
+	TestTrue(TEXT("the report widget source loads"),
+		FFileHelper::LoadFileToString(WidgetSource, *WidgetSourcePath));
+	TestTrue(TEXT("the confirm path asks the owning controller before travelling"),
+		WidgetSource.Contains(TEXT("TryHandleDroneReportConfirmedForLocalPlayer(this)")));
+	TestTrue(TEXT("the lobby travel still exists for production"),
+		WidgetSource.Contains(TEXT("[DR_SUMMARY] ReportReturnToLobbyTravel Target=LobbyMap")));
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+// 리포트를 닫는 것과 서버의 중복 방지 상태는 무관하다.
+// 닫았다고 dedup이 풀려 리포트를 다시 만들 수 있게 되면 산식·저장 계약이 깨진다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxReportDismissKeepsDedupTest,
+	"DroneProto.BALANCE.Sandbox.ReportDismissKeepsDedup",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxReportDismissKeepsDedupTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("SandboxReportDismissWorld"));
+	TestNotNull(TEXT("dismiss world is created"), Context.World);
+	TestNotNull(TEXT("dismiss game state is spawned"), Context.GameState);
+	if (!Context.World || !Context.GameState)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	// 샌드박스 컨트롤러를 직접 세워 사망·리포트 경로를 그대로 탄다.
+	ABalanceSandboxPlayerController* SandboxPC = Context.World->SpawnActor<ABalanceSandboxPlayerController>();
+	ADrone* SandboxDrone = Context.World->SpawnActor<ADrone>();
+	TestNotNull(TEXT("sandbox controller is spawned"), SandboxPC);
+	TestNotNull(TEXT("sandbox drone is spawned"), SandboxDrone);
+	if (!SandboxPC || !SandboxDrone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+	SandboxPC->Possess(SandboxDrone);
+	SandboxPC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("sandbox player enters battle"),
+		SandboxPC->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+
+	TestTrue(TEXT("the first report is created"),
+		SandboxPC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestFalse(TEXT("a duplicate report is refused before dismissing"),
+		SandboxPC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+
+	// 리포트를 닫는다 — 표시 종료일 뿐 서버 상태는 건드리지 않아야 한다.
+	UDroneReportWidget* Widget = NewObject<UDroneReportWidget>(Context.World);
+	TestNotNull(TEXT("dismiss report widget is created"), Widget);
+	if (Widget)
+	{
+		Widget->SetSuppressReturnToLobbyTravelForTest(true);
+		// 샌드박스 확인 처리를 그대로 탄다 — 이동은 없고 리포트만 닫힌다.
+		TestTrue(TEXT("the sandbox controller handles the confirm"),
+			static_cast<ARaidPlayerController*>(SandboxPC)->TryHandleDroneReportConfirmedForLocalPlayer(Widget));
+		TestEqual(TEXT("dismissing requests no lobby travel"),
+			Widget->GetReturnToLobbyTravelRequestCountForTest(), 0);
+		TestFalse(TEXT("the dismissed widget is ready for the next report"),
+			Widget->IsReturnToLobbyRequestedForTest());
+	}
+
+	TestFalse(TEXT("dismissing the report does not reopen report creation"),
+		SandboxPC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestFalse(TEXT("the death trigger is refused too after dismissing"),
+		SandboxPC->TryCreateDroneReportForServer(EDroneReportTrigger::Death, false));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+// 확인 버튼에서 나가는 길은 하나여야 한다.
+//
+// 컨트롤러가 확인을 가로채는 계약(TryHandleDroneReportConfirmedForLocalPlayer)은 버튼의 클릭
+// 경로가 RequestReturnToLobby 하나일 때만 성립한다. WBP_DroneReport에는 같은 버튼에 묶여
+// OpenLevel(LobbyMap)을 직접 부르는 Blueprint 이벤트가 남아 있었고, 그 경로는 컨트롤러에게
+// 아무것도 묻지 않아 샌드박스가 이동을 막아도 그대로 LobbyMap으로 나갔다.
+// 이 테스트는 그 두 번째 경로가 배선 단계에서 걷힌다는 것을 고정한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReportConfirmButtonSingleClickPathTest,
+	"DroneProto.D11.DroneReport.ConfirmButtonHasOneClickPath",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReportConfirmButtonSingleClickPathTest::RunTest(const FString& Parameters)
+{
+	UDroneReportWidget* Widget = NewObject<UDroneReportWidget>();
+	TestNotNull(TEXT("confirm path report widget is created"), Widget);
+	if (!Widget)
+	{
+		return false;
+	}
+
+	UButton* ConfirmButton = NewObject<UButton>(Widget);
+	TestNotNull(TEXT("confirm button is created"), ConfirmButton);
+	if (!ConfirmButton)
+	{
+		return false;
+	}
+
+	// WBP_DroneReport의 상태를 그대로 재현한다 — 확인 버튼에 이 위젯 자신의 Blueprint 이벤트가
+	// 하나 더 묶여 있고, 그 이벤트는 컨트롤러에게 묻지 않고 자기 길로 간다.
+	ConfirmButton->OnClicked.AddUniqueDynamic(Widget, &UDroneReportWidget::RequestReturnToLobby);
+	TestEqual(TEXT("the blueprint-style click path is registered first"),
+		ConfirmButton->OnClicked.GetAllObjects().Num(), 1);
+
+	Widget->BindReturnToLobbyButtonForTest(ConfirmButton);
+
+	TestEqual(TEXT("the blueprint click path is reclaimed at bind time"),
+		Widget->GetReclaimedConfirmBindingCountForTest(), 1);
+	TestEqual(TEXT("the confirm button keeps exactly one click path"),
+		Widget->GetConfirmButtonBindingCountForTest(), 1);
+	TestTrue(TEXT("the remaining click path is the native confirm handler"),
+		Widget->IsConfirmButtonOwnedByNativeHandlerForTest());
+
+	// 다시 배선해도 자기 핸들러를 중복으로 쌓지 않고, 걷어낼 것도 더 없다.
+	Widget->BindReturnToLobbyButtonForTest(ConfirmButton);
+	TestEqual(TEXT("re-binding reclaims nothing"),
+		Widget->GetReclaimedConfirmBindingCountForTest(), 0);
+	TestEqual(TEXT("re-binding still keeps one click path"),
+		Widget->GetConfirmButtonBindingCountForTest(), 1);
+
+	// 클릭 한 번이 확인 처리 한 번으로 남는다.
+	Widget->SetSuppressReturnToLobbyTravelForTest(true);
+	ConfirmButton->OnClicked.Broadcast();
+	TestEqual(TEXT("one click produces exactly one confirm handling"),
+		Widget->GetReturnToLobbyTravelRequestCountForTest(), 1);
+
 	return true;
 }
 

@@ -178,6 +178,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void HideDroneReportWidget();
 
+	/**
+	 * DroneReport 확인 버튼을 소유 컨트롤러가 먼저 처리할 기회.
+	 *
+	 * 기본 구현은 아무것도 하지 않고 false를 돌려, 위젯이 원문 계약대로 LobbyMap으로 이동하게 둔다.
+	 * true를 돌리면 위젯은 이동을 건너뛴다 — 밸런스 샌드박스만 그 경로를 쓴다.
+	 * 서버의 리포트 생성·산식·저장·중복 방지와는 무관하다. 표시 종료 처리만 가른다.
+	 */
+	virtual bool TryHandleDroneReportConfirmedForLocalPlayer(UDroneReportWidget* ReportWidget);
+
 	UFUNCTION(BlueprintCallable, Category = "UI")
 	void ShowBossHUDForLocalPlayer();
 
@@ -332,6 +341,11 @@ protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// 선택 시간(15초) 종료 시 자동 확정 여부. 원문 (7)/3.(2)의 프로덕션 계약은 항상 true이므로
+	// 여기서 값을 바꾸지 않는다. 시험자가 전투 시작 시점을 직접 잡아야 하는 밸런스 샌드박스만
+	// false로 덮어 자동 확정 타이머를 걸지 않는다.
+	virtual bool ShouldAutoConfirmSelectionForServer() const;
 
 private:
 	static constexpr float SelectionDurationSeconds = 15.0f;

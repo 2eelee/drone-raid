@@ -553,6 +553,80 @@ void UBossPatternComponent::SetNextPatternForServer(EBossPatternKind NextPattern
 		Reason.IsNone() ? TEXT("Unspecified") : *Reason.ToString());
 }
 
+bool UBossPatternComponent::RestartWithPatternForServer(EBossPatternKind PatternKind, FName Reason)
+{
+	const FString SourceName = Reason.IsNone() ? FString(TEXT("Unspecified")) : Reason.ToString();
+	const auto LogRejected = [PatternKind, &SourceName](const TCHAR* RejectReason)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] BossPattern ManualRestartRejected Reason=%s Pattern=%s Source=%s"),
+			RejectReason,
+			ToPatternName(PatternKind),
+			*SourceName);
+	};
+
+	ARaidBoss* Boss = Cast<ARaidBoss>(GetOwner());
+	if (!Boss || !Boss->HasAuthority())
+	{
+		LogRejected(TEXT("NotAuthority"));
+		return false;
+	}
+
+	if (PatternKind == EBossPatternKind::None)
+	{
+		LogRejected(TEXT("UnknownPattern"));
+		return false;
+	}
+
+	if (!bResolvedConfigReady)
+	{
+		LogRejected(TEXT("PatternDataNotReady"));
+		return false;
+	}
+
+	// 시작 조건은 자동 진행과 같은 기준을 쓴다(원문 5.1 시작 시퀀스, 예외 4.2).
+	// 수동 버튼이 선택 단계나 보스 사망 뒤에 패턴을 되살리는 우회가 되면 안 된다.
+	if (Boss->IsDefeated() || Boss->GetBossState() != EBossState::Battle)
+	{
+		LogRejected(TEXT("BossNotInBattle"));
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	const ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	if (!RaidGameState || RaidGameState->RaidState != ERaidState::Battle)
+	{
+		LogRejected(TEXT("RaidNotInBattle"));
+		return false;
+	}
+
+	// 정리는 기존 종료 경로를 그대로 쓴다 — 예약된 전이 타이머, 활성 패턴 액터, 히트락이 한곳에서
+	// 정리되고 TransitionSerial이 올라가 이미 예약되어 있던 전이가 무효가 된다.
+	// 버튼을 몇 번을 눌러도 액터와 타이머가 중첩되지 않는 근거가 여기다.
+	StopForServer(Reason);
+
+	bRunning = true;
+	ActivePlayerCount = CountActivePlayersForServer();
+	if (ActivePlayerCount <= 0)
+	{
+		// 살아 있는 플레이어가 없으면 자동 진행과 같은 대기 상태로 둔다. 판정을 새로 만들지 않는다.
+		PauseForNoPlayersForServer(Reason);
+		LogRejected(TEXT("NoAlivePlayers"));
+		return false;
+	}
+
+	// FirstDelay를 거치지 않고 지정한 패턴에서 바로 연다. 이후 전이는 전부 공통 경로가 이어받고,
+	// 이 패턴이 끝나면 FinishActiveForServer가 교대 규칙대로 다음 패턴을 정한다.
+	CurrentPattern = PatternKind;
+	BeginTelegraphForServer();
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern ManualRestart Pattern=%s Source=%s Delay=%.2f InstanceID=%d"),
+		ToPatternName(CurrentPattern),
+		*SourceName,
+		PendingDelaySeconds,
+		TransitionSerial);
+	return true;
+}
+
 void UBossPatternComponent::ClearHitLockForServer(FString PlayerKey)
 {
 	HitLockTimerHandles.Remove(PlayerKey);

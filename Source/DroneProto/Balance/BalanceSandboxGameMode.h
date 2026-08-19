@@ -27,6 +27,15 @@ public:
 	// 보스를 확보한 뒤 임시 프록시 크기를 입힌다. 스폰 경로 자체는 그대로 두고 시각만 얹는다.
 	virtual ARaidBoss* EnsureRaidBossForServer() override;
 
+	/**
+	 * 샌드박스는 서버 실판정 궤적을 화면에 그린다.
+	 *
+	 * 샌드박스의 목적이 "어디가 실제로 맞는 영역인지" 확인하는 것이라, 작업 중인 VFX 대신
+	 * 서버 판정과 같은 sample을 쓰는 빔 렌더러 4개를 띄운다. 피해 판정은 전혀 건드리지 않는다 —
+	 * 표시만 켜는 스위치다. 프로덕션 `ARaidGameMode`는 false 그대로다.
+	 */
+	virtual bool ShouldVisualizePatternHitGeometry() const override;
+
 	// BalanceMap 직접 진입에서 플레이어가 실제 드론을 possess했는지 한 줄로 남긴다.
 	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
 
@@ -46,7 +55,10 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
 	bool SetSandboxNextPatternForServer(const FString& PatternAlias);
 
-	/** 지정한 패턴을 바로 돌린다 — 다음 패턴을 정하고 루프가 멈춰 있으면 시작한다. */
+	/**
+	 * 지정한 패턴을 지금 돌린다 — 현재 패턴을 정상 정리한 뒤 그 자리에서 다시 시작한다.
+	 * Battle에서만 받는다. 예약만 하고 싶으면 `SetSandboxNextPatternForServer`를 쓴다.
+	 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Balance Sandbox")
 	bool RunSandboxPatternForServer(const FString& PatternAlias);
 

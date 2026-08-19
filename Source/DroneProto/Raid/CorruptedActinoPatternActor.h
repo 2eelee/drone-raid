@@ -25,6 +25,11 @@ struct FCorruptedBeamVisualSample
 	float LengthCm = 0.0f;
 	float InnerVisualFullWidthCm = 0.0f;
 	float OuterVisualFullWidthCm = 0.0f;
+	// 서버 IsPointInsideLaser가 실제로 쓰는 폭. 시각 폭보다 좁으므로 둘을 섞으면
+	// "보이는데 안 맞는" 영역이 생긴다. 샌드박스 실판정 시각화는 이 값을 그린다.
+	float InnerCollisionFullWidthCm = 0.0f;
+	float OuterCollisionFullWidthCm = 0.0f;
+	float CollisionFullHeightCm = 0.0f;
 	float Intensity = 0.0f;
 	bool bTelegraphing = false;
 };
@@ -67,6 +72,11 @@ public:
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetDamageAttemptCountForTest() const;
 	void RefreshPatternVFXForTest(float ElapsedSeconds);
+	void SetHitGeometryVisualizationForTest(bool bEnabled);
+	int32 GetVisibleBeamRendererCountForTest() const;
+	bool IsPatternVFXActiveForTest() const;
+	bool GetBeamRendererTransformForTest(int32 BeamIndex, FVector& OutRelativeLocation, FRotator& OutRelativeRotation) const;
+	float GetBeamRendererOuterWidthCmForTest(int32 BeamIndex) const;
 #endif
 
 protected:
@@ -86,6 +96,11 @@ private:
 	FBossPatternConfig PatternConfig;
 	int32 DamageAttemptCountForTest = 0;
 
+	// 밸런스 샌드박스에서만 켜지는 실판정 시각화. GameMode가 정하므로 한 번만 조회해 캐시한다.
+	bool bHitGeometryVisualizationResolved = false;
+	bool bHitGeometryVisualizationEnabled = false;
+
+	bool IsHitGeometryVisualizationEnabled();
 	float GetServerWorldTimeSeconds() const;
 	void ApplyDamageForServer(float ElapsedSeconds);
 	void RefreshPatternVFX(float ElapsedSeconds);

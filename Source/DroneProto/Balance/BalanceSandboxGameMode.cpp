@@ -93,6 +93,11 @@ ARaidBoss* ABalanceSandboxGameMode::EnsureRaidBossForServer()
 	return Boss;
 }
 
+bool ABalanceSandboxGameMode::ShouldVisualizePatternHitGeometry() const
+{
+	return true;
+}
+
 bool ABalanceSandboxGameMode::TryResolvePartAlias(const FString& Alias, FName& OutPartID)
 {
 	const FString Trimmed = Alias.TrimStartAndEnd();
@@ -317,17 +322,40 @@ bool ABalanceSandboxGameMode::RunSandboxPatternForServer(const FString& PatternA
 		return false;
 	}
 
-	if (!SetSandboxNextPatternForServer(PatternAlias))
+	EBossPatternKind RequestedKind = EBossPatternKind::CorruptedActino;
+	if (!TryResolvePatternAlias(PatternAlias, RequestedKind))
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] SandboxPatternRun Result=Fail Reason=UnknownPattern Requested=%s"), *PatternAlias);
 		return false;
 	}
 
-	// 루프가 멈춰 있으면(전투 전, 초기화 직후) 여기서 시작한다. 이미 돌고 있으면 기존 진행을
-	// 끊지 않고 지정한 패턴이 다음 차례에 나온다 — 패턴 순서 계약(PATTERN-01)을 건드리지 않는다.
-	StartBossPatternsForServer();
+	UWorld* World = GetWorld();
+	ARaidGameState* RaidGameState = World ? World->GetGameState<ARaidGameState>() : nullptr;
+	ARaidBoss* Boss = RaidGameState ? RaidGameState->GetRaidBoss() : nullptr;
+	UBossPatternComponent* PatternComponent = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (!PatternComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] SandboxPatternRun Result=Fail Reason=NoPatternComponent"));
+		return false;
+	}
 
-	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SandboxPatternRun Result=Success Requested=%s"), *PatternAlias);
-	return true;
+	// 이 버튼은 예약이 아니라 실행이다.
+	//
+	// 예전에는 SetNextPatternForServer로 다음 패턴만 지정하고 루프가 멈춰 있을 때만 시작했는데,
+	// 실행 중에 누른 예약은 반영되기 전에 지워진다 — 현재 패턴이 끝날 때 FinishActiveForServer가
+	// 교대 규칙대로 NextPattern을 무조건 덮어쓰기 때문이다. 그래서 버튼을 눌러도 자동 진행에
+	// 묻혀 바뀌는 느낌이 거의 없었다.
+	//
+	// 현재 패턴 정리와 신규 패턴 시작은 전부 서버 권한에서 공통 경로가 한다. 여기서는 요청을
+	// 넘기기만 하고, Battle 여부·액터 수명·타이머는 패턴 컴포넌트가 단독으로 판정한다.
+	// 프로덕션의 자동 순서·반복은 이 경로를 타지 않으므로 그대로다.
+	const bool bRestarted = PatternComponent->RestartWithPatternForServer(RequestedKind, FName(TEXT("BalanceSandbox")));
+
+	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SandboxPatternRun Result=%s Requested=%s Running=%s"),
+		bRestarted ? TEXT("Restarted") : TEXT("Rejected"),
+		*PatternAlias,
+		PatternComponent->IsRunning() ? TEXT("true") : TEXT("false"));
+	return bRestarted;
 }
 
 bool ABalanceSandboxGameMode::DamageSandboxBossForServer(float DamageAmount)

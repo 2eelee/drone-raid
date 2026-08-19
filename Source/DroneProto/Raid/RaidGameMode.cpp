@@ -872,6 +872,11 @@ void ARaidGameMode::StartBossPatternsForServer()
 	}
 }
 
+bool ARaidGameMode::ShouldVisualizePatternHitGeometry() const
+{
+	return false;
+}
+
 void ARaidGameMode::StopBossPatternsForServer(FName Reason)
 {
 	if (!HasAuthority())

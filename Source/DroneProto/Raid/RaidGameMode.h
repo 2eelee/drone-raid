@@ -55,6 +55,12 @@ public:
 	// Battle 전이 시 모든 보스의 패턴 타이머 시작/정지 오케스트레이션. 개별 타이머는 Boss가 소유한다.
 	void StartBossPatternsForServer();
 	void StopBossPatternsForServer(FName Reason);
+
+	// 패턴 액터가 서버 실판정 궤적을 그대로 그려 보여줄지 여부. 프로덕션은 항상 false다 —
+	// 플레이어에게 보이는 것은 VFX뿐이고 판정 형상은 개발용이기 때문이다.
+	// 밸런스 샌드박스만 true로 덮어, 실제로 맞는 영역을 화면에서 확인할 수 있게 한다.
+	// 피해 판정 자체는 어느 쪽에서도 바뀌지 않는다 — 서버 궤적이 단일 진실이다.
+	virtual bool ShouldVisualizePatternHitGeometry() const;
 	bool CanAcceptRaidJoinForServer(FName& OutRejectReason, bool bCheckNewPlayerCapacity = true) const;
 
 	// DroneReport 중복 방지: PC 인스턴스 bool과 별개로 PlayerKey 기반 서버 set을 관리한다.

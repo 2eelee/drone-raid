@@ -182,6 +182,20 @@ bool ARaidBoss::StartBossPatternForServer()
 		return false;
 	}
 
+	// 원문 5.1(레이드 최초 패턴 시작 시퀀스)은 "보스 전투 시작 → BossState = Battle 확인"이다.
+	// 확인이지 설정이 아니다. 지금까지 이 함수는 레이드 상태를 보지 않고 BossState를 Battle로
+	// 밀어 넣어서, 선택 단계(Waiting/Drafting)에서 호출한 쪽이 그대로 전투 권한을 얻었다.
+	// 진행 중 가드(BossPatternComponent::AdvanceForServer의 예외 4.2)는 이미 Battle이 아니면
+	// 패턴을 멈추는데 시작 지점에만 같은 기준이 없어, 시작과 진행의 판정이 어긋나 있었다.
+	const ARaidGameState* RaidGameState = World->GetGameState<ARaidGameState>();
+	if (!RaidGameState || RaidGameState->RaidState != ERaidState::Battle)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern StartIgnored: Reason=RaidNotInBattle Boss=%s RaidState=%s"),
+			*GetName(),
+			ToBossAttackRaidStateLogString(RaidGameState));
+		return false;
+	}
+
 	if (!BossPatternComponent || !BossPatternComponent->StartForServer())
 	{
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] BossPattern StartIgnored: Reason=AlreadyActive Boss=%s"), *GetName());

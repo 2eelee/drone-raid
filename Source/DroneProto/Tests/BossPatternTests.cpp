@@ -13,6 +13,7 @@
 #include "Misc/Paths.h"
 #include "Materials/Material.h"
 #include "NiagaraComponent.h"
+#include "Balance/BalanceSandboxGameMode.h"
 #include "Raid/BossPatternActorBase.h"
 #include "Raid/BossPatternComponent.h"
 #include "Raid/BossPatternDataTableRows.h"
@@ -384,6 +385,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FDroneBossPatternResolvedSnapshotTest::RunTest(const FString& Parameters)
 {
 	UWorld* NotReadyWorld = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternNotReadyWorld")));
+	// 레이드는 Battle로 올려 둔다. 그래야 이 단언이 "resolved config 미준비" 하나만 격리한다 —
+	// Battle이 아니면 그 앞의 레이드 상태 가드에서 먼저 막혀 검증이 무의미해진다.
+	ARaidGameState* NotReadyGameState = NotReadyWorld ? NotReadyWorld->SpawnActor<ARaidGameState>() : nullptr;
+	if (NotReadyWorld && NotReadyGameState)
+	{
+		NotReadyWorld->SetGameState(NotReadyGameState);
+		NotReadyGameState->SetRaidStateForServer(ERaidState::Battle);
+	}
 	ARaidBoss* NotReadyBoss = NotReadyWorld ? NotReadyWorld->SpawnActor<ARaidBoss>() : nullptr;
 	TestFalse(TEXT("pattern cannot start before resolved config is ready"),
 		NotReadyBoss && NotReadyBoss->StartBossPatternForServer());
@@ -2362,6 +2371,13 @@ bool FDroneBossPatternWorldRadiusIgnoresBossVisualScaleTest::RunTest(const FStri
 		return false;
 	}
 
+	// 이 테스트는 보스가 원점에 있는 한 거짓 양성이었다 — 보스 기준으로 재든 월드 원점 기준으로
+	// 재든 같은 800/5000이 나오기 때문이다. 보스를 원점 밖으로 옮기고, 이름이 말하는 visual scale을
+	// 실제로 적용한 뒤에 재야 반경이 정말 보스 상대인지 증명된다.
+	Context.Boss->SetActorLocation(FVector(1234.0f, -567.0f, 250.0f));
+	Context.Boss->SetActorScale3D(FVector(3.0f));
+	Context.Boss->ApplyVisualProxySize(18.0f, 16.0f, FName(TEXT("Automation")));
+
 	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
 	TestTrue(TEXT("Corrupted becomes active"), Context.Component->FireScheduledTransitionForTest());
 	ABossPatternActorBase* CorruptedActor = Context.Component->GetActivePatternActorForTest();
@@ -2370,8 +2386,14 @@ bool FDroneBossPatternWorldRadiusIgnoresBossVisualScaleTest::RunTest(const FStri
 	{
 		const FVector StartWorld = CorruptedActor->GetActorTransform().TransformPosition(FVector(800.0f, 0.0f, 0.0f));
 		const FVector EndWorld = CorruptedActor->GetActorTransform().TransformPosition(FVector(5000.0f, 0.0f, 0.0f));
-		TestEqual(TEXT("Corrupted starts 800cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), StartWorld), 800.0);
-		TestEqual(TEXT("Corrupted ends 5000cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), EndWorld), 5000.0);
+		TestEqual(TEXT("Corrupted keeps unit scale despite the boss actor scale"),
+			CorruptedActor->GetActorScale3D(), FVector::OneVector);
+		TestTrue(TEXT("Corrupted starts 800cm from boss despite visual scale"),
+			FMath::Abs(FVector::Dist2D(Context.Boss->GetActorLocation(), StartWorld) - 800.0) < 0.5);
+		TestTrue(TEXT("Corrupted ends 5000cm from boss despite visual scale"),
+			FMath::Abs(FVector::Dist2D(Context.Boss->GetActorLocation(), EndWorld) - 5000.0) < 0.5);
+		TestTrue(TEXT("Corrupted radius is not measured from the world origin"),
+			FMath::Abs(FVector::Dist2D(FVector::ZeroVector, StartWorld) - 800.0) > 1.0);
 	}
 
 	TestTrue(TEXT("Corrupted completes"), Context.Component->FireScheduledTransitionForTest());
@@ -2382,8 +2404,14 @@ bool FDroneBossPatternWorldRadiusIgnoresBossVisualScaleTest::RunTest(const FStri
 	{
 		const FVector StartWorld = StellarActor->GetActorTransform().TransformPosition(FVector(800.0f, 0.0f, 0.0f));
 		const FVector EndWorld = StellarActor->GetActorTransform().TransformPosition(FVector(5000.0f, 0.0f, 0.0f));
-		TestEqual(TEXT("Stellar starts 800cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), StartWorld), 800.0);
-		TestEqual(TEXT("Stellar ends 5000cm from boss despite visual scale"), FVector::Dist2D(Context.Boss->GetActorLocation(), EndWorld), 5000.0);
+		TestEqual(TEXT("Stellar keeps unit scale despite the boss actor scale"),
+			StellarActor->GetActorScale3D(), FVector::OneVector);
+		TestTrue(TEXT("Stellar starts 800cm from boss despite visual scale"),
+			FMath::Abs(FVector::Dist2D(Context.Boss->GetActorLocation(), StartWorld) - 800.0) < 0.5);
+		TestTrue(TEXT("Stellar ends 5000cm from boss despite visual scale"),
+			FMath::Abs(FVector::Dist2D(Context.Boss->GetActorLocation(), EndWorld) - 5000.0) < 0.5);
+		TestTrue(TEXT("Stellar radius is not measured from the world origin"),
+			FMath::Abs(FVector::Dist2D(FVector::ZeroVector, StartWorld) - 800.0) > 1.0);
 	}
 
 	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
@@ -3026,6 +3054,734 @@ bool FDroneBossPatternNonBattleBossStateTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("non-Battle boss state removes the active object"),
 		Context.Component->GetActivePatternActorForTest());
 
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternSelectionPhaseBlocksStartTest,
+	"DroneProto.BossPattern.Lifecycle.SelectionPhaseBlocksStart",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternSelectionPhaseBlocksStartTest::RunTest(const FString& Parameters)
+{
+	// 원문 5.1: "보스 전투 시작 -> BossState = Battle 확인". 확인이지 설정이 아니다.
+	// 선택 단계(Waiting/Drafting)에서 시작 요청이 오면 거부해야 하며, 거부한 요청이
+	// 보스 상태를 Battle로 밀어 올려서도 안 된다.
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternSelectionPhaseWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Component)
+	{
+		Component->ResolvePatternDataForTest();
+	}
+	TestNotNull(TEXT("selection phase world is created"), World);
+	TestNotNull(TEXT("selection phase game state exists"), GameState);
+	TestNotNull(TEXT("selection phase boss exists"), Boss);
+	TestNotNull(TEXT("selection phase component exists"), Component);
+	if (!World || !GameState || !Boss || !Component)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetRaidBossForServer(Boss);
+	const FBossPatternTestPlayer Player = SpawnBossPatternTestPlayer(World, false);
+	TestNotNull(TEXT("selection phase player exists"), Player.PlayerController);
+	TestEqual(TEXT("player stays in selection"),
+		Player.PlayerController ? Player.PlayerController->GetPlayerSelectionState() : EPlayerSelectionState::InBattle,
+		EPlayerSelectionState::Selecting);
+
+	GameState->SetRaidStateForServer(ERaidState::Waiting);
+	TestFalse(TEXT("Waiting refuses pattern start"), Boss->StartBossPatternForServer());
+	TestNotEqual(TEXT("refused start leaves the boss out of Battle"), Boss->GetBossState(), EBossState::Battle);
+	TestEqual(TEXT("Waiting keeps the current pattern None"), Component->GetCurrentPatternForTest(), EBossPatternKind::None);
+	TestEqual(TEXT("Waiting keeps the scheduler stopped"), Component->GetServerStateForTest(), EBossPatternServerState::Stopped);
+	TestFalse(TEXT("Waiting schedules no transition"), Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("Waiting spawns no pattern actor"), CountPatternActors(World), 0);
+
+	GameState->SetRaidStateForServer(ERaidState::Drafting);
+	TestFalse(TEXT("Drafting refuses pattern start"), Boss->StartBossPatternForServer());
+	TestNotEqual(TEXT("Drafting leaves the boss out of Battle"), Boss->GetBossState(), EBossState::Battle);
+	TestEqual(TEXT("Drafting keeps the current pattern None"), Component->GetCurrentPatternForTest(), EBossPatternKind::None);
+	TestEqual(TEXT("Drafting spawns no pattern actor"), CountPatternActors(World), 0);
+
+	GameState->SetRaidStateForServer(ERaidState::End);
+	TestFalse(TEXT("End refuses pattern start"), Boss->StartBossPatternForServer());
+	TestEqual(TEXT("End spawns no pattern actor"), CountPatternActors(World), 0);
+
+	// Battle로 올라간 뒤에만 기존 시퀀스가 그대로 돌아야 한다 — 가드가 시작 경로를 막아버리면 안 된다.
+	// 원문 5.1은 Battle 확인 다음에 ActivePlayerCount > 0도 확인하므로 플레이어를 전투에 넣는다.
+	// 이 월드에는 GameMode가 없어 Ready가 패턴을 자동 시작하지 않는다 — 시작은 아래에서 직접 부른다.
+	GameState->SetRaidStateForServer(ERaidState::Battle);
+	Player.PlayerController->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("player enters battle before the accepted start"),
+		Player.PlayerController->GetPlayerSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Ready alone starts no pattern without a game mode"), CountPatternActors(World), 0);
+	TestTrue(TEXT("Battle accepts pattern start"), Boss->StartBossPatternForServer());
+	TestEqual(TEXT("accepted start puts the boss into Battle"), Boss->GetBossState(), EBossState::Battle);
+	TestEqual(TEXT("accepted start enters first delay"), Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestEqual(TEXT("first delay is canonical"), Component->GetPendingDelayForTest(), 0.5f);
+	TestEqual(TEXT("first delay spawns no actor yet"), CountPatternActors(World), 0);
+	TestTrue(TEXT("first transition fires"), Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("first pattern is Corrupted"), Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("first Corrupted is active"), Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	TestEqual(TEXT("first Corrupted owns one actor"), CountPatternActors(World), 1);
+
+	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternReadyStartsFirstCorruptedTest,
+	"DroneProto.BossPattern.Lifecycle.ReadyStartsFirstCorrupted",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternReadyStartsFirstCorruptedTest::RunTest(const FString& Parameters)
+{
+	// 요청받은 진입 계약: Ready 성공 -> RaidState/BossState = Battle -> 0.5초 -> 첫 Corrupted.
+	// Ready 이전에는 패턴도, 패턴 액터도 없어야 한다.
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternReadyStartWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidGameMode* GameMode = World ? World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = World ? World->SpawnActor<ARaidBoss>() : nullptr;
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Component)
+	{
+		Component->ResolvePatternDataForTest();
+	}
+	TestNotNull(TEXT("ready start world is created"), World);
+	TestNotNull(TEXT("ready start game state exists"), GameState);
+	TestNotNull(TEXT("ready start game mode exists"), GameMode);
+	TestNotNull(TEXT("ready start boss exists"), Boss);
+	TestNotNull(TEXT("ready start component exists"), Component);
+	if (!World || !GameState || !GameMode || !Boss || !Component)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameState->SetRaidBossForServer(Boss);
+	GameState->SetRaidStateForServer(ERaidState::Waiting);
+
+	const FBossPatternTestPlayer Player = SpawnBossPatternTestPlayer(World, false);
+	TestNotNull(TEXT("ready start player exists"), Player.PlayerController);
+	TestNotNull(TEXT("ready start drone exists"), Player.Drone);
+	if (!Player.PlayerController || !Player.Drone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	World->AddController(Player.PlayerController);
+
+	TestEqual(TEXT("before Ready the raid is not in battle"), GameState->RaidState, ERaidState::Waiting);
+	TestEqual(TEXT("before Ready the pattern is None"), Component->GetCurrentPatternForTest(), EBossPatternKind::None);
+	TestEqual(TEXT("before Ready the scheduler is stopped"), Component->GetServerStateForTest(), EBossPatternServerState::Stopped);
+	TestEqual(TEXT("before Ready no pattern actor exists"), CountPatternActors(World), 0);
+	TestNotEqual(TEXT("before Ready the boss is not in Battle"), Boss->GetBossState(), EBossState::Battle);
+
+	Player.PlayerController->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("Ready moves the player into battle"),
+		Player.PlayerController->GetPlayerSelectionState(),
+		EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("Ready moves the raid into Battle"), GameState->RaidState, ERaidState::Battle);
+	TestEqual(TEXT("Ready moves the boss into Battle"), Boss->GetBossState(), EBossState::Battle);
+	TestEqual(TEXT("Ready counts the active player"), Component->GetActivePlayerCountForTest(), 1);
+	TestEqual(TEXT("Ready enters first delay"), Component->GetServerStateForTest(), EBossPatternServerState::FirstDelay);
+	TestEqual(TEXT("Ready waits the canonical first delay"), Component->GetPendingDelayForTest(), 0.5f);
+	TestTrue(TEXT("Ready schedules the first transition"), Component->IsTransitionTimerActiveForTest());
+	TestEqual(TEXT("first delay spawns no actor yet"), CountPatternActors(World), 0);
+
+	TestTrue(TEXT("first transition fires after the first delay"), Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("first pattern is Corrupted"), Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("first Corrupted skips telegraph"), Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	TestEqual(TEXT("first Corrupted owns one actor"), CountPatternActors(World), 1);
+
+	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	World->DestroyWorld(false);
+	return true;
+}
+
+// B 계약 1: 화면에 그려지는 빔과 서버 피격 판정은 같은 source에서 나와야 한다.
+// visual과 hit이 가리키는 곳이 다르면 "보이는 밖에서 맞는" 상태가 된다.
+// 샘플의 각도/Z가 판정식과 동일한지, 그리고 그 중심선 위 점이 실제로 피격 판정을 맞는지를
+// 같은 ElapsedSeconds로 동시에 고정한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoVisualMatchesHitGeometryTest,
+	"DroneProto.BossPattern.CorruptedActino.VisualMatchesHitGeometry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoVisualMatchesHitGeometryTest::RunTest(const FString& Parameters)
+{
+	const FCorruptedActinoConfig Config;
+	const float SampleTimes[] = {0.0f, 0.37f, 1.25f, 2.5f, 3.9f, 5.0f};
+	const FTransform BossTransform = FTransform::Identity;
+
+	for (const float ElapsedSeconds : SampleTimes)
+	{
+		const TArray<FCorruptedBeamVisualSample> Samples =
+			ACorruptedActinoPatternActor::BuildVisualSamples(ElapsedSeconds, false, Config);
+		TestEqual(TEXT("active visual publishes one sample per real laser"), Samples.Num(), Config.LaserCount);
+		if (Samples.Num() != Config.LaserCount)
+		{
+			return false;
+		}
+
+		for (int32 Index = 0; Index < Config.LaserCount; ++Index)
+		{
+			const FCorruptedActinoLaserPreset& Preset = Config.Presets[Index];
+			const FCorruptedBeamVisualSample& Sample = Samples[Index];
+
+			// 두 경로가 같은 순수 함수를 부른다는 것을 값으로 고정한다.
+			TestTrue(TEXT("visual angle equals the damage angle"),
+				FMath::IsNearlyEqual(
+					Sample.AngleDegrees,
+					ACorruptedActinoPatternActor::EvaluateAngleDegrees(Preset, ElapsedSeconds, Config),
+					0.001f));
+			TestTrue(TEXT("visual Z equals the damage Z"),
+				FMath::IsNearlyEqual(
+					Sample.ZCm,
+					ACorruptedActinoPatternActor::EvaluateZCm(Preset, ElapsedSeconds, Config),
+					0.001f));
+
+			// 실제 판정 폭을 그대로 실어 보낸다 — 샌드박스 시각화가 이 값을 그린다.
+			TestEqual(TEXT("sample carries the real inner collision width"),
+				Sample.InnerCollisionFullWidthCm, Config.InnerCollisionFullWidthCm);
+			TestEqual(TEXT("sample carries the real outer collision width"),
+				Sample.OuterCollisionFullWidthCm, Config.OuterCollisionFullWidthCm);
+			TestTrue(TEXT("collision width never exceeds the visual width"),
+				Sample.OuterCollisionFullWidthCm <= Sample.OuterVisualFullWidthCm);
+
+			// 그려진 중심선 위의 점은 같은 시각의 서버 판정을 맞아야 한다.
+			const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
+			const FVector Direction(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
+			const float MidRadiusCm = Sample.StartRadiusCm + Sample.LengthCm * 0.5f;
+			const FVector CenterLinePoint = Direction * MidRadiusCm + FVector::UpVector * Sample.ZCm;
+			TestTrue(TEXT("the drawn center line is inside the server hit volume"),
+				ACorruptedActinoPatternActor::IsPointInsideLaser(
+					CenterLinePoint, BossTransform, Preset, ElapsedSeconds, Config));
+
+			// 반대로 그려지는 범위 밖(시작 반경 안쪽)은 맞지 않아야 한다.
+			const FVector InsideStartRadius = Direction * (Sample.StartRadiusCm * 0.5f) + FVector::UpVector * Sample.ZCm;
+			TestFalse(TEXT("inside the 8m start radius nothing is hit"),
+				ACorruptedActinoPatternActor::IsPointInsideLaser(
+					InsideStartRadius, BossTransform, Preset, ElapsedSeconds, Config));
+		}
+	}
+
+	// 위상이 서로 달라 네 레이저가 동기화되지 않는다 — 시각화도 그 차이를 그대로 따라간다.
+	const TArray<FCorruptedBeamVisualSample> MovedSamples =
+		ACorruptedActinoPatternActor::BuildVisualSamples(1.25f, false, Config);
+	const TArray<FCorruptedBeamVisualSample> StartSamples =
+		ACorruptedActinoPatternActor::BuildVisualSamples(0.0f, false, Config);
+	if (MovedSamples.Num() == 4 && StartSamples.Num() == 4)
+	{
+		int32 MovedBeamCount = 0;
+		for (int32 Index = 0; Index < 4; ++Index)
+		{
+			if (!FMath::IsNearlyEqual(MovedSamples[Index].AngleDegrees, StartSamples[Index].AngleDegrees, 0.01f)
+				|| !FMath::IsNearlyEqual(MovedSamples[Index].ZCm, StartSamples[Index].ZCm, 0.01f))
+			{
+				++MovedBeamCount;
+			}
+		}
+		TestEqual(TEXT("every one of the four beams actually moves over time"), MovedBeamCount, 4);
+	}
+
+	return true;
+}
+
+// B 계약 2: 실판정 시각화는 밸런스 샌드박스 전용이다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternHitGeometryVisualizationIsSandboxOnlyTest,
+	"DroneProto.BossPattern.CorruptedActino.HitGeometryVisualizationIsSandboxOnly",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternHitGeometryVisualizationIsSandboxOnlyTest::RunTest(const FString& Parameters)
+{
+	const ARaidGameMode* RaidDefaults = GetDefault<ARaidGameMode>();
+	const ABalanceSandboxGameMode* SandboxDefaults = GetDefault<ABalanceSandboxGameMode>();
+	TestNotNull(TEXT("the raid game mode has defaults"), RaidDefaults);
+	TestNotNull(TEXT("the sandbox game mode has defaults"), SandboxDefaults);
+	if (!RaidDefaults || !SandboxDefaults)
+	{
+		return false;
+	}
+
+	TestFalse(TEXT("production never draws the hit geometry"), RaidDefaults->ShouldVisualizePatternHitGeometry());
+	TestTrue(TEXT("the sandbox draws the hit geometry"), SandboxDefaults->ShouldVisualizePatternHitGeometry());
+	return true;
+}
+
+// B 계약 3: 시각화를 켠을 때 빔 렌더러 4개가 실제 판정 자세를 따라가고,
+// 작업 중인 petal 프로토타입은 샌드박스에서 꺼진다. 프로덕션 기본값은 그대로다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoHitGeometryRenderersTest,
+	"DroneProto.BossPattern.CorruptedActino.HitGeometryRenderersFollowServerSamples",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoHitGeometryRenderersTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("CorruptedHitGeometryWorld"));
+	if (!Context.World || !Context.Boss || !Context.Component)
+	{
+		TestTrue(TEXT("hit geometry setup"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted becomes active"), Context.Component->FireScheduledTransitionForTest());
+	ACorruptedActinoPatternActor* Corrupted =
+		Cast<ACorruptedActinoPatternActor>(Context.Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("the active actor is Corrupted Actino"), Corrupted);
+	if (!Corrupted)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	FBossPatternResolvedConfig Snapshot;
+	TestTrue(TEXT("the actor owns a config snapshot"), Corrupted->CopyResolvedConfigSnapshot(Snapshot));
+	const FCorruptedActinoConfig& Config = Snapshot.Corrupted;
+
+	// 프로덕션 기본: 빔 렌더러는 보이지 않는다.
+	Corrupted->SetHitGeometryVisualizationForTest(false);
+	Corrupted->RefreshPatternVFXForTest(1.25f);
+	TestEqual(TEXT("production keeps every beam renderer hidden"),
+		Corrupted->GetVisibleBeamRendererCountForTest(), 0);
+
+	// 샌드박스: 4개가 보이고 petal Niagara는 꺼진다.
+	Corrupted->SetHitGeometryVisualizationForTest(true);
+	const float ElapsedSeconds = 1.25f;
+	Corrupted->RefreshPatternVFXForTest(ElapsedSeconds);
+	TestEqual(TEXT("the sandbox shows one renderer per real laser"),
+		Corrupted->GetVisibleBeamRendererCountForTest(), Config.LaserCount);
+	TestFalse(TEXT("the sandbox hides the in-progress petal prototype"),
+		Corrupted->IsPatternVFXActiveForTest());
+
+	for (int32 Index = 0; Index < Config.LaserCount; ++Index)
+	{
+		FVector RelativeLocation = FVector::ZeroVector;
+		FRotator RelativeRotation = FRotator::ZeroRotator;
+		TestTrue(TEXT("beam renderer exists for every laser"),
+			Corrupted->GetBeamRendererTransformForTest(Index, RelativeLocation, RelativeRotation));
+
+		const FCorruptedActinoLaserPreset& Preset = Config.Presets[Index];
+		const float ExpectedAngleDegrees =
+			ACorruptedActinoPatternActor::EvaluateAngleDegrees(Preset, ElapsedSeconds, Config);
+		const float ExpectedZCm = ACorruptedActinoPatternActor::EvaluateZCm(Preset, ElapsedSeconds, Config);
+		const float AngleRadians = FMath::DegreesToRadians(ExpectedAngleDegrees);
+		const FVector ExpectedOrigin =
+			FVector(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f) * Config.StartRadiusCm
+			+ FVector::UpVector * ExpectedZCm;
+
+		TestTrue(TEXT("renderer origin follows the server trajectory"),
+			RelativeLocation.Equals(ExpectedOrigin, 0.1f));
+		TestTrue(TEXT("renderer yaw follows the server angle"),
+			FMath::IsNearlyEqual(
+				FRotator::NormalizeAxis(RelativeRotation.Yaw),
+				FRotator::NormalizeAxis(ExpectedAngleDegrees),
+				0.05f));
+		TestTrue(TEXT("renderer height follows the server Z phase"),
+			FMath::IsNearlyEqual(RelativeLocation.Z, ExpectedZCm, 0.1f));
+		TestTrue(TEXT("renderer width draws the real collision width"),
+			FMath::IsNearlyEqual(
+				Corrupted->GetBeamRendererOuterWidthCmForTest(Index),
+				Config.OuterCollisionFullWidthCm,
+				0.5f));
+	}
+
+	// 시간이 흘러도 서버 궁적을 계속 따라간다 — 멈춰 있으면 안 된다.
+	FVector FirstBeamLocationAtStart = FVector::ZeroVector;
+	FRotator FirstBeamRotationAtStart = FRotator::ZeroRotator;
+	Corrupted->GetBeamRendererTransformForTest(0, FirstBeamLocationAtStart, FirstBeamRotationAtStart);
+	Corrupted->RefreshPatternVFXForTest(ElapsedSeconds + 1.0f);
+	FVector FirstBeamLocationLater = FVector::ZeroVector;
+	FRotator FirstBeamRotationLater = FRotator::ZeroRotator;
+	Corrupted->GetBeamRendererTransformForTest(0, FirstBeamLocationLater, FirstBeamRotationLater);
+	TestFalse(TEXT("the visualization keeps moving with elapsed time"),
+		FirstBeamLocationLater.Equals(FirstBeamLocationAtStart, 0.1f)
+			&& FMath::IsNearlyEqual(FirstBeamRotationLater.Yaw, FirstBeamRotationAtStart.Yaw, 0.05f));
+
+	// 피해 판정은 시각화 여부와 무관하게 서버 궁적 그대로다.
+	const FCorruptedActinoLaserPreset& FirstPreset = Config.Presets[0];
+	const float HitAngleRadians = FMath::DegreesToRadians(
+		ACorruptedActinoPatternActor::EvaluateAngleDegrees(FirstPreset, ElapsedSeconds, Config));
+	const FVector HitPoint =
+		FVector(FMath::Cos(HitAngleRadians), FMath::Sin(HitAngleRadians), 0.0f)
+			* (Config.StartRadiusCm + Config.LengthCm * 0.5f)
+		+ FVector::UpVector * ACorruptedActinoPatternActor::EvaluateZCm(FirstPreset, ElapsedSeconds, Config);
+	TestTrue(TEXT("the hit test is unchanged by the visualization switch"),
+		ACorruptedActinoPatternActor::IsPointInsideLaser(
+			HitPoint, Corrupted->GetActorTransform(), FirstPreset, ElapsedSeconds, Config));
+
+	Context.Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+// B 계약 4: 이번 단계에서 petal 프로토타입을 임의로 확장하지 않았음을 고정한다.
+// 4방향 확장·freeze 해제·angle override 제거는 사용자 VFX 디자인이 끝난 뒤의 별도 작업이다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoPetalPrototypePreservedTest,
+	"DroneProto.BossPattern.CorruptedActino.PetalPrototypeIsPreserved",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoPetalPrototypePreservedTest::RunTest(const FString& Parameters)
+{
+	const FCorruptedActinoConfig Config;
+
+	// freeze가 살아 있으면 경과 시간이 달라도 petal 샘플이 같다.
+	const TArray<FCorruptedPetalSample> PetalAtStart =
+		ACorruptedActinoPatternActor::BuildPetalSamples(0.0f, 0, Config);
+	const TArray<FCorruptedPetalSample> PetalLater =
+		ACorruptedActinoPatternActor::BuildPetalSamples(2.5f, 0, Config);
+	TestTrue(TEXT("the petal prototype produces samples"), PetalAtStart.Num() > 0);
+	TestEqual(TEXT("the petal prototype keeps its sample count"), PetalLater.Num(), PetalAtStart.Num());
+	if (PetalAtStart.Num() > 0 && PetalLater.Num() == PetalAtStart.Num())
+	{
+		bool bPetalIsStillFrozen = true;
+		for (int32 Index = 0; Index < PetalAtStart.Num(); ++Index)
+		{
+			if (!PetalAtStart[Index].LocalPosition.Equals(PetalLater[Index].LocalPosition, 0.01f))
+			{
+				bPetalIsStillFrozen = false;
+				break;
+			}
+		}
+		TestTrue(TEXT("the in-progress petal prototype stays frozen as authored"), bPetalIsStillFrozen);
+	}
+
+	// 그리고 여전히 Preset 0 한 방향만 만든다.
+	TestTrue(TEXT("the petal prototype still builds a single direction"),
+		ACorruptedActinoPatternActor::BuildPetalSamples(0.0f, Config.LaserCount, Config).Num() == 0);
+	return true;
+}
+
+// 공간 기준점 감사: 보스를 일부러 원점 밖으로 내보낸다.
+//
+// 프로덕션은 EnsureRaidBossForServer(BOSS-14)가 보스를 항상 (0,0,0)으로 옮기고
+// 기존 테스트도 전부 기본 transform(원점)으로 보스를 스폰한다. 그래서
+// "보스 기준"과 "원점 기준"이 구분되지 않아, 좀표계 결함이 있어도 드러나지 않는다.
+// 이 테스트만이 불변식을 깨뜨려 8m/50m가 정말 보스 상대인지 증명한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedActinoPatternCenterFollowsBossTest,
+	"DroneProto.BossPattern.Transform.PatternCenterFollowsBossNotWorldOrigin",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedActinoPatternCenterFollowsBossTest::RunTest(const FString& Parameters)
+{
+	const FVector BossLocation(1234.0f, -567.0f, 250.0f);
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("BossPatternOffOriginWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ARaidBoss* Boss = World
+		? World->SpawnActor<ARaidBoss>(ARaidBoss::StaticClass(), BossLocation, FRotator::ZeroRotator)
+		: nullptr;
+	UBossPatternComponent* Component = Boss ? Boss->FindComponentByClass<UBossPatternComponent>() : nullptr;
+	if (Component)
+	{
+		Component->ResolvePatternDataForTest();
+	}
+	TestNotNull(TEXT("off-origin world is created"), World);
+	TestNotNull(TEXT("off-origin game state exists"), GameState);
+	TestNotNull(TEXT("off-origin boss exists"), Boss);
+	TestNotNull(TEXT("off-origin component exists"), Component);
+	if (!World || !GameState || !Boss || !Component)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	TestTrue(TEXT("the boss really sits away from the world origin"),
+		Boss->GetActorLocation().Equals(BossLocation, 0.1f));
+
+	// 반경이 외형에서 계산되지 않는지도 같은 자리에서 본다 —
+	// 샌드박스 프록시 18m x 16m와 보스 액터 스케일 3배를 동시에 걸어 둔다.
+	Boss->SetActorScale3D(FVector(3.0f));
+	Boss->ApplyVisualProxySize(18.0f, 16.0f, FName(TEXT("Automation")));
+
+	World->SetGameState(GameState);
+	GameState->SetRaidBossForServer(Boss);
+	GameState->SetRaidStateForServer(ERaidState::Battle);
+
+	// 드론은 원점(Z=0)에 스폰된다. 보스 Z는 250이므로 패턴 평면 Z가
+	// 보스가 아니라 플레이어 평면에서 온다는 것까지 같은 테스트에서 가른다.
+	const FBossPatternTestPlayer Player = SpawnBossPatternTestPlayer(World, true);
+	TestNotNull(TEXT("off-origin player exists"), Player.PlayerController);
+	TestNotNull(TEXT("off-origin drone exists"), Player.Drone);
+	if (!Player.Drone)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	const float PlayerPlaneZ = Player.Drone->GetActorLocation().Z;
+
+	TestTrue(TEXT("pattern starts"), Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted becomes active"), Component->FireScheduledTransitionForTest());
+	ACorruptedActinoPatternActor* Corrupted =
+		Cast<ACorruptedActinoPatternActor>(Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("the active actor is Corrupted Actino"), Corrupted);
+	if (!Corrupted)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	FBossPatternResolvedConfig Snapshot;
+	TestTrue(TEXT("the actor owns a config snapshot"), Corrupted->CopyResolvedConfigSnapshot(Snapshot));
+	const FCorruptedActinoConfig& Config = Snapshot.Corrupted;
+	const FTransform PatternTransform = Corrupted->GetActorTransform();
+	const FVector PatternCenter = PatternTransform.GetLocation();
+
+	// ---- 1. Pattern center 자체 ----
+	TestTrue(TEXT("pattern center X follows the boss"),
+		FMath::IsNearlyEqual(PatternCenter.X, BossLocation.X, 0.1f));
+	TestTrue(TEXT("pattern center Y follows the boss"),
+		FMath::IsNearlyEqual(PatternCenter.Y, BossLocation.Y, 0.1f));
+	TestTrue(TEXT("pattern center Z uses the player plane, not the boss Z"),
+		FMath::IsNearlyEqual(PatternCenter.Z, PlayerPlaneZ, 0.1f));
+	TestFalse(TEXT("pattern center is not the world origin"), PatternCenter.IsNearlyZero());
+	TestEqual(TEXT("pattern actor strips the boss scale"),
+		Corrupted->GetActorScale3D(), FVector::OneVector);
+
+	// ---- 2. 4개 레이저의 시작·끝점이 보스 중심 기준인지 ----
+	const float SampleTimes[] = {0.0f, 0.8f, 2.4f, 4.1f};
+	for (const float ElapsedSeconds : SampleTimes)
+	{
+		const TArray<FCorruptedBeamVisualSample> Samples =
+			ACorruptedActinoPatternActor::BuildVisualSamples(ElapsedSeconds, false, Config);
+		TestEqual(TEXT("four beams per frame"), Samples.Num(), Config.LaserCount);
+		if (Samples.Num() != Config.LaserCount)
+		{
+			break;
+		}
+
+		for (int32 Index = 0; Index < Config.LaserCount; ++Index)
+		{
+			const FCorruptedBeamVisualSample& Sample = Samples[Index];
+			const FCorruptedActinoLaserPreset& Preset = Config.Presets[Index];
+			const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
+			const FVector Direction(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
+
+			const FVector LocalStart = Direction * Sample.StartRadiusCm + FVector::UpVector * Sample.ZCm;
+			const FVector LocalEnd = Direction * Sample.EndRadiusCm + FVector::UpVector * Sample.ZCm;
+			const FVector StartWorld = PatternTransform.TransformPosition(LocalStart);
+			const FVector EndWorld = PatternTransform.TransformPosition(LocalEnd);
+
+			// 기획 고정값 8m / 50m는 보스 중심에서 재야 맞는다.
+			TestTrue(TEXT("laser starts 800cm from the boss center"),
+				FMath::Abs(FVector::Dist2D(BossLocation, StartWorld) - 800.0) < 0.5);
+			TestTrue(TEXT("laser ends 5000cm from the boss center"),
+				FMath::Abs(FVector::Dist2D(BossLocation, EndWorld) - 5000.0) < 0.5);
+
+			// 그리고 원점에서 재면 틀려야 한다 — 이것이 거짓 양성을 가르는 단언이다.
+			TestTrue(TEXT("laser start is not measured from the world origin"),
+				FMath::Abs(FVector::Dist2D(FVector::ZeroVector, StartWorld) - 800.0) > 1.0);
+			TestTrue(TEXT("laser end is not measured from the world origin"),
+				FMath::Abs(FVector::Dist2D(FVector::ZeroVector, EndWorld) - 5000.0) > 1.0);
+
+			// ---- 3. 서버 피격 판정도 같은 center를 쓴다 ----
+			const FVector CenterLineLocal =
+				Direction * (Sample.StartRadiusCm + Sample.LengthCm * 0.5f) + FVector::UpVector * Sample.ZCm;
+			const FVector CenterLineWorld = PatternTransform.TransformPosition(CenterLineLocal);
+			TestTrue(TEXT("a boss-relative world point is inside the server hit volume"),
+				ACorruptedActinoPatternActor::IsPointInsideLaser(
+					CenterLineWorld, PatternTransform, Preset, ElapsedSeconds, Config));
+
+			// 같은 반경을 원점 기준으로 잡은 점의 판정은 여기서 단언하지 않는다.
+			// 보스 오프셋(약 13.6m)이 레이저 길이(42m)보다 짧아 두 좌표계의 판정 볼륨이 겹칠 수
+			// 있어서, 빗나감을 기대하면 각도에 따라 우연히 맞는 경우가 생긴다.
+			// 좌표계 분리는 아래 4단계에서 겹칠 수 없는 거리로 따로 증명한다.
+		}
+	}
+
+	// ---- 3-b. 좌표계 분리 증명 (겹칠 수 없는 거리에서) ----
+	// 위 (1234, -567)은 사용자가 지정한 실사용 배치라 그대로 검증하되, 두 좌표계가 물리적으로
+	// 겹칠 수 있다. 여기서는 보스를 패턴 도달 범위(50m)의 몇 배 밖에 두어 겹침 가능성을 없앤 뒤,
+	// 판정이 "전달된 transform"만 따르는지 — 즉 월드 원점을 암묵적으로 쓰지 않는지 — 를 가른다.
+	// IsPointInsideLaser는 순수 static이라 액터를 더 스폰할 필요가 없다.
+	{
+		const FTransform FarBossTransform(FRotator::ZeroRotator, FVector(30000.0f, -20000.0f, 0.0f));
+		const float ElapsedSeconds = 1.6f;
+		const TArray<FCorruptedBeamVisualSample> Samples =
+			ACorruptedActinoPatternActor::BuildVisualSamples(ElapsedSeconds, false, Config);
+		for (int32 Index = 0; Index < Samples.Num(); ++Index)
+		{
+			const FCorruptedBeamVisualSample& Sample = Samples[Index];
+			const FCorruptedActinoLaserPreset& Preset = Config.Presets[Index];
+			const float AngleRadians = FMath::DegreesToRadians(Sample.AngleDegrees);
+			const FVector Direction(FMath::Cos(AngleRadians), FMath::Sin(AngleRadians), 0.0f);
+			const FVector CenterLineLocal =
+				Direction * (Sample.StartRadiusCm + Sample.LengthCm * 0.5f) + FVector::UpVector * Sample.ZCm;
+			const FVector FarBossHitPoint = FarBossTransform.TransformPosition(CenterLineLocal);
+
+			TestTrue(TEXT("the far boss center still owns its own hit volume"),
+				ACorruptedActinoPatternActor::IsPointInsideLaser(
+					FarBossHitPoint, FarBossTransform, Preset, ElapsedSeconds, Config));
+			// 같은 점을 원점 중심 판정에 넣으면 빗나가야 한다 — 판정이 원점을 쓰지 않는다는 뜻이다.
+			TestFalse(TEXT("the far boss hit point misses an origin-centred volume"),
+				ACorruptedActinoPatternActor::IsPointInsideLaser(
+					FarBossHitPoint, FTransform::Identity, Preset, ElapsedSeconds, Config));
+			// 반대로 원점 기준으로 잡은 점은 보스 중심 판정에서 빗나가야 한다.
+			TestFalse(TEXT("an origin-relative point misses the far boss volume"),
+				ACorruptedActinoPatternActor::IsPointInsideLaser(
+					CenterLineLocal, FarBossTransform, Preset, ElapsedSeconds, Config));
+		}
+	}
+
+	// ---- 4. debug renderer도 같은 center를 따른다 ----
+	const float RenderTimeSeconds = 1.6f;
+	Corrupted->SetHitGeometryVisualizationForTest(true);
+	Corrupted->RefreshPatternVFXForTest(RenderTimeSeconds);
+	TestEqual(TEXT("one renderer per real laser"),
+		Corrupted->GetVisibleBeamRendererCountForTest(), Config.LaserCount);
+
+	for (int32 Index = 0; Index < Config.LaserCount; ++Index)
+	{
+		FVector RelativeLocation = FVector::ZeroVector;
+		FRotator RelativeRotation = FRotator::ZeroRotator;
+		if (!Corrupted->GetBeamRendererTransformForTest(Index, RelativeLocation, RelativeRotation))
+		{
+			TestTrue(TEXT("beam renderer exists for every laser"), false);
+			continue;
+		}
+
+		const FVector RendererWorld = PatternTransform.TransformPosition(RelativeLocation);
+		TestTrue(TEXT("renderer origin sits 800cm from the boss center"),
+			FMath::Abs(FVector::Dist2D(BossLocation, RendererWorld) - 800.0) < 0.5);
+		TestTrue(TEXT("renderer origin is not measured from the world origin"),
+			FMath::Abs(FVector::Dist2D(FVector::ZeroVector, RendererWorld) - 800.0) > 1.0);
+
+		// 렌더러가 서버 판정과 같은 자세를 쓰는지도 같은 시각에서 확인한다.
+		const FCorruptedActinoLaserPreset& Preset = Config.Presets[Index];
+		const float ExpectedAngleDegrees =
+			ACorruptedActinoPatternActor::EvaluateAngleDegrees(Preset, RenderTimeSeconds, Config);
+		const float ExpectedZCm = ACorruptedActinoPatternActor::EvaluateZCm(Preset, RenderTimeSeconds, Config);
+		TestTrue(TEXT("renderer yaw follows the server angle"),
+			FMath::IsNearlyEqual(
+				FRotator::NormalizeAxis(RelativeRotation.Yaw),
+				FRotator::NormalizeAxis(ExpectedAngleDegrees),
+				0.05f));
+		TestTrue(TEXT("renderer height follows the server Z phase"),
+			FMath::IsNearlyEqual(RelativeLocation.Z, ExpectedZCm, 0.1f));
+	}
+
+	// ---- 5. 스폰 이후 보스 이동은 따라가지 않는다(스냅샷 의미) ----
+	// 프로덕션 보스는 고정이므로 런타임 추적을 새로 만들지 않는다.
+	// 다만 현재 동작이 "스폰 시점 스냅샷"임을 명시적으로 고정해, 나중에 보스가
+	// 움직이는 설계가 들어오면 이 테스트가 먼저 깨지게 한다.
+	Boss->SetActorLocation(BossLocation + FVector(1000.0f, 1000.0f, 0.0f));
+	TestTrue(TEXT("the spawned pattern keeps its snapshot center when the boss moves"),
+		Corrupted->GetActorLocation().Equals(PatternCenter, 0.1f));
+
+	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
+	World->DestroyWorld(false);
+	return true;
+}
+
+// 샌드박스 수동 패턴 버튼은 예약이 아니라 실행이다.
+//
+// 예약(SetNextPatternForServer)만으로는 자동 진행에 묻힌다 — 현재 패턴이 끝날 때
+// FinishActiveForServer가 교대 규칙대로 NextPattern을 무조건 덮어써 예약이 사라지기 때문이다.
+// 여기서는 현재 패턴이 정상 정리되고 지정한 패턴이 그 자리에서 바로 열리는지, 연타해도 액터와
+// 타이머가 중첩되지 않는지, 그리고 그 뒤 자동 교대 규칙이 그대로인지를 고정한다.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxManualPatternRestartTest,
+	"DroneProto.BALANCE.Sandbox.ManualPatternRestartsImmediately",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxManualPatternRestartTest::RunTest(const FString& Parameters)
+{
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("BalanceSandboxManualPatternWorld"));
+	UWorld* World = Context.World;
+	ARaidBoss* Boss = Context.Boss;
+	UBossPatternComponent* Component = Context.Component;
+	TestNotNull(TEXT("manual pattern world is created"), World);
+	TestNotNull(TEXT("manual pattern boss is spawned"), Boss);
+	TestNotNull(TEXT("manual pattern component exists"), Component);
+	TestNotNull(TEXT("manual pattern game state exists"), Context.GameState);
+	if (!World || !Boss || !Component || !Context.GameState)
+	{
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	const FName SandboxReason(TEXT("BalanceSandboxTest"));
+
+	// 전투가 아니면 수동 실행도 거부한다 — 샌드박스가 시작 계약을 우회하지 않는다.
+	Context.GameState->SetRaidStateForServer(ERaidState::Waiting);
+	TestFalse(TEXT("a manual pattern is refused outside battle"),
+		Component->RestartWithPatternForServer(EBossPatternKind::StellarRemnant, SandboxReason));
+	TestEqual(TEXT("a refused manual pattern spawns nothing"), CountPatternActors(World), 0);
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+
+	// 자동 진행을 정상으로 띄운다: FirstDelay 뒤 첫 Corrupted가 Active로 돌고 있는 상태.
+	TestTrue(TEXT("the automatic loop starts"), Boss->StartBossPatternForServer());
+	TestTrue(TEXT("the first transition fires"), Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("the loop is running Corrupted"),
+		Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("the running Corrupted is active"),
+		Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	TestEqual(TEXT("the running Corrupted owns one actor"), CountPatternActors(World), 1);
+	const int32 SerialBeforeManual = Component->GetTransitionSerialForTest();
+
+	// ---- Stellar 버튼: 실행 중인 Corrupted를 정리하고 Stellar를 즉시 연다 ----
+	TestTrue(TEXT("the manual Stellar request is accepted"),
+		Component->RestartWithPatternForServer(EBossPatternKind::StellarRemnant, SandboxReason));
+	TestEqual(TEXT("the manual request switches the current pattern at once"),
+		Component->GetCurrentPatternForTest(), EBossPatternKind::StellarRemnant);
+	TestEqual(TEXT("the manual pattern opens at its telegraph"),
+		Component->GetServerStateForTest(), EBossPatternServerState::Telegraphing);
+	TestEqual(TEXT("the previous pattern actor is cleaned up"), CountPatternActors(World), 1);
+	TestNotNull(TEXT("the manual pattern owns an actor"), Component->GetActivePatternActorForTest());
+	TestNotNull(TEXT("the manual pattern actor is the Stellar actor"),
+		Cast<AStellarRemnantPatternActor>(Component->GetActivePatternActorForTest()));
+	TestTrue(TEXT("the manual restart invalidates the pending transition"),
+		Component->GetTransitionSerialForTest() > SerialBeforeManual);
+	TestTrue(TEXT("the manual restart arms exactly one transition timer"),
+		Component->IsTransitionTimerActiveForTest());
+
+	// ---- 연타: 액터도 타이머도 중첩되지 않는다 ----
+	TestTrue(TEXT("a repeated manual Stellar request is accepted"),
+		Component->RestartWithPatternForServer(EBossPatternKind::StellarRemnant, SandboxReason));
+	TestTrue(TEXT("a manual Corrupted request right after is accepted"),
+		Component->RestartWithPatternForServer(EBossPatternKind::CorruptedActino, SandboxReason));
+	TestEqual(TEXT("repeated manual requests never stack pattern actors"), CountPatternActors(World), 1);
+	TestEqual(TEXT("the last manual request wins"),
+		Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("the last manual request opens at its telegraph"),
+		Component->GetServerStateForTest(), EBossPatternServerState::Telegraphing);
+	TestNotNull(TEXT("the last manual request owns the Corrupted actor"),
+		Cast<ACorruptedActinoPatternActor>(Component->GetActivePatternActorForTest()));
+
+	// ---- 그 뒤 자동 진행은 그대로다: 수동으로 연 Corrupted가 끝나면 다음은 Stellar ----
+	TestTrue(TEXT("the manual pattern reaches its active phase"), Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("the manual pattern becomes active"),
+		Component->GetServerStateForTest(), EBossPatternServerState::Active);
+	TestTrue(TEXT("the manual pattern completes"), Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("the manual pattern hands back to intermission"),
+		Component->GetServerStateForTest(), EBossPatternServerState::Intermission);
+	TestEqual(TEXT("the automatic alternation resumes from the manual pattern"),
+		Component->GetNextPatternForTest(), EBossPatternKind::StellarRemnant);
+	TestEqual(TEXT("intermission still destroys the actor"), CountPatternActors(World), 0);
+
+	Boss->StopBossPatternForServer(FName(TEXT("Automation")));
 	DestroyBossPatternPlayerTestContext(Context);
 	return true;
 }

@@ -5,6 +5,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Drone.h"
 #include "DrawDebugHelpers.h"
+#include "RaidGameMode.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameStateBase.h"
@@ -359,6 +360,9 @@ TArray<FCorruptedBeamVisualSample> ACorruptedActinoPatternActor::BuildVisualSamp
 		Sample.LengthCm = InConfig.LengthCm;
 		Sample.InnerVisualFullWidthCm = InConfig.InnerVisualFullWidthCm;
 		Sample.OuterVisualFullWidthCm = InConfig.OuterVisualFullWidthCm;
+		Sample.InnerCollisionFullWidthCm = InConfig.InnerCollisionFullWidthCm;
+		Sample.OuterCollisionFullWidthCm = InConfig.OuterCollisionFullWidthCm;
+		Sample.CollisionFullHeightCm = InConfig.CollisionFullHeightCm;
 		Sample.Intensity = bTelegraphing ? 0.32f : 1.0f;
 		Sample.bTelegraphing = bTelegraphing;
 	}
@@ -552,6 +556,11 @@ void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 		? EvaluateTelegraphPulse(ElapsedSeconds, TelegraphAlpha)
 		: 1.0f;
 
+	// 샌드박스 실판정 시각화. 켜지면 빔 렌더러가 시각 폭이 아니라 서버 충돌 폭을 그린다 —
+	// "보이는데 안 맞는" 영역이 남지 않게 하는 것이 목적이다. 각도·Z·위상은 어느 쪽이든
+	// ApplyDamageForServer와 같은 BuildVisualSamples에서 나오므로 손대지 않는다.
+	const bool bVisualizeHitGeometry = IsHitGeometryVisualizationEnabled();
+
 	const TArray<FCorruptedBeamVisualSample> VisualSamples = BuildVisualSamples(ElapsedSeconds, bTelegraphing, Config);
 	TArray<FVector> BeamPositions;
 	TArray<FVector> BeamRotations;
@@ -571,9 +580,13 @@ void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 		InnerWidths.Add(Sample.InnerVisualFullWidthCm);
 		OuterWidths.Add(Sample.OuterVisualFullWidthCm);
 		const FVector BeamOrigin = Direction * Sample.StartRadiusCm + FVector::UpVector * Sample.ZCm;
+		const float RenderInnerFullWidthCm =
+			bVisualizeHitGeometry ? Sample.InnerCollisionFullWidthCm : Sample.InnerVisualFullWidthCm;
+		const float RenderOuterFullWidthCm =
+			bVisualizeHitGeometry ? Sample.OuterCollisionFullWidthCm : Sample.OuterVisualFullWidthCm;
 		const FVector BeamScale(
 			Sample.LengthCm / CorruptedBeamMeshBaseLengthCm,
-			Sample.OuterVisualFullWidthCm / CorruptedBeamMeshBaseOuterFullWidthCm,
+			RenderOuterFullWidthCm / CorruptedBeamMeshBaseOuterFullWidthCm,
 			bTelegraphing ? CorruptedTelegraphThicknessScale : 1.0f);
 		const float BeamIntensity =
 			(bTelegraphing ? CorruptedTelegraphIntensity : CorruptedActiveIntensity) * TelegraphPulse;
@@ -609,14 +622,29 @@ void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 				TEXT("VFXTelegraph"), bTelegraphing ? 1.0f : 0.0f);
 			BeamRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXTelegraphAlpha"), TelegraphAlpha);
 			BeamRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXBeamLength"), Sample.LengthCm);
-			BeamRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXInnerWidth"), Sample.InnerVisualFullWidthCm);
-			BeamRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXOuterWidth"), Sample.OuterVisualFullWidthCm);
-			// SM_CorruptedBeamWedge는 42m x 12m 꽉 찬 판이다. telegraph/active 어느 쪽에서도
-			// 플레이어에게 보여주지 않고 개발용 debug 시각화에서만 쓴다.
-			// 공격 표현은 petal ribbon이 맡는다.
-			BeamRenderer->SetVisibility(bEnableDebugVisualization, true);
+			BeamRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXInnerWidth"), RenderInnerFullWidthCm);
+			BeamRenderer->SetScalarParameterValueOnMaterials(TEXT("VFXOuterWidth"), RenderOuterFullWidthCm);
+			// SM_CorruptedBeamWedge는 42m x 12m 꽉 찬 판이다. 프로덕션에서는 telegraph/active 어느
+			// 쪽에서도 플레이어에게 보여주지 않고(공격 표현은 petal ribbon이 맡는다) 개발용 debug
+			// 시각화에서만 쓴다. 밸런스 샌드박스는 여기에 더해 실판정 확인용으로 켠다 —
+			// 이 렌더러는 서버 판정과 같은 sample을 그리는 유일한 시각화이기 때문이다.
+			BeamRenderer->SetVisibility(bEnableDebugVisualization || bVisualizeHitGeometry, true);
 		}
 	}
+	// 샌드박스는 실판정 궤적 검증이 목적이므로 작업 중인 petal 프로토타입을 띄우지 않는다.
+	// 지금 petal은 Preset 0 하나만, sweep freeze, 각도는 카메라 기준 override 상태라 서버 판정과
+	// 무관한 위치에 서 있다. 두 표현을 같이 띄우면 어느 쪽이 실제 피격 영역인지 읽을 수 없다.
+	// 프로덕션과 VFX 작업 환경의 petal 동작·값·머티리얼은 그대로 둔다 —
+	// 나중에 디자인이 끝나면 petal을 4개 실제 궤적에 연결하는 것이 별도 작업이다.
+	if (bVisualizeHitGeometry)
+	{
+		if (PatternVFX->IsActive())
+		{
+			PatternVFX->DeactivateImmediate();
+		}
+		return;
+	}
+
 	// 위치는 Position 배열로 보낸다. UE 5는 Position과 Vector를 별도 타입으로 취급하므로
 	// Vector로 보내면 Niagara에서 Convert 노드를 한 겹 끼워야 하고 LWC 경고가 따라붙는다.
 	// 회전값은 위치가 아니므로 Vector 그대로 둔다.
@@ -713,6 +741,20 @@ void ACorruptedActinoPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 	{
 		PatternVFX->Activate(true);
 	}
+}
+
+bool ACorruptedActinoPatternActor::IsHitGeometryVisualizationEnabled()
+{
+	if (!bHitGeometryVisualizationResolved)
+	{
+		// GameMode는 레벨이 살아 있는 동안 바뀌지 않으므로 한 번만 조회한다.
+		// 데디케이티드 클라이언트에는 GameMode가 없어 항상 false다 — 프로덕션 표현이 유지된다.
+		const UWorld* World = GetWorld();
+		const ARaidGameMode* RaidGameMode = World ? World->GetAuthGameMode<ARaidGameMode>() : nullptr;
+		bHitGeometryVisualizationEnabled = RaidGameMode != nullptr && RaidGameMode->ShouldVisualizePatternHitGeometry();
+		bHitGeometryVisualizationResolved = true;
+	}
+	return bHitGeometryVisualizationEnabled;
 }
 
 float ACorruptedActinoPatternActor::GetServerWorldTimeSeconds() const
@@ -820,5 +862,57 @@ int32 ACorruptedActinoPatternActor::GetDamageAttemptCountForTest() const
 void ACorruptedActinoPatternActor::RefreshPatternVFXForTest(float ElapsedSeconds)
 {
 	RefreshPatternVFX(ElapsedSeconds);
+}
+
+void ACorruptedActinoPatternActor::SetHitGeometryVisualizationForTest(bool bEnabled)
+{
+	bHitGeometryVisualizationEnabled = bEnabled;
+	bHitGeometryVisualizationResolved = true;
+}
+
+int32 ACorruptedActinoPatternActor::GetVisibleBeamRendererCountForTest() const
+{
+	int32 Count = 0;
+	for (const UStaticMeshComponent* BeamRenderer : BeamRenderers)
+	{
+		if (BeamRenderer && BeamRenderer->IsVisible())
+		{
+			++Count;
+		}
+	}
+	return Count;
+}
+
+bool ACorruptedActinoPatternActor::IsPatternVFXActiveForTest() const
+{
+	return PatternVFX != nullptr && PatternVFX->IsActive();
+}
+
+bool ACorruptedActinoPatternActor::GetBeamRendererTransformForTest(
+	int32 BeamIndex,
+	FVector& OutRelativeLocation,
+	FRotator& OutRelativeRotation) const
+{
+	// 빔 하나가 CorruptedBeamLayerCount개 렌더러를 쓴다. 주 레이어(0)가 명세 폭 그대로다.
+	const int32 RendererIndex = BeamIndex * CorruptedBeamLayerCount;
+	if (!BeamRenderers.IsValidIndex(RendererIndex) || !BeamRenderers[RendererIndex])
+	{
+		return false;
+	}
+
+	OutRelativeLocation = BeamRenderers[RendererIndex]->GetRelativeLocation();
+	OutRelativeRotation = BeamRenderers[RendererIndex]->GetRelativeRotation();
+	return true;
+}
+
+float ACorruptedActinoPatternActor::GetBeamRendererOuterWidthCmForTest(int32 BeamIndex) const
+{
+	const int32 RendererIndex = BeamIndex * CorruptedBeamLayerCount;
+	if (!BeamRenderers.IsValidIndex(RendererIndex) || !BeamRenderers[RendererIndex])
+	{
+		return 0.0f;
+	}
+
+	return BeamRenderers[RendererIndex]->GetRelativeScale3D().Y * CorruptedBeamMeshBaseOuterFullWidthCm;
 }
 #endif
