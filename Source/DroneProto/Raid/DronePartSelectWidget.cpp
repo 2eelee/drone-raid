@@ -1,4 +1,4 @@
-#include "DronePartSelectWidget.h"
+﻿#include "DronePartSelectWidget.h"
 
 #include "Components/Button.h"
 #include "Components/Border.h"
@@ -793,6 +793,9 @@ void UDronePartSelectWidget::UnbindButtonEvents()
 
 void UDronePartSelectWidget::LogOptionalWidgetBindings() const
 {
+#if WITH_METADATA
+	// FField::HasMetaData is compiled out when WITH_METADATA is 0 (Dedicated Server).
+	// This is diagnostic logging for UMG binding, so the server simply skips it.
 	for (TFieldIterator<FObjectProperty> PropertyIt(GetClass(), EFieldIteratorFlags::ExcludeSuper); PropertyIt; ++PropertyIt)
 	{
 		const FObjectProperty* Property = *PropertyIt;
@@ -814,6 +817,7 @@ void UDronePartSelectWidget::LogOptionalWidgetBindings() const
 				*Property->GetName());
 		}
 	}
+#endif // WITH_METADATA
 }
 
 void UDronePartSelectWidget::StartTimerTextRefresh()
