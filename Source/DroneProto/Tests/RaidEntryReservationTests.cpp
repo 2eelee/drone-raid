@@ -44,6 +44,40 @@ bool FRaidReservationAtomicCapacityExpiryAndReplayTest::RunTest(const FString& P
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidReservationPendingLifetimeCoversClientColdStartTest,
+	"DroneProto.RaidEntry.Reservation.PendingLifetimeCoversClientColdStart",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidReservationPendingLifetimeCoversClientColdStartTest::RunTest(const FString& Parameters)
+{
+	// 2026-08-20 Dedicated Server 실환경에서 예약 발급 -> PreLogin 도달까지
+	// 정상 5.2초, 메모리 압박 시 13.4초가 걸렸다. 기본 pending 수명은 그 최악값을
+	// 덮어야 한다 — 10초였을 때 정상 플레이어가 만료로 거부됐다.
+	FRaidReservationLedger Ledger(1);
+
+	FString Token;
+	TestTrue(TEXT("reservation succeeds"), Ledger.TryReserve(100.0, Token));
+
+	// 실측 최악값(13.4초) 시점에는 아직 살아 있어야 한다.
+	Ledger.Expire(113.4);
+	TestEqual(TEXT("pending reservation survives a 13.4s client cold start"),
+		Ledger.GetReservedPlayers(113.4), 1);
+	TestTrue(TEXT("claim still succeeds after the measured worst-case cold start"),
+		Ledger.TryClaim(Token, 113.4));
+
+	// 접속하지 않는 예약은 여전히 회수돼야 한다(정원이 영구히 묶이면 안 된다).
+	FRaidReservationLedger AbandonedLedger(1);
+	FString AbandonedToken;
+	TestTrue(TEXT("abandoned reservation succeeds"),
+		AbandonedLedger.TryReserve(200.0, AbandonedToken));
+	AbandonedLedger.Expire(230.01);
+	TestEqual(TEXT("abandoned reservation is reclaimed after the pending lifetime"),
+		AbandonedLedger.GetReservedPlayers(230.01), 0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidReservationEntryDisconnectReleaseTest,
 	"DroneProto.RaidEntry.Reservation.EntryDisconnectReleasesReservation",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

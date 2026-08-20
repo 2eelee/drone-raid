@@ -15,7 +15,10 @@ namespace
 {
 constexpr int32 RaidReservationMaxPlayers = 16;
 // 예약만 받고 접속하지 않는 클라이언트를 회수하는 시간.
-constexpr double RaidReservationPendingLifetimeSeconds = 10.0;
+// 2026-08-20 실환경 검증에서 10초는 부족했다 — 패키징 클라이언트가 예약 발급 후
+// PreLogin에 도달하기까지 정상 5.2초, 메모리 압박 시 13.4초가 걸려 정상 플레이어가
+// 만료로 거부됐다. 느린 환경까지 덮도록 30초로 둔다(정원이 묶이는 최악 시간도 30초).
+constexpr double RaidReservationPendingLifetimeSeconds = 30.0;
 // PreLogin 통과 후 클라이언트가 맵을 로드하는 동안 예약을 붙잡아 두는 시간. 연결이 실제로 끊기면
 // ReleaseAbandonedClaims가 즉시 회수하므로 이 값은 알림이 오지 않는 경우의 backstop이다.
 constexpr double RaidReservationClaimedLifetimeSeconds = 120.0;
