@@ -184,7 +184,7 @@ FDroneReportTableFixture MakeCanonicalReportTableFixture()
 	HighDPS.SecondaryMinDamagePerMinute = 0.02f;
 	Fixture.Bonus->AddRow(FName(TEXT("BONUS_002")), HighDPS);
 
-	FDroneBonusRow NoDamage = MakeBonusRow(5003, TEXT("NoDamage"), TEXT("NO DAMAGE"), 50, 0, 60.0f, 0.0f, 0.02f, 0.0f, 50);
+	FDroneBonusRow NoDamage = MakeBonusRow(5003, TEXT("NoDamage"), TEXT("No Damage"), 50, 0, 60.0f, 0.0f, 0.02f, 0.0f, 50);
 	NoDamage.MaxDamageTakenCount = 0;
 	Fixture.Bonus->AddRow(FName(TEXT("BONUS_003")), NoDamage);
 
@@ -1272,7 +1272,7 @@ bool FDroneReportWidgetTextTest::RunTest(const FString& Parameters)
 		FString(TEXT("High DPS")));
 	TestEqual(TEXT("NoDamage bonus display name"),
 		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::NoDamage).ToString(),
-		FString(TEXT("NO DAMAGE")));
+		FString(TEXT("No Damage")));
 	TestEqual(TEXT("KeepMoving bonus display name"),
 		UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType::KeepMoving).ToString(),
 		FString(TEXT("Keep Moving")));

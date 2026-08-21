@@ -566,7 +566,7 @@ struct DRONEPROTO_API FDroneReportRules
 		HighDPS.SecondaryMinDamagePerMinute = 0.02f;
 
 		FDroneReportBonusRule& NoDamage = Config.BonusRules[
-			AddBonus(EDroneReportBonusType::NoDamage, TEXT("NO DAMAGE"), 50, 0, 60.0f, 0.0f, 0.02f, 0.0f, 50)];
+			AddBonus(EDroneReportBonusType::NoDamage, TEXT("No Damage"), 50, 0, 60.0f, 0.0f, 0.02f, 0.0f, 50)];
 		NoDamage.MaxDamageTakenCount = 0;
 
 		FDroneReportBonusRule& KeepMoving = Config.BonusRules[

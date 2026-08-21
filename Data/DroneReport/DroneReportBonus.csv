@@ -1,6 +1,6 @@
 ---,BonusID,BonusName,BonusDisplayName,BonusScore,MinCombatDuration,MinBossDamageRatio,MaxScore,SecondaryBonusScore,SecondaryMinCombatDuration,SecondaryMinBossDamageRatio,PrimaryMinDamagePerMinute,SecondaryMinDamagePerMinute,PrimaryMinMoveDistance,SecondaryMinMovePerMinute,PrimaryMinHealAmount,SecondaryMinHealAmount,LateJoinBossHPThresholdRatio,MaxDamageTakenCount,bRequiresBossDefeated,bRequiresAlive
 BONUS_001,5001,BossSlayer,Boss Slayer,80,60,0.03,80,40,30,0.01,0,0,0,0,0,0,0.25,-1,true,true
 BONUS_002,5002,HighDPS,High DPS,70,30,0.015,70,40,30,0.015,0.03,0.02,0,0,0,0,0,-1,false,false
-BONUS_003,5003,NoDamage,No DAMAGE,50,60,0.02,50,0,0,0,0,0,0,0,0,0,0,0,false,false
+BONUS_003,5003,NoDamage,No Damage,50,60,0.02,50,0,0,0,0,0,0,0,0,0,0,0,false,false
 BONUS_004,5004,KeepMoving,Keep Moving,50,60,0.02,50,40,30,0.015,0,0,500,150,0,0,0,-1,false,false
 BONUS_005,5005,HighRecovery,High Recovery,50,60,0.015,50,30,60,0.015,0,0,0,0,40,25,0,-1,false,true

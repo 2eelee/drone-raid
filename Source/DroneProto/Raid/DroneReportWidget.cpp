@@ -252,7 +252,7 @@ FText UDroneReportWidget::GetBonusTypeDisplayText(EDroneReportBonusType BonusTyp
 	case EDroneReportBonusType::HighDPS:
 		return FText::FromString(TEXT("High DPS"));
 	case EDroneReportBonusType::NoDamage:
-		return FText::FromString(TEXT("NO DAMAGE"));
+		return FText::FromString(TEXT("No Damage"));
 	case EDroneReportBonusType::KeepMoving:
 		return FText::FromString(TEXT("Keep Moving"));
 	case EDroneReportBonusType::HighRecovery:
