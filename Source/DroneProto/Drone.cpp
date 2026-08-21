@@ -1745,6 +1745,13 @@ void ADrone::OnRep_IsDead()
 		GEngine->AddOnScreenDebugMessage(-1, 4.f, FColor::Red,
 			FString::Printf(TEXT("[Client] Drone dead: %s"), *GetName()));
 	}
+
+	// 원격 클라이언트의 사망 연출 진입점. 다른 플레이어의 드론에도 나와야 하므로
+	// Owning Client 한정이 아니라 복제 자체에 얹는다.
+	if (bIsDead)
+	{
+		BP_OnDroneDeathVisual();
+	}
 }
 
 void ADrone::OnRep_IsDodging()
@@ -1903,6 +1910,11 @@ void ADrone::HandleDeath()
 	Health = 0.0f;
 	ResetCombatRuntimeStateForReason(FName(TEXT("Death")));
 	ForceNetUpdate();
+
+	// 권한 측에는 OnRep이 오지 않는다. 리슨 서버·PIE에서 호스트 화면에도 연출이 나오도록
+	// 여기서 직접 부른다(`BP_OnDodgeVisualStateChanged`와 같은 처리다).
+	// Dedicated Server에서는 BP 훅이 비어 있어 무해하다.
+	BP_OnDroneDeathVisual();
 
 	if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(GetController()))
 	{

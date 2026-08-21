@@ -256,6 +256,13 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Drone|Dodge")
 	void BP_OnDodgeVisualStateChanged(bool bDodging);
 
+	// 사망 연출 진입점. 종전에는 `IsDead` 폴링으로만 알 수 있어 연출 타이밍이 프레임 단위로 밀렸다.
+	// 새 RPC를 만들지 않는다 — `bIsDead`가 이미 `ReplicatedUsing = OnRep_IsDead`로 복제되므로
+	// 원격 클라이언트는 OnRep에서, 권한 측(리슨·PIE)은 `HandleDeath`에서 직접 받는다.
+	// `BP_OnDodgeVisualStateChanged`와 같은 패턴이다.
+	UFUNCTION(BlueprintImplementableEvent, Category = "Drone|Combat")
+	void BP_OnDroneDeathVisual();
+
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Dodge")
 	void BP_OnDodgeInvincibleVisualChanged(bool bIsInvincibleVisual);
 
