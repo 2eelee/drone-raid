@@ -5912,6 +5912,148 @@ bool FRaidServerAdmissionLifecycleTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidBossStateBlocksPreLoginAdmissionTest,
+	"DroneProto.Q4.RaidBoss.BossStateBlocksPreLoginAdmission",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidBossStateBlocksPreLoginAdmissionTest::RunTest(const FString& Parameters)
+{
+	// ENTRY-13. 게이트 함수 자체와 Ready 경로는 BossStateJoinGate가 덮고,
+	// AdmissionLifecycle은 PreLogin 계층에서 RaidEnded 하나만 본다.
+	// 여기서는 예약을 이미 발급받은 클라이언트가 PreLogin에 닿기 전에 레이드가 닫히는 창을 본다.
+	// pending 수명이 10초에서 30초로 늘어(RaidReservationLedger.h) 이 창이 3배 넓어졌으므로
+	// PreLogin이 마지막 방어선이다. 토큰은 항상 "보스가 살아 있을 때" 발급해 실제 순서를 지킨다.
+
+	// 1) 보스 사망 — 유효한 토큰을 들고 와도 BossDead로 막는다.
+	{
+		FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Entry13BossDeadAdmissionWorld"));
+		ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+		ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+		ResolveBossPatternForSyntheticWorld(Boss);
+
+		TestNotNull(TEXT("boss dead admission game mode is spawned"), GameMode);
+		TestNotNull(TEXT("boss dead admission boss is spawned"), Boss);
+		if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone || !GameMode || !Boss)
+		{
+			DestroyDroneSelectionTestContext(Context);
+			return false;
+		}
+
+		Context.World->AddController(Context.PC);
+		Context.GameState->SetRaidBossForServer(Boss);
+
+		URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+		Admission->InitializeForTest(TEXT("A"));
+		GameMode->SetAdmissionServiceForTest(Admission, true);
+
+		Context.PC->Server_RequestReadyForRaid_Implementation();
+		TestEqual(TEXT("boss dead admission setup reaches Battle"), Boss->GetBossState(), EBossState::Battle);
+
+		FString Token;
+		TestTrue(TEXT("reservation is issued while the boss is alive"),
+			Admission->IssueReservationForTest(FPlatformTime::Seconds(), Token));
+
+		Boss->ApplyDamageForServer(Boss->GetMaxHP() + 1.0f, Context.PC, Context.Drone);
+		TestEqual(TEXT("boss reaches Dead before the client arrives"), Boss->GetBossState(), EBossState::Dead);
+
+		FString ErrorMessage;
+		const FString Options = FString::Printf(TEXT("?RaidSlot=A?RaidReservation=%s"), *Token);
+		GameMode->ValidateRaidAdmissionForTest(Options, ErrorMessage);
+		TestEqual(TEXT("dead boss rejects PreLogin admission"), ErrorMessage, FString(TEXT("BossDead")));
+		TestEqual(TEXT("rejected dead-boss admission admits nobody"), Admission->GetActivePlayers(), 0);
+
+		DestroyDroneSelectionTestContext(Context);
+	}
+
+	// 2) 보스 Clear — RaidState도 End가 되지만 BossClear가 먼저 판정된다(게이트 검사 순서).
+	{
+		FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Entry13BossClearAdmissionWorld"));
+		ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+		ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+		ResolveBossPatternForSyntheticWorld(Boss);
+
+		TestNotNull(TEXT("boss clear admission game mode is spawned"), GameMode);
+		TestNotNull(TEXT("boss clear admission boss is spawned"), Boss);
+		if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone || !GameMode || !Boss)
+		{
+			DestroyDroneSelectionTestContext(Context);
+			return false;
+		}
+
+		Context.World->AddController(Context.PC);
+		Context.GameState->SetRaidBossForServer(Boss);
+
+		URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+		Admission->InitializeForTest(TEXT("A"));
+		GameMode->SetAdmissionServiceForTest(Admission, true);
+
+		Context.PC->Server_RequestReadyForRaid_Implementation();
+
+		FString Token;
+		TestTrue(TEXT("clear-case reservation is issued while the boss is alive"),
+			Admission->IssueReservationForTest(FPlatformTime::Seconds(), Token));
+
+		Boss->ApplyDamageForServer(Boss->GetMaxHP() + 1.0f, Context.PC, Context.Drone);
+		GameMode->HandleBossDefeatedForServer();
+		TestEqual(TEXT("boss defeat flow reaches Clear"), Boss->GetBossState(), EBossState::Clear);
+		TestEqual(TEXT("boss defeat flow moves raid to End"), Context.GameState->RaidState, ERaidState::End);
+
+		FString ErrorMessage;
+		const FString Options = FString::Printf(TEXT("?RaidSlot=A?RaidReservation=%s"), *Token);
+		GameMode->ValidateRaidAdmissionForTest(Options, ErrorMessage);
+		TestEqual(TEXT("clear boss rejects PreLogin admission before RaidEnded"),
+			ErrorMessage, FString(TEXT("BossClear")));
+		TestEqual(TEXT("rejected clear-boss admission admits nobody"), Admission->GetActivePlayers(), 0);
+
+		DestroyDroneSelectionTestContext(Context);
+	}
+
+	// 3) 시간 종료 — 2026-08-20 실환경에서 접속·HTTP 두 계층 모두 확인된 사유이나
+	//    PreLogin 계층 자동화는 없었다. 여기서 고정한다.
+	{
+		FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("Entry13TimeOverAdmissionWorld"));
+		ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+		ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+		ResolveBossPatternForSyntheticWorld(Boss);
+
+		TestNotNull(TEXT("time over admission game mode is spawned"), GameMode);
+		TestNotNull(TEXT("time over admission boss is spawned"), Boss);
+		if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone || !GameMode || !Boss)
+		{
+			DestroyDroneSelectionTestContext(Context);
+			return false;
+		}
+
+		Context.World->AddController(Context.PC);
+		Context.GameState->SetRaidBossForServer(Boss);
+
+		URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+		Admission->InitializeForTest(TEXT("A"));
+		GameMode->SetAdmissionServiceForTest(Admission, true);
+
+		TestTrue(TEXT("time over admission raid time limit is test-configurable"),
+			SetFloatPropertyForAutomationTest(GameMode, FName(TEXT("RaidTimeLimitSeconds")), 0.05f));
+		Context.PC->Server_RequestReadyForRaid_Implementation();
+
+		FString Token;
+		TestTrue(TEXT("time-over reservation is issued before the limit expires"),
+			Admission->IssueReservationForTest(FPlatformTime::Seconds(), Token));
+
+		GameMode->ExpireRaidTimeLimitForTest();
+
+		FString ErrorMessage;
+		const FString Options = FString::Printf(TEXT("?RaidSlot=A?RaidReservation=%s"), *Token);
+		GameMode->ValidateRaidAdmissionForTest(Options, ErrorMessage);
+		TestEqual(TEXT("time over rejects PreLogin admission"), ErrorMessage, FString(TEXT("TimeOver")));
+		TestEqual(TEXT("rejected time-over admission admits nobody"), Admission->GetActivePlayers(), 0);
+
+		DestroyDroneSelectionTestContext(Context);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidEntryDisconnectCancelsMatchingTest,
 	"DroneProto.RaidEntry.Reservation.EntryDisconnectCancelsMatching",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
