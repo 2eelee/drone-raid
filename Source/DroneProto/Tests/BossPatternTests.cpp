@@ -1336,6 +1336,69 @@ bool FDroneBossPatternProductionIsolationTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneCorruptedSameInstanceRepeatHitTest,
+	"DroneProto.BossPattern.CorruptedActino.SameInstanceRepeatHit",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneCorruptedSameInstanceRepeatHitTest::RunTest(const FString& Parameters)
+{
+	// CORRUPTED-05. 원문은 "플레이어가 위험 범위에 계속 남아 있으면 0.7초가 끝난 뒤 다시 피해"를 요구한다.
+	// StableKeyAndActualDamage가 이미 만료 후 재피해를 덮지만, 그쪽은 중간에 패턴을
+	// Corrupted → Stellar로 **전환한 뒤** 때린다(HitLock이 패턴을 가로질러 공유된다는 검증이다).
+	// 여기서는 전환 없이 **같은 Corrupted 인스턴스가 active인 동안** 재피해가 나는지를 본다 —
+	// 2026-08-19 실측에서도 두 번째 피격은 ManualRestart로 만든 새 인스턴스였기에 공백으로 남아 있었다.
+	FBossPatternPlayerTestContext Context = CreateBossPatternPlayerTestContext(TEXT("CorruptedSameInstanceRepeatHitWorld"));
+	if (!Context.World || !Context.GameState || !Context.Boss || !Context.Component || !Context.PlayerController || !Context.Drone)
+	{
+		TestTrue(TEXT("same-instance repeat hit context is created"), false);
+		DestroyBossPatternPlayerTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("pattern starts"), Context.Boss->StartBossPatternForServer());
+	TestTrue(TEXT("first Corrupted transition fires"), Context.Component->FireScheduledTransitionForTest());
+	TestEqual(TEXT("current pattern is Corrupted"),
+		Context.Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+
+	// 이 두 값이 그대로여야 "같은 인스턴스"다.
+	ABossPatternActorBase* const InstanceActor = Context.Component->GetActivePatternActorForTest();
+	const int32 InstanceSerial = Context.Component->GetTransitionSerialForTest();
+	TestNotNull(TEXT("Corrupted instance actor exists"), InstanceActor);
+
+	const int32 HealthBeforeFirstHit = Context.Drone->GetHealth();
+	TestTrue(TEXT("first hit on the instance succeeds"),
+		Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	TestEqual(TEXT("first hit lowers HP"), Context.Drone->GetHealth(), HealthBeforeFirstHit - 20);
+	TestEqual(TEXT("successful hit creates one lock"), Context.Component->GetHitLockCountForTest(), 1);
+
+	// 위험 범위에 계속 남아 있는 상태 = 락이 살아 있는 동안의 반복 접촉.
+	TestFalse(TEXT("contact during the lock window is suppressed"),
+		Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	TestEqual(TEXT("suppressed contact does not lower HP"),
+		Context.Drone->GetHealth(), HealthBeforeFirstHit - 20);
+
+	TickBossPatternTimers(Context.World, 0.701f);
+
+	// 전환을 부르지 않았으므로 인스턴스가 유지돼야 한다. 여기가 이 테스트의 핵심이다.
+	TestEqual(TEXT("pattern is still Corrupted after the lock expires"),
+		Context.Component->GetCurrentPatternForTest(), EBossPatternKind::CorruptedActino);
+	TestEqual(TEXT("transition serial is unchanged"),
+		Context.Component->GetTransitionSerialForTest(), InstanceSerial);
+	TestEqual(TEXT("the same instance actor is still active"),
+		Context.Component->GetActivePatternActorForTest(), InstanceActor);
+	TestEqual(TEXT("expired lock is released"), Context.Component->GetHitLockCountForTest(), 0);
+
+	const int32 HealthBeforeRepeatHit = Context.Drone->GetHealth();
+	TestTrue(TEXT("same instance damages again after 0.7 seconds"),
+		Context.Component->TryApplyPatternDamageForServer(Context.Drone, 20));
+	TestEqual(TEXT("repeat hit lowers HP again"), Context.Drone->GetHealth(), HealthBeforeRepeatHit - 20);
+	TestEqual(TEXT("repeat hit re-arms the lock"), Context.Component->GetHitLockCountForTest(), 1);
+
+	DestroyBossPatternPlayerTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneBossPatternStableKeyDamageGateTest,
 	"DroneProto.BossPattern.DamageGate.StableKeyAndActualDamage",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

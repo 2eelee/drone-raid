@@ -6728,6 +6728,80 @@ bool FDroneMoveDistanceResetTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDeathFlowOrderTest,
+	"DroneProto.FLOW05.Drone.DeathFlowOrder",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDeathFlowOrderTest::RunTest(const FString& Parameters)
+{
+	// FLOW-05. 원문 `:48-60`은 사망 → 부품 환원 → DRONE REPORT 확인 → 로비 이동 순서를 요구한다.
+	// 단계별 테스트는 있었으나 **한 번의 사망으로 전 구간이 이어지는지**를 고정하는 것이 없었다.
+	//
+	// 실제 서버 순서는 `ADrone::HandleDeath`에서 리포트 생성이 환원보다 **먼저**다.
+	// 리포트가 장착 부품 정보를 근거로 계산되므로 환원 뒤에 만들면 근거가 사라지기 때문이다.
+	// 원문의 "DRONE REPORT 확인"은 유저가 위젯을 보는 시점이고 그것은 ClientRPC 이후이므로
+	// 유저 관점 순서와는 어긋나지 않는다. **이 테스트는 그 실제 순서를 고정한다** —
+	// 순서가 뒤집히면 리포트가 빈 로드아웃으로 계산되므로 깨져야 한다.
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(TEXT("DeathFlowOrderWorld"), ReturnManager);
+	TestNotNull(TEXT("death flow world is created"), Context.World);
+	TestNotNull(TEXT("death flow return manager is created"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !Context.Drone || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	const FName PulseLaser = ADronePartInventory::GetPulseLaserPartID();
+	const FName VectorCannon = ADronePartInventory::GetVectorCannonPartID();
+
+	const int32 CoreStockBefore = Context.Inventory->GetCurrentCount(CoreZenith);
+	const int32 LeftStockBefore = Context.Inventory->GetCurrentCount(PulseLaser);
+	const int32 RightStockBefore = Context.Inventory->GetCurrentCount(VectorCannon);
+
+	TestTrue(TEXT("death flow consumes core"), Context.Inventory->TryConsumePart(CoreZenith));
+	TestTrue(TEXT("death flow consumes left weapon"), Context.Inventory->TryConsumePart(PulseLaser));
+	TestTrue(TEXT("death flow consumes right weapon"), Context.Inventory->TryConsumePart(VectorCannon));
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::LeftWeapon, PulseLaser);
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::RightWeapon, VectorCannon);
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+
+	TestEqual(TEXT("ready moves player to battle"),
+		Context.PC->GetCurrentSelectionState(), EPlayerSelectionState::InBattle);
+	TestEqual(TEXT("consume lowered the shared stock"),
+		Context.Inventory->GetCurrentCount(CoreZenith), CoreStockBefore - 1);
+	TestFalse(TEXT("no report exists before death"), Context.PC->HasDroneReportGeneratedForTest());
+
+	// 단계 1 — HP 0 = 사망.
+	Context.Drone->ApplyDamageForServer(Context.Drone->GetMaxHealth() + 1, FName(TEXT("FlowOrderDeath")));
+	TestTrue(TEXT("HP zero marks the drone dead"), Context.Drone->IsDead());
+
+	// 단계 2 — 부품이 서버로 환원됐다. 슬롯이 비고 공유 재고가 복구된다.
+	TestEqual(TEXT("death clears equipped core"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::Core), NAME_None);
+	TestEqual(TEXT("death clears equipped left weapon"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::LeftWeapon), NAME_None);
+	TestEqual(TEXT("death clears equipped right weapon"),
+		Context.PC->GetEquippedPartIDBySlot(EPartSlot::RightWeapon), NAME_None);
+	TestEqual(TEXT("core stock is returned to the shared pool"),
+		Context.Inventory->GetCurrentCount(CoreZenith), CoreStockBefore);
+	TestEqual(TEXT("left weapon stock is returned"),
+		Context.Inventory->GetCurrentCount(PulseLaser), LeftStockBefore);
+	TestEqual(TEXT("right weapon stock is returned"),
+		Context.Inventory->GetCurrentCount(VectorCannon), RightStockBefore);
+
+	// 단계 3 — DRONE REPORT가 생성됐다. 같은 사망으로 두 번 만들지 않는다.
+	TestTrue(TEXT("death generates a drone report"), Context.PC->HasDroneReportGeneratedForTest());
+	TestFalse(TEXT("a second report is not created for the same death"),
+		Context.PC->TryCreateDroneReportForServer(EDroneReportTrigger::Death, false));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneDeathReturnTest,
 	"DroneProto.D6.Drone.DeathReturnClearsEquippedSlots",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
