@@ -222,6 +222,31 @@ FStellarTelegraphVisualFrame AStellarRemnantPatternActor::BuildTelegraphVisualFr
 	return Result;
 }
 
+int32 AStellarRemnantPatternActor::GetActiveWaveIndexForVisual() const
+{
+	const FBossPatternRepState& State = GetPatternState();
+	if (State.PatternKind != EBossPatternKind::StellarRemnant
+		|| State.LifecycleState != EBossPatternLifecycleState::Active)
+	{
+		// 예고 중에는 StartServerTime이 예고 시작 시각이다. Active 전환에서 다시 찍히므로
+		// 그 전에 경과 시간을 샘플에 대보면 아직 발사되지 않은 wave를 활성으로 오판한다.
+		return INDEX_NONE;
+	}
+
+	// Tick(RefreshPatternVFX)과 같은 식으로 재계산한다. 캐시를 두면 Tick 순서에 따라 한 프레임 어긋난다.
+	const float ElapsedSeconds = FMath::Max(0.0f, GetServerWorldTimeSeconds() - State.StartServerTime);
+
+	int32 ActiveWaveIndex = INDEX_NONE;
+	for (const FStellarRemnantSample& Sample : Samples)
+	{
+		if (IsSampleActive(Sample, ElapsedSeconds, Config))
+		{
+			ActiveWaveIndex = FMath::Max(ActiveWaveIndex, Sample.WaveIndex);
+		}
+	}
+	return ActiveWaveIndex;
+}
+
 void AStellarRemnantPatternActor::RefreshPatternVFX(float ElapsedSeconds)
 {
 	if (!PatternVFX)

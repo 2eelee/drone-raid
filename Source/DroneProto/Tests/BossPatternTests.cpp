@@ -3765,6 +3765,77 @@ bool FDroneCorruptedActinoPatternCenterFollowsBossTest::RunTest(const FString& P
 // 여기서는 현재 패턴이 정상 정리되고 지정한 패턴이 그 자리에서 바로 열리는지, 연타해도 액터와
 // 타이머가 중첩되지 않는지, 그리고 그 뒤 자동 교대 규칙이 그대로인지를 고정한다.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStellarActiveWaveIndexForVisualTest,
+	"DroneProto.BossPattern.StellarRemnant.ActiveWaveIndexForVisual",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FStellarActiveWaveIndexForVisualTest::RunTest(const FString& Parameters)
+{
+	// Wave 단계별 연출을 BP에서 붙일 수 있게 만든 조회 진입점의 반환 계약을 고정한다.
+	// 정본 config 기준으로 WaveIntervalSeconds=0.5, TravelSeconds=2.5, WaveCount=2이므로
+	// Wave0은 [0, 2.5], Wave1은 [0.5, 3.0] 구간에서 활성이다.
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("StellarActiveWaveIndexWorld")));
+	TestNotNull(TEXT("wave index world is created"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	AStellarRemnantPatternActor* Stellar = World->SpawnActor<AStellarRemnantPatternActor>();
+	TestNotNull(TEXT("stellar actor is spawned"), Stellar);
+	if (!Stellar)
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+
+	Stellar->SnapshotResolvedConfig(MakeCanonicalBossPatternResolvedConfig());
+
+	// getter가 읽는 것과 같은 시계로 StartServerTime을 역산해 원하는 경과 시간을 만든다.
+	const AGameStateBase* GameState = World->GetGameState();
+	const float NowSeconds = GameState
+		? GameState->GetServerWorldTimeSeconds()
+		: World->GetTimeSeconds();
+
+	// 1) 예고 중에는 활성 wave가 없다. StartServerTime은 Active 전환에서 다시 찍히므로
+	//    예고 경과 시간을 샘플에 대보면 안 된다.
+	Stellar->InitializeForServer(
+		EBossPatternKind::StellarRemnant,
+		EBossPatternLifecycleState::Telegraphing,
+		9001,
+		NowSeconds);
+	TestEqual(TEXT("telegraphing reports no active wave"),
+		Stellar->GetActiveWaveIndexForVisual(), (int32)INDEX_NONE);
+
+	// 2) Wave0만 활성 — 경과 0.25초는 Wave1의 시작(0.5초)보다 앞이다.
+	Stellar->SetLifecycleForServer(EBossPatternLifecycleState::Active, NowSeconds - 0.25f);
+	TestEqual(TEXT("only wave0 is active at 0.25s"),
+		Stellar->GetActiveWaveIndexForVisual(), 0);
+
+	// 3) Wave0과 Wave1이 겹치면 더 최근인 Wave1을 돌려준다.
+	Stellar->SetLifecycleForServer(EBossPatternLifecycleState::Active, NowSeconds - 1.0f);
+	TestEqual(TEXT("overlapping waves report the latest one"),
+		Stellar->GetActiveWaveIndexForVisual(), 1);
+
+	// 4) 마지막 wave 종료(0.5 + 2.5 = 3.0초) 뒤에는 다시 없음이다.
+	Stellar->SetLifecycleForServer(EBossPatternLifecycleState::Active, NowSeconds - 3.5f);
+	TestEqual(TEXT("finished pattern reports no active wave"),
+		Stellar->GetActiveWaveIndexForVisual(), (int32)INDEX_NONE);
+
+	// 다른 패턴 종류로 오염되지 않는다.
+	Stellar->InitializeForServer(
+		EBossPatternKind::CorruptedActino,
+		EBossPatternLifecycleState::Active,
+		9002,
+		NowSeconds - 1.0f);
+	TestEqual(TEXT("non-stellar pattern reports no active wave"),
+		Stellar->GetActiveWaveIndexForVisual(), (int32)INDEX_NONE);
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBalanceSandboxManualPatternRestartTest,
 	"DroneProto.BALANCE.Sandbox.ManualPatternRestartsImmediately",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

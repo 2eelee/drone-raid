@@ -45,6 +45,20 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
+	/**
+	 * 지금 떠 있는 Stellar wave 중 가장 최근 것의 인덱스. 활성 샘플이 없으면 INDEX_NONE.
+	 *
+	 * Wave 단계별 연출을 BP에서 붙이기 위한 조회 전용 진입점이다. 새 복제 상태나 RPC를 만들지 않는다 —
+	 * 서버는 기존대로 PatternState만 결정하고, 클라이언트는 복제된 StartServerTime과
+	 * 로컬 resolve된 config로 같은 값을 재구성한다. Tick의 RefreshPatternVFX와 완전히 같은 식이다.
+	 *
+	 * WaveIntervalSeconds(0.5)가 TravelSeconds(2.5)보다 짧아 두 wave가 동시에 활성일 수 있으므로
+	 * 그중 최댓값을 돌려준다. 연출에서 의미 있는 것은 가장 최근 발사된 wave다.
+	 * 피해 판정이 아니라 단계 표시가 목적이므로 visual-only 샘플도 포함한다.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Raid|BossPattern")
+	int32 GetActiveWaveIndexForVisual() const;
+
 	static TArray<FStellarRemnantSample> BuildLogicalSamples(
 		const FStellarRemnantConfig& InConfig = FStellarRemnantConfig(),
 		const FBossPatternConfig& InPatternConfig = FBossPatternConfig());
