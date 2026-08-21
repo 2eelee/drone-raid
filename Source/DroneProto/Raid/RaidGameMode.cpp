@@ -652,13 +652,6 @@ void ARaidGameMode::Logout(AController* Exiting)
 	{
 		if (ARaidPlayerController* RaidPC = Cast<ARaidPlayerController>(Exiting))
 		{
-			if (BalanceTelemetry)
-			{
-				BalanceTelemetry->EmitForServer(TEXT("PlayerLeft"), {
-					{TEXT("Player"), BalanceTelemetry->GetOrAssignPlayerAliasForServer(RaidPC)},
-					{TEXT("ExitReason"), TEXT("Disconnect")},
-				});
-			}
 			RaidPC->ClearBossTargetForServer(FName(TEXT("Cleanup")));
 			if (RaidPC->GetPlayerSelectionState() == EPlayerSelectionState::Selecting)
 			{
@@ -700,6 +693,24 @@ void ARaidGameMode::Logout(AController* Exiting)
 				GS->CurrentPlayers = FMath::Max(0, GS->CurrentPlayers - 1);
 			}
 			UE_LOG(LogTemp, Log, TEXT("[Server] Logout: CurrentPlayers = %d"), GS->CurrentPlayers);
+
+			// 정원 회수가 끝난 뒤에 찍는다. 종전에는 반환 처리보다 앞에서 방출해
+			// CurrentPlayers를 실을 수 없었고, 테스터 로그만으로는 인원 증감을
+			// 맞춰볼 수 없었다(계획서 G3 "접속/이탈이 정원에 정확히 반영된다").
+			// ExitReason이 항상 Disconnect인 것은 알려진 한계다 — 리포트 후 정상 복귀는
+			// 클라이언트 ClientTravel이라 서버에는 연결 종료로만 보인다. 구분하려면
+			// 클라이언트가 복귀 의사를 알리는 경로가 따로 필요하다.
+			if (BalanceTelemetry)
+			{
+				if (ARaidPlayerController* LeavingPC = Cast<ARaidPlayerController>(Exiting))
+				{
+					BalanceTelemetry->EmitForServer(TEXT("PlayerLeft"), {
+						{TEXT("Player"), BalanceTelemetry->GetOrAssignPlayerAliasForServer(LeavingPC)},
+						{TEXT("ExitReason"), TEXT("Disconnect")},
+						{TEXT("CurrentPlayers"), FString::FromInt(GS->CurrentPlayers)},
+					});
+				}
+			}
 		}
 	}
 

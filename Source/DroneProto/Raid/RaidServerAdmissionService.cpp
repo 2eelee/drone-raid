@@ -232,10 +232,11 @@ int32 URaidServerAdmissionService::GetActivePlayers() const
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
-void URaidServerAdmissionService::InitializeForTest(const FString& InSlotId)
+void URaidServerAdmissionService::InitializeForTest(const FString& InSlotId, ARaidGameMode* InGameMode)
 {
 	Shutdown();
 	SlotId = InSlotId;
+	GameMode = InGameMode;
 	Ledger = MakeUnique<FRaidReservationLedger>(
 		RaidReservationMaxPlayers,
 		RaidReservationPendingLifetimeSeconds,
@@ -254,34 +255,58 @@ bool URaidServerAdmissionService::TryCommitClaimedForTest(const FString& Token)
 }
 #endif
 
+bool URaidServerAdmissionService::TryIssueReservationForServer(
+	double NowSeconds,
+	FString& OutToken,
+	FName& OutRejectReason)
+{
+	OutToken.Reset();
+	OutRejectReason = NAME_None;
+
+	ARaidGameMode* RaidGameMode = GameMode.Get();
+	if (!RaidGameMode || !Ledger)
+	{
+		OutRejectReason = FName(TEXT("RaidAdmissionUnavailable"));
+		return false;
+	}
+
+	// 입장 게이트가 정원보다 먼저다. 닫힌 레이드(보스 Dead/Clear·시간 종료·End)는
+	// 자리가 남아 있어도 토큰을 내주지 않는다(ENTRY-13).
+	if (!RaidGameMode->CanAcceptRaidJoinForServer(OutRejectReason, false))
+	{
+		return false;
+	}
+
+	if (!Ledger->TryReserve(NowSeconds, OutToken))
+	{
+		OutRejectReason = FName(TEXT("Full"));
+		return false;
+	}
+
+	return true;
+}
+
 bool URaidServerAdmissionService::HandleReservationRequest(
 	const FHttpServerRequest& Request,
 	const FHttpResultCallback& OnComplete)
 {
-	ARaidGameMode* RaidGameMode = GameMode.Get();
-	if (!RaidGameMode || !Ledger)
-	{
-		OnComplete(MakeJsonResponse(
-			EHttpServerResponseCodes::ServerError,
-			TEXT("error"), SlotId, GameEndpoint, TEXT(""), GetActivePlayers(), TEXT("RaidAdmissionUnavailable")));
-		return true;
-	}
-
-	FName RejectReason;
-	if (!RaidGameMode->CanAcceptRaidJoinForServer(RejectReason, false))
-	{
-		OnComplete(MakeJsonResponse(
-			EHttpServerResponseCodes::Conflict,
-			TEXT("unavailable"), SlotId, GameEndpoint, TEXT(""), GetActivePlayers(), RejectReason.ToString()));
-		return true;
-	}
-
 	FString Token;
-	if (!Ledger->TryReserve(FPlatformTime::Seconds(), Token))
+	FName RejectReason;
+	if (!TryIssueReservationForServer(FPlatformTime::Seconds(), Token, RejectReason))
 	{
+		// 거부 사유는 서버 로그에도 남긴다. 종전에는 HTTP 응답 JSON에만 있어
+		// 운영자가 srv_<slot>.log만 보고는 왜 막혔는지 알 수 없었다(계획서 9-2 "부분").
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] ReservationRejected Slot=%s Reason=%s CurrentPlayers=%d"),
+			*SlotId,
+			*RejectReason.ToString(),
+			GetActivePlayers());
+
+		const bool bUnavailable = RejectReason == FName(TEXT("RaidAdmissionUnavailable"));
+		const bool bFull = RejectReason == FName(TEXT("Full"));
 		OnComplete(MakeJsonResponse(
-			EHttpServerResponseCodes::Conflict,
-			TEXT("full"), SlotId, GameEndpoint, TEXT(""), GetActivePlayers(), TEXT("Full")));
+			bUnavailable ? EHttpServerResponseCodes::ServerError : EHttpServerResponseCodes::Conflict,
+			bUnavailable ? TEXT("error") : (bFull ? TEXT("full") : TEXT("unavailable")),
+			SlotId, GameEndpoint, TEXT(""), GetActivePlayers(), RejectReason.ToString()));
 		return true;
 	}
 

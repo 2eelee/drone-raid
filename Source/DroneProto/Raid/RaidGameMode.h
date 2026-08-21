@@ -90,6 +90,9 @@ public:
 	void ExpireRaidTimeLimitForTest();
 	bool NotifyRaidSpawnFailedForTest(AController* Controller, FName Reason);
 	void SetAdmissionServiceForTest(URaidServerAdmissionService* InService, bool bInAdmissionRequired);
+	// 실환경에서는 InitGame이 GameState를 spawn해 GameMode에 연결하지만, 합성 World를 쓰는
+	// 자동화는 World에만 등록한다. Logout처럼 GameMode 쪽 GameState를 보는 경로를 태우려면 필요하다.
+	void SetGameStateForTest(AGameStateBase* InGameState) { GameState = InGameState; }
 	void ValidateRaidAdmissionForTest(const FString& Options, FString& OutErrorMessage);
 #endif
 

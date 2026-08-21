@@ -26,6 +26,7 @@
 #include "Raid/RaidGameState.h"
 #include "Raid/RaidPlayerController.h"
 #include "Raid/RaidServerAdmissionService.h"
+#include "Raid/BalanceTelemetryComponent.h"
 #include "Lobby/LocalAssignment.h"
 #include "Lobby/RaidLobbyWidget.h"
 #include "Lobby/RaidSessionSubsystem.h"
@@ -5908,6 +5909,186 @@ bool FRaidServerAdmissionLifecycleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("ended raid rejects before token claim"), ErrorMessage, FString(TEXT("RaidEnded")));
 
 	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidPlayerLeftCarriesCurrentPlayersTest,
+	"DroneProto.RaidEntry.Telemetry.PlayerLeftCarriesCurrentPlayers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidPlayerLeftCarriesCurrentPlayersTest::RunTest(const FString& Parameters)
+{
+	// 계획서 L1. `PlayerLeft` 자체는 이미 있었으나 `CurrentPlayers`가 없어
+	// 테스터 로그만으로 인원 증감을 맞춰볼 수 없었다(G3).
+	// 방출이 정원 회수보다 앞서 있었기 때문이므로, 순서가 유지되는지까지 고정한다.
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("PlayerLeftCurrentPlayersWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	UBalanceTelemetryComponent* Telemetry = GameMode ? GameMode->GetBalanceTelemetryForServer() : nullptr;
+
+	TestNotNull(TEXT("player left game mode is spawned"), GameMode);
+	TestNotNull(TEXT("player left telemetry is available"), Telemetry);
+	if (!Context.World || !Context.GameState || !Context.PC || !GameMode || !Telemetry)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	// Logout은 GameMode 쪽 GameState를 본다. 컨텍스트 헬퍼는 World에만 등록하므로
+	// 실환경에서 InitGame이 하는 연결을 여기서 대신한다.
+	GameMode->SetGameStateForTest(Context.GameState);
+	Telemetry->StartSessionForServer(TEXT("Local"), TEXT("TestMap"), TEXT("B1"));
+
+	// 두 명이 있는 상태에서 한 명이 나간다. 예약이 없는 구성이라 CurrentPlayers는 직접 감소한다.
+	Context.GameState->CurrentPlayers = 2;
+	GameMode->Logout(Context.PC);
+	TestEqual(TEXT("logout decrements CurrentPlayers"), Context.GameState->CurrentPlayers, 1);
+
+	FString PlayerLeftLine;
+	for (const FString& Line : Telemetry->GetEmittedLinesForTest())
+	{
+		if (Line.Contains(TEXT("Event=PlayerLeft")))
+		{
+			PlayerLeftLine = Line;
+			break;
+		}
+	}
+
+	TestFalse(TEXT("logout emits a PlayerLeft event"), PlayerLeftLine.IsEmpty());
+	if (!PlayerLeftLine.IsEmpty())
+	{
+		// 회수 전 값(2)이 아니라 회수 후 값(1)이어야 한다. 순서가 되돌아가면 여기서 깨진다.
+		TestTrue(TEXT("PlayerLeft carries the post-release CurrentPlayers"),
+			PlayerLeftLine.Contains(TEXT("CurrentPlayers=1")));
+		TestTrue(TEXT("PlayerLeft keeps a session id"), PlayerLeftLine.Contains(TEXT("Session=")));
+		TestTrue(TEXT("PlayerLeft keeps the exit reason"), PlayerLeftLine.Contains(TEXT("ExitReason=")));
+		TestTrue(TEXT("PlayerLeft uses a session alias, not a controller name"),
+			PlayerLeftLine.Contains(TEXT("Player=P")));
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidReservationIssueGateBlocksClosedRaidTest,
+	"DroneProto.RaidEntry.Reservation.IssueGateBlocksClosedRaid",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidReservationIssueGateBlocksClosedRaidTest::RunTest(const FString& Parameters)
+{
+	// ENTRY-13이 남겼던 공백을 닫는다. 예약 발급 계층은 `FHttpServerRequest`를 만들 수 없어
+	// 자동화가 전혀 없었고, `IssueReservationForTest`는 `Ledger->TryReserve`만 불러 게이트를 우회한다.
+	// `TryIssueReservationForServer`를 분리한 뒤로 HTTP 핸들러와 같은 경로를 직접 검증할 수 있다.
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("ReservationIssueGateWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* Boss = Context.World ? Context.World->SpawnActor<ARaidBoss>() : nullptr;
+	ResolveBossPatternForSyntheticWorld(Boss);
+
+	TestNotNull(TEXT("issue gate game mode is spawned"), GameMode);
+	TestNotNull(TEXT("issue gate boss is spawned"), Boss);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone || !GameMode || !Boss)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	Context.World->AddController(Context.PC);
+	Context.GameState->SetRaidBossForServer(Boss);
+
+	URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+	Admission->InitializeForTest(TEXT("A"), GameMode);
+	GameMode->SetAdmissionServiceForTest(Admission, true);
+
+	// 열린 레이드에서는 토큰이 나온다.
+	FString OpenToken;
+	FName RejectReason;
+	TestTrue(TEXT("open raid issues a reservation"),
+		Admission->TryIssueReservationForServer(FPlatformTime::Seconds(), OpenToken, RejectReason));
+	TestFalse(TEXT("issued token is not empty"), OpenToken.IsEmpty());
+	TestEqual(TEXT("successful issue has no reject reason"), RejectReason, NAME_None);
+
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	TestEqual(TEXT("issue gate setup reaches Battle"), Boss->GetBossState(), EBossState::Battle);
+
+	// 정원을 채운다. 첫 발급 1개에 15개를 더해 16개다(ENTRY-03의 최대 16명).
+	const double FillNowSeconds = FPlatformTime::Seconds();
+	for (int32 Index = 1; Index < 16; ++Index)
+	{
+		FString FillToken;
+		FName FillReason;
+		TestTrue(TEXT("reservations up to capacity succeed"),
+			Admission->TryIssueReservationForServer(FillNowSeconds, FillToken, FillReason));
+	}
+
+	FString OverflowToken;
+	RejectReason = NAME_None;
+	TestFalse(TEXT("capacity overflow blocks reservation issue"),
+		Admission->TryIssueReservationForServer(FillNowSeconds, OverflowToken, RejectReason));
+	TestEqual(TEXT("overflow reject reason is Full"), RejectReason, FName(TEXT("Full")));
+	TestTrue(TEXT("overflow issue returns no token"), OverflowToken.IsEmpty());
+
+	// 보스가 죽으면 자리가 남아 있든 없든 토큰을 내주지 않는다.
+	// 정원이 이미 찬 상태에서도 사유가 Full이 아니라 BossDead로 바뀐다 —
+	// 게이트가 정원 검사보다 먼저라는 뜻이다.
+	Boss->ApplyDamageForServer(Boss->GetMaxHP() + 1.0f, Context.PC, Context.Drone);
+	TestEqual(TEXT("issue gate boss reaches Dead"), Boss->GetBossState(), EBossState::Dead);
+
+	FString DeadToken;
+	RejectReason = NAME_None;
+	TestFalse(TEXT("dead boss blocks reservation issue"),
+		Admission->TryIssueReservationForServer(FillNowSeconds, DeadToken, RejectReason));
+	TestEqual(TEXT("dead boss outranks a full ledger"), RejectReason, FName(TEXT("BossDead")));
+	TestTrue(TEXT("blocked issue returns no token"), DeadToken.IsEmpty());
+
+	// Clear도 같은 경로로 막힌다. 게이트 검사 순서상 RaidEnded보다 BossClear가 먼저다.
+	GameMode->HandleBossDefeatedForServer();
+	TestEqual(TEXT("issue gate boss reaches Clear"), Boss->GetBossState(), EBossState::Clear);
+
+	FString ClearToken;
+	RejectReason = NAME_None;
+	TestFalse(TEXT("clear boss blocks reservation issue"),
+		Admission->TryIssueReservationForServer(FPlatformTime::Seconds(), ClearToken, RejectReason));
+	TestEqual(TEXT("clear boss issue reject reason is BossClear"), RejectReason, FName(TEXT("BossClear")));
+	TestTrue(TEXT("clear-blocked issue returns no token"), ClearToken.IsEmpty());
+
+	DestroyDroneSelectionTestContext(Context);
+
+	// 시간 종료도 발급 계층에서 막힌다. 2026-08-20 실환경에서 HTTP 응답으로만 확인된 사유다.
+	FDroneSelectionTestContext TimeOverContext = CreateDroneSelectionTestContext(TEXT("ReservationIssueGateTimeOverWorld"));
+	ARaidGameMode* TimeOverGameMode = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidGameMode>() : nullptr;
+	ARaidBoss* TimeOverBoss = TimeOverContext.World ? TimeOverContext.World->SpawnActor<ARaidBoss>() : nullptr;
+	ResolveBossPatternForSyntheticWorld(TimeOverBoss);
+
+	TestNotNull(TEXT("issue gate time over game mode is spawned"), TimeOverGameMode);
+	TestNotNull(TEXT("issue gate time over boss is spawned"), TimeOverBoss);
+	if (!TimeOverContext.World || !TimeOverContext.GameState || !TimeOverContext.PC || !TimeOverGameMode || !TimeOverBoss)
+	{
+		DestroyDroneSelectionTestContext(TimeOverContext);
+		return false;
+	}
+
+	TimeOverContext.World->AddController(TimeOverContext.PC);
+	TimeOverContext.GameState->SetRaidBossForServer(TimeOverBoss);
+
+	URaidServerAdmissionService* TimeOverAdmission = NewObject<URaidServerAdmissionService>(TimeOverGameMode);
+	TimeOverAdmission->InitializeForTest(TEXT("B"), TimeOverGameMode);
+	TimeOverGameMode->SetAdmissionServiceForTest(TimeOverAdmission, true);
+
+	TestTrue(TEXT("issue gate time limit is test-configurable"),
+		SetFloatPropertyForAutomationTest(TimeOverGameMode, FName(TEXT("RaidTimeLimitSeconds")), 0.05f));
+	TimeOverContext.PC->Server_RequestReadyForRaid_Implementation();
+	TimeOverGameMode->ExpireRaidTimeLimitForTest();
+
+	FString TimeOverToken;
+	RejectReason = NAME_None;
+	TestFalse(TEXT("time over blocks reservation issue"),
+		TimeOverAdmission->TryIssueReservationForServer(FPlatformTime::Seconds(), TimeOverToken, RejectReason));
+	TestEqual(TEXT("time over issue reject reason is TimeOver"), RejectReason, FName(TEXT("TimeOver")));
+	TestTrue(TEXT("time-over blocked issue returns no token"), TimeOverToken.IsEmpty());
+
+	DestroyDroneSelectionTestContext(TimeOverContext);
 	return true;
 }
 
