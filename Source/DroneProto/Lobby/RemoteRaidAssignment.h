@@ -33,6 +33,7 @@ public:
 	void SetServersForTest(const TArray<FRaidServerDefinition>& InServers);
 	void SetResponsesForTest(const TArray<FRaidAssignmentHttpTestResponse>& InResponses);
 	uint64 GetRequestGenerationForTest() const { return RequestGeneration; }
+	const TArray<FRaidServerDefinition>& GetServersForTest() const { return Servers; }
 	void DeliverResponseForTest(uint64 Generation, bool bTransportSucceeded, int32 ResponseCode, const FString& Body);
 #endif
 

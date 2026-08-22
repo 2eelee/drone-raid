@@ -6286,6 +6286,93 @@ bool FRaidEntryDisconnectCancelsMatchingTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidGameModeEndStateRejectsEntryTest,
+	"DroneProto.RaidEntry.Reservation.EndStateRejectsEntry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidGameModeEndStateRejectsEntryTest::RunTest(const FString& Parameters)
+{
+	// 계획서 T4(6-2·6-4절). 레이드가 End로 끝난 프로세스는 다음 손님을 받지 않는다.
+	// 이건 버그가 아니라 확정된 정책이다 — 재사용은 세션 리셋(옵션 1)이 아니라
+	// 외부 supervisor의 프로세스 재기동(옵션 2)으로 한다. 그 결정을 지키는 것이
+	// 지금은 계획서 텍스트뿐이고 docs/*는 ignore 대상이라 코드에 남지 않는다.
+	//
+	// 기존 커버리지와의 경계:
+	//   BossDead/BossClear/TimeOver/Full  -> Q4.RaidBoss.BossStateJoinGate, Reservation.IssueGateBlocksClosedRaid
+	//   PreLogin 계층의 RaidEnded          -> Reservation.AdmissionLifecycle
+	// 발급 계층(HTTP)에서의 RaidEnded는 어디에도 없었다. 보스가 살아 있으면 보스 게이트가
+	// 먼저 걸려 RaidEnded 분기에 닿지 않기 때문이다. 그래서 보스 없는 월드로 그 분기만 남긴다.
+	// supervisor가 재기동하기 전 창에서 예약이 열려 버리면 손님이 죽은 프로세스로 들어간다.
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("RaidEndStateRejectsEntryWorld"));
+	ARaidGameMode* GameMode = Context.World ? Context.World->SpawnActor<ARaidGameMode>() : nullptr;
+
+	TestNotNull(TEXT("end state world is created"), Context.World);
+	TestNotNull(TEXT("end state game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("end state game mode is spawned"), GameMode);
+	if (!Context.World || !Context.GameState || !GameMode)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	URaidServerAdmissionService* Admission = NewObject<URaidServerAdmissionService>(GameMode);
+	Admission->InitializeForTest(TEXT("A"), GameMode);
+	GameMode->SetAdmissionServiceForTest(Admission, true);
+
+	// 전제: 보스가 없고 시간도 남아 있어 다른 게이트는 전부 열려 있다.
+	TestNull(TEXT("end state world has no boss"), Context.GameState->GetRaidBoss());
+	FName RejectReason;
+	TestTrue(TEXT("open raid without a boss accepts entry"),
+		GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("accepted entry has no reject reason"), RejectReason, NAME_None);
+
+	FString OpenToken;
+	RejectReason = NAME_None;
+	TestTrue(TEXT("open raid issues a reservation"),
+		Admission->TryIssueReservationForServer(FPlatformTime::Seconds(), OpenToken, RejectReason));
+	TestFalse(TEXT("open issue returns a token"), OpenToken.IsEmpty());
+
+	// End로 넘어간 순간부터 두 계층 모두 닫힌다.
+	Context.GameState->SetRaidStateForServer(ERaidState::End);
+	TestEqual(TEXT("raid state is End"), Context.GameState->RaidState, ERaidState::End);
+
+	RejectReason = NAME_None;
+	TestFalse(TEXT("ended raid rejects a new join"),
+		GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("ended raid reject reason is RaidEnded"), RejectReason, FName(TEXT("RaidEnded")));
+
+	// 정원은 15자리가 비어 있다. 그런데도 사유가 Full이 아니라 RaidEnded여야 한다 —
+	// 자리가 남았다는 이유로 문을 열면 supervisor 재기동 정책이 무너진다.
+	TestTrue(TEXT("ended raid still has capacity left"), Admission->GetActivePlayers() < 16);
+	FString EndToken;
+	RejectReason = NAME_None;
+	TestFalse(TEXT("ended raid blocks reservation issue"),
+		Admission->TryIssueReservationForServer(FPlatformTime::Seconds(), EndToken, RejectReason));
+	TestEqual(TEXT("ended issue reject reason is RaidEnded"), RejectReason, FName(TEXT("RaidEnded")));
+	TestTrue(TEXT("ended issue returns no token"), EndToken.IsEmpty());
+
+	// 거부의 원인이 End 하나임을 확인한다. 되돌리면 다시 열려야 한다 —
+	// 그래야 이 테스트가 "무조건 거부"가 아니라 상태를 본다는 것이 증명된다.
+	Context.GameState->SetRaidStateForServer(ERaidState::Battle);
+	RejectReason = NAME_None;
+	TestTrue(TEXT("battle raid accepts entry again"),
+		GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	TestEqual(TEXT("reopened entry has no reject reason"), RejectReason, NAME_None);
+
+	// Waiting/Drafting/Battle/End 네 값이 전부이므로 InvalidRaidState는 도달할 수 없다.
+	// 남은 세 값이 모두 허용된다는 것으로 그 분기가 방어 코드임을 고정한다.
+	Context.GameState->SetRaidStateForServer(ERaidState::Waiting);
+	RejectReason = NAME_None;
+	TestTrue(TEXT("waiting raid accepts entry"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+	Context.GameState->SetRaidStateForServer(ERaidState::Drafting);
+	RejectReason = NAME_None;
+	TestTrue(TEXT("drafting raid accepts entry"), GameMode->CanAcceptRaidJoinForServer(RejectReason));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidBossStateJoinGateTest,
 	"DroneProto.Q4.RaidBoss.BossStateJoinGate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
