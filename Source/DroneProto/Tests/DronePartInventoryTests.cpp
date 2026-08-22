@@ -47,6 +47,8 @@
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/DefaultPawn.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
 #include "TimerManager.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/SWindow.h"
@@ -4800,6 +4802,96 @@ bool FDroneDodgeInputBridgeTest::RunTest(const FString& Parameters)
 		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
 	TestTrue(TEXT("C without direction leaves server location unchanged"),
 		Context.Drone->GetActorLocation().Equals(LocationBeforeZeroDodge, 0.1f));
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDodgeTeleportVisualLifecycleTest,
+	"DroneProto.D14_6.Drone.DodgeTeleportVisualLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDodgeTeleportVisualLifecycleTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneDodgeTeleportVisualWorld"));
+	TestNotNull(TEXT("dodge teleport visual world is created"), Context.World);
+	TestNotNull(TEXT("dodge teleport visual game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("dodge teleport visual player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("dodge teleport visual drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ARaidBoss* Boss = Context.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("dodge teleport visual boss is spawned"), Boss);
+	if (Boss)
+	{
+		Boss->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
+		Context.GameState->SetRaidBossForServer(Boss);
+	}
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+
+	UNiagaraComponent* DodgeTeleportVFX = nullptr;
+	TArray<UNiagaraComponent*> NiagaraComponents;
+	Context.Drone->GetComponents<UNiagaraComponent>(NiagaraComponents);
+	for (UNiagaraComponent* NiagaraComponent : NiagaraComponents)
+	{
+		if (NiagaraComponent && NiagaraComponent->GetFName() == FName(TEXT("DodgeTeleportVFX")))
+		{
+			DodgeTeleportVFX = NiagaraComponent;
+			break;
+		}
+	}
+
+	TestNotNull(TEXT("drone owns DodgeTeleportVFX component"), DodgeTeleportVFX);
+	if (!DodgeTeleportVFX)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestNotNull(TEXT("dodge teleport component has Niagara system"), DodgeTeleportVFX->GetAsset());
+	if (DodgeTeleportVFX->GetAsset())
+	{
+		TestEqual(TEXT("dodge teleport component uses imported system"),
+			DodgeTeleportVFX->GetAsset()->GetPathName(),
+			FString(TEXT("/Game/VFX/Particle/NS_Drone_Teleport.NS_Drone_Teleport")));
+	}
+	TestFalse(TEXT("dodge teleport effect is inactive before dodge"), DodgeTeleportVFX->IsActive());
+
+	TestTrue(TEXT("dodge teleport visual test dodge succeeds"),
+		Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	if (FApp::CanEverRender())
+	{
+		TestTrue(TEXT("dodge start activates teleport effect"), DodgeTeleportVFX->IsActive());
+	}
+	TestTrue(TEXT("drone hide keeps teleport effect visible"), DodgeTeleportVFX->IsVisible());
+
+	TickWorldForAutomationTest(Context.World, 0.30f);
+	if (FApp::CanEverRender())
+	{
+		// Niagara Deactivate는 잔여 파티클이 끝날 때까지 IsActive를 유지한다.
+		TestTrue(TEXT("normal dodge end requests teleport effect deactivation"),
+			DodgeTeleportVFX->GetRequestedExecutionState() != ENiagaraExecutionState::Active);
+	}
+
+	Context.Drone->SetLastDodgeEndTimeForTest(-1000.0f);
+	TestTrue(TEXT("second dodge starts for cancel coverage"),
+		Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+	if (FApp::CanEverRender())
+	{
+		TestTrue(TEXT("second dodge reactivates teleport effect"), DodgeTeleportVFX->IsActive());
+	}
+	Context.Drone->CancelDodgeForServer(FName(TEXT("Automation")));
+	if (FApp::CanEverRender())
+	{
+		TestTrue(TEXT("dodge cancel requests teleport effect deactivation"),
+			DodgeTeleportVFX->GetRequestedExecutionState() != ENiagaraExecutionState::Active);
+	}
 
 	DestroyDroneSelectionTestContext(Context);
 	return true;

@@ -21,6 +21,8 @@
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerState.h"
 #include "Materials/MaterialInterface.h"
+#include "NiagaraComponent.h"
+#include "NiagaraSystem.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Engine/Engine.h"
@@ -212,6 +214,13 @@ ADrone::ADrone()
 
 	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
+
+	DodgeTeleportVFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("DodgeTeleportVFX"));
+	DodgeTeleportVFX->SetupAttachment(RootComponent);
+	DodgeTeleportVFX->SetAutoActivate(false);
+	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> DodgeTeleportVFXAsset(
+		TEXT("/Game/VFX/Particle/NS_Drone_Teleport.NS_Drone_Teleport"));
+	DodgeTeleportVFX->SetAsset(DodgeTeleportVFXAsset.Object);
 
 	FloatingMovement = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("FloatingMovement"));
 	if (FloatingMovement)
@@ -726,7 +735,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	bIsDodging = true;
 	bIsInvincible = true;
 	LastServerMoveInput = FVector2D::ZeroVector;
-	BP_OnDodgeVisualStateChanged(true);
+	ApplyDodgeVisualStateLocally(true);
 
 	DodgeStartLocationForServer = StartLocation;
 	DodgeTargetLocationForServer = FinalLocation;
@@ -1764,7 +1773,7 @@ void ADrone::OnRep_IsDead()
 
 void ADrone::OnRep_IsDodging()
 {
-	BP_OnDodgeVisualStateChanged(bIsDodging);
+	ApplyDodgeVisualStateLocally(bIsDodging);
 }
 
 void ADrone::OnRep_ReplicatedMovement()
@@ -2979,7 +2988,7 @@ void ADrone::CancelDodgeForServer(FName Reason)
 	}
 	if (bHadDodgeState)
 	{
-		BP_OnDodgeVisualStateChanged(false);
+		ApplyDodgeVisualStateLocally(false);
 		ForceNetUpdate();
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge Cleared: Reason=%s Player=%s"),
 			Reason.IsNone() ? TEXT("Unknown") : *Reason.ToString(),
@@ -3363,6 +3372,23 @@ void ADrone::ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual)
 	BP_OnDodgeInvincibleVisualChanged(bIsInvincibleVisual);
 }
 
+void ADrone::ApplyDodgeVisualStateLocally(bool bDodging)
+{
+	BP_OnDodgeVisualStateChanged(bDodging);
+	if (GetNetMode() == NM_DedicatedServer || !DodgeTeleportVFX)
+	{
+		return;
+	}
+
+	if (bDodging)
+	{
+		DodgeTeleportVFX->Activate(true);
+		return;
+	}
+
+	DodgeTeleportVFX->Deactivate();
+}
+
 void ADrone::BP_OnDodgeInvincibleVisualChanged_Implementation(bool bIsInvincibleVisual)
 {
 	SetDodgeInvincibleVisualHidden(bIsInvincibleVisual);
@@ -3530,7 +3556,9 @@ void ADrone::SetDodgeInvincibleVisualHidden(bool bShouldHideVisual)
 		GetComponents<UPrimitiveComponent>(PrimitiveComponents);
 		for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
 		{
-			if (!PrimitiveComponent || !PrimitiveComponent->IsVisible())
+			if (!PrimitiveComponent
+				|| PrimitiveComponent == DodgeTeleportVFX
+				|| !PrimitiveComponent->IsVisible())
 			{
 				continue;
 			}
@@ -3617,7 +3645,7 @@ void ADrone::EndDodgeForServer()
 	if (bIsDodging)
 	{
 		bIsDodging = false;
-		BP_OnDodgeVisualStateChanged(false);
+		ApplyDodgeVisualStateLocally(false);
 	}
 
 	if (bHadDodgeState)

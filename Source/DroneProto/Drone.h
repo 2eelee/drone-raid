@@ -18,6 +18,7 @@ class ARaidBoss;
 class UWorld;
 class UPrimitiveComponent;
 class UMeshComponent;
+class UNiagaraComponent;
 class UMaterialInterface;
 class UDataTable;
 
@@ -447,6 +448,10 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Dodge", meta = (ClampMin = "0.0", Units = "s"))
 	float DodgeCooldownSeconds = 1.20f;
 
+	// 원본 시퀀스처럼 드론과 함께 600uu를 이동한다. 시작·종료 위치에 따로 스폰하지 않는다.
+	UPROPERTY(VisibleDefaultsOnly, Category = "Drone|Dodge|Visual", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UNiagaraComponent> DodgeTeleportVFX = nullptr;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Combat|Visual", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMaterialInterface> DroneHitFlashMaterial = nullptr;
 
@@ -794,6 +799,7 @@ private:
 	void PlayDroneDamageIgnoredVisualLocally(FName Reason);
 	void StartDroneHitFlash(float OldHP, float NewHP);
 	void EndDroneHitFlash();
+	void ApplyDodgeVisualStateLocally(bool bDodging);
 	void ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual);
 	void SetDodgeInvincibleVisualHidden(bool bShouldHideVisual);
 	void EndDodgeInvincibilityForServer();
