@@ -300,6 +300,9 @@ void ADrone::Tick(float DeltaSeconds)
 		UpdateDodgeForServer(DeltaSeconds);
 		ApplyPendingServerMoveInputForServer(DeltaSeconds);
 		UpdateMoveDistanceForServer(DeltaSeconds);
+		// 이동을 적용한 뒤에 돌린다. 같은 틱의 새 위치를 기준으로 보스를 향해야
+		// 카메라가 계산하는 Yaw와 한 프레임도 어긋나지 않는다.
+		UpdateBossFacingRotationForServer();
 	}
 
 	UpdateLocalCombatCamera(DeltaSeconds);
@@ -2749,6 +2752,93 @@ void ADrone::LogInputConversionSummary(
 		*RawAxis.ToString(),
 		CameraYaw,
 		*WorldAxis.ToString());
+}
+
+bool ADrone::CalculateBossFacingDroneYaw(
+	const FVector& DroneLocation,
+	const FVector* BossLocation,
+	float& OutYawDegrees)
+{
+	OutYawDegrees = 0.0f;
+	if (!BossLocation)
+	{
+		return false;
+	}
+
+	// CalculateFixedBossFacingQuarterView 와 같은 벡터다. 카메라는 이 방향의 반대편에 서고
+	// 드론은 이 방향을 바라보므로, 카메라-드론-보스가 한 직선에 놓인다.
+	FVector FacingDirection = *BossLocation - DroneLocation;
+	FacingDirection.Z = 0.0f;
+	if (FacingDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	FacingDirection.Normalize();
+	OutYawDegrees = FacingDirection.Rotation().Yaw;
+	return true;
+}
+
+bool ADrone::IsBossFacingRotationAllowedForServer(FName& OutBlockReason) const
+{
+	// 회전 게이트는 이동 게이트와 딱 한 가지만 다르다 — 회피 중에도 정면은 보스를 향한다.
+	// 기획자 2026-08-22 확정: "회피도 동일하게 보스 방향을 유지하며, 순간이동 중에는
+	// 소멸 연출만 적용하고 별도의 방향 회전은 하지 않는다."
+	// 나머지(사망·리포트·선택 화면·비전투·서버 로딩)는 이동과 같은 판정을 그대로 쓴다.
+	if (IsMovementAllowedForServer(OutBlockReason))
+	{
+		return true;
+	}
+
+	if (OutBlockReason == FName(TEXT("Dodging")))
+	{
+		OutBlockReason = NAME_None;
+		return true;
+	}
+
+	return false;
+}
+
+void ADrone::UpdateBossFacingRotationForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	FName BlockReason;
+	if (!IsBossFacingRotationAllowedForServer(BlockReason))
+	{
+		return;
+	}
+
+	FDroneCombatCameraTarget CameraTarget;
+	ResolveFixedBossFacingCameraTargetForWorld(GetWorld(), CameraTarget);
+	const ARaidBoss* Boss = CameraTarget.bValid ? CameraTarget.Boss.Get() : nullptr;
+	if (!Boss)
+	{
+		// 보스가 없는 구간(튜토리얼·스폰 전)에서는 방향을 건드리지 않고 현재 값을 유지한다.
+		return;
+	}
+
+	const FVector BossLocation = Boss->GetActorLocation();
+	float TargetYawDegrees = 0.0f;
+	if (!CalculateBossFacingDroneYaw(GetActorLocation(), &BossLocation, TargetYawDegrees))
+	{
+		return;
+	}
+
+	// XY 평면 이동이므로 Pitch/Roll 은 항상 0이다(MOVE-01·MOVE-04).
+	const FRotator CurrentRotation = GetActorRotation();
+	if (FMath::IsNearlyZero(FRotator::NormalizeAxis(CurrentRotation.Yaw - TargetYawDegrees), 0.01f)
+		&& FMath::IsNearlyZero(CurrentRotation.Pitch)
+		&& FMath::IsNearlyZero(CurrentRotation.Roll))
+	{
+		// 값이 그대로면 복제를 유발하지 않는다.
+		return;
+	}
+
+	SetActorRotation(FRotator(0.0f, TargetYawDegrees, 0.0f));
 }
 
 bool ADrone::IsMovementAllowedForServer(FName& OutIgnoreReason) const

@@ -249,6 +249,17 @@ public:
 		FVector2D PreviousAxis,
 		FVector2D CurrentAxis);
 
+	// 전투 중 드론 정면은 항상 보스를 향한다(기획자 2026-08-22 확정).
+	// 이동 방향으로는 회전하지 않는다 — 후방 이동도 정면을 유지한 채 뒤로 간다.
+	// 카메라 Yaw와 같은 벡터(드론->보스를 XY 평면에 투영)를 쓰므로 두 값이 어긋나지 않는다.
+	static bool CalculateBossFacingDroneYaw(
+		const FVector& DroneLocation,
+		const FVector* BossLocation,
+		float& OutYawDegrees);
+
+	bool IsBossFacingRotationAllowedForServer(FName& OutBlockReason) const;
+	void UpdateBossFacingRotationForServer();
+
 	bool IsMovementAllowedForServer(FName& OutIgnoreReason) const;
 	FVector ClampPositionToMovementBoundaryForServer(FVector RequestedPosition);
 	FVector ClampPositionOutsideBossCenterForServer(FVector RequestedPosition);

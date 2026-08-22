@@ -405,4 +405,178 @@ bool FDroneMoveAcceptedLogThrottleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossFacingRotationTest,
+	"DroneProto.D16.Drone.BossFacingRotation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossFacingRotationTest::RunTest(const FString& Parameters)
+{
+	// 기획자 2026-08-22 확정: 드론은 전투 중 항상 보스를 바라본다.
+	// 이동 방향으로는 회전하지 않으며, 후방 이동 시에도 정면은 보스를 향한 채 뒤로 간다.
+	// 회피도 같은 방향을 유지하고, 순간이동 구간에 별도 회전 연출을 넣지 않는다.
+
+	// 1) 순수 계산. 수평 투영 Yaw이므로 보스 높이는 결과를 바꾸지 않는다.
+	const FVector Origin = FVector::ZeroVector;
+	struct FBossFacingCase
+	{
+		FVector BossLocation;
+		float ExpectedYaw;
+		const TCHAR* Label;
+	};
+	const FBossFacingCase Cases[] = {
+		{FVector(1000.0f, 0.0f, 0.0f), 0.0f, TEXT("+X")},
+		{FVector(0.0f, 1000.0f, 0.0f), 90.0f, TEXT("+Y")},
+		{FVector(-1000.0f, 0.0f, 0.0f), 180.0f, TEXT("-X")},
+		{FVector(0.0f, -1000.0f, 0.0f), -90.0f, TEXT("-Y")},
+		{FVector(1000.0f, 0.0f, 5000.0f), 0.0f, TEXT("+X with a tall boss")},
+	};
+	for (const FBossFacingCase& Case : Cases)
+	{
+		float Yaw = 0.0f;
+		TestTrue(*FString::Printf(TEXT("boss at %s resolves a facing yaw"), Case.Label),
+			ADrone::CalculateBossFacingDroneYaw(Origin, &Case.BossLocation, Yaw));
+		TestTrue(*FString::Printf(TEXT("boss at %s faces %.0f degrees"), Case.Label, Case.ExpectedYaw),
+			FMath::IsNearlyZero(FRotator::NormalizeAxis(Yaw - Case.ExpectedYaw), 0.01f));
+	}
+
+	float UnusedYaw = 0.0f;
+	TestFalse(TEXT("no boss resolves no facing yaw"),
+		ADrone::CalculateBossFacingDroneYaw(Origin, nullptr, UnusedYaw));
+	const FVector Overlapping(0.0f, 0.0f, 3000.0f);
+	TestFalse(TEXT("a boss directly overhead resolves no facing yaw"),
+		ADrone::CalculateBossFacingDroneYaw(Origin, &Overlapping, UnusedYaw));
+
+	// 2) 카메라와 같은 Yaw여야 한다. 두 값이 어긋나면 카메라-드론-보스가 일직선에서 벗어나
+	// 화면 안에서 드론이 조금씩 틀어져 보인다 — 이 계약의 존재 이유다.
+	const FVector DroneLocation(-2500.0f, 1200.0f, 0.0f);
+	const FVector BossLocation(0.0f, 0.0f, 800.0f);
+	float DroneYaw = 0.0f;
+	TestTrue(TEXT("facing yaw resolves for the camera comparison"),
+		ADrone::CalculateBossFacingDroneYaw(DroneLocation, &BossLocation, DroneYaw));
+
+	FDroneCombatCameraView CameraView;
+	ADrone::CalculateFixedBossFacingQuarterView(
+		DroneLocation, &BossLocation, FVector::ForwardVector, 1400.0f, 380.0f, -10.0f, CameraView);
+	TestTrue(TEXT("drone facing yaw matches the combat camera yaw"),
+		FMath::IsNearlyZero(FRotator::NormalizeAxis(CameraView.CameraRotation.Yaw - DroneYaw), 0.01f));
+
+	// 3) 전투 중 실제 적용. 보스는 원점에 있다.
+	FDroneMovementTestContext Context = CreateDroneMovementTestContext(TEXT("DroneBossFacingRotationWorld"));
+	if (!PrepareInBattleMovementTest(*this, Context, TEXT("boss facing rotation")))
+	{
+		DestroyDroneMovementTestContext(Context);
+		return false;
+	}
+	TestNotNull(TEXT("boss facing rotation boss is spawned"), Context.Boss);
+	if (!Context.Boss)
+	{
+		DestroyDroneMovementTestContext(Context);
+		return false;
+	}
+
+	auto ExpectFacingBoss = [this, &Context](const TCHAR* Label)
+	{
+		const FVector ToBoss = Context.Boss->GetActorLocation() - Context.Drone->GetActorLocation();
+		const float ExpectedYaw = FVector(ToBoss.X, ToBoss.Y, 0.0f).GetSafeNormal().Rotation().Yaw;
+		const FRotator Actual = Context.Drone->GetActorRotation();
+		TestTrue(*FString::Printf(TEXT("%s faces the boss"), Label),
+			FMath::IsNearlyZero(FRotator::NormalizeAxis(Actual.Yaw - ExpectedYaw), 0.01f));
+		// XY 평면 이동이므로 기울지 않는다(MOVE-01·MOVE-04).
+		TestTrue(*FString::Printf(TEXT("%s stays level"), Label),
+			FMath::IsNearlyZero(Actual.Pitch, 0.01f) && FMath::IsNearlyZero(Actual.Roll, 0.01f));
+	};
+
+	// 스폰 회전이 엉뚱해도 첫 갱신에서 보스를 향한다.
+	Context.Drone->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
+	Context.Drone->SetActorRotation(FRotator(0.0f, 137.0f, 0.0f));
+	Context.Drone->UpdateBossFacingRotationForServer();
+	ExpectFacingBoss(TEXT("initial update"));
+
+	// 4) 이동 방향과 무관하다. 후방 이동(보스에서 멀어짐)에도 정면은 보스를 향한다.
+	const FVector2D MoveAxes[] = {
+		FVector2D(-1.0f, 0.0f),
+		FVector2D(0.0f, 1.0f),
+		FVector2D(1.0f, 1.0f),
+		FVector2D(0.0f, -1.0f),
+	};
+	for (const FVector2D& Axis : MoveAxes)
+	{
+		MoveDroneForMovementTest(Context.Drone, Axis, 0.2f);
+		Context.Drone->UpdateBossFacingRotationForServer();
+		ExpectFacingBoss(*FString::Printf(TEXT("after moving %s"), *Axis.ToString()));
+	}
+
+	// 5) 회피 중에도 보스를 향한다 — 회전 게이트가 이동 게이트와 다른 유일한 지점이다.
+	TestTrue(TEXT("dodge input is cached"),
+		Context.Drone->CacheMoveInputForDodgeForTest(FVector2D(-1.0f, 0.0f)));
+	TestTrue(TEXT("dodge starts for the rotation gate"),
+		Context.Drone->RequestDodgeFromCurrentMoveInputForTest());
+	TestTrue(TEXT("drone is dodging"), Context.Drone->IsDodging());
+
+	FName MoveReason = NAME_None;
+	TestFalse(TEXT("dodging blocks movement"), Context.Drone->IsMovementAllowedForServer(MoveReason));
+	TestEqual(TEXT("dodging movement reason is Dodging"), MoveReason, FName(TEXT("Dodging")));
+
+	FName RotationReason = NAME_None;
+	TestTrue(TEXT("dodging still allows boss facing rotation"),
+		Context.Drone->IsBossFacingRotationAllowedForServer(RotationReason));
+	TestEqual(TEXT("allowed rotation reports no block reason"), RotationReason, NAME_None);
+
+	// 순간이동으로 각도가 크게 바뀌어도 정면은 따라온다.
+	Context.Drone->SetActorLocation(FVector(2200.0f, -2600.0f, 0.0f));
+	Context.Drone->UpdateBossFacingRotationForServer();
+	ExpectFacingBoss(TEXT("mid-dodge blink"));
+
+	DestroyDroneMovementTestContext(Context);
+
+	// 6) 전투가 아니면 돌지 않는다. 선택 화면에서는 스폰 회전이 그대로 유지된다.
+	FDroneMovementTestContext SelectingContext =
+		CreateDroneMovementTestContext(TEXT("DroneBossFacingSelectingWorld"));
+	TestNotNull(TEXT("selecting rotation drone is spawned"), SelectingContext.Drone);
+	if (!SelectingContext.Drone)
+	{
+		DestroyDroneMovementTestContext(SelectingContext);
+		return false;
+	}
+	SelectingContext.Drone->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
+	SelectingContext.Drone->SetActorRotation(FRotator(0.0f, 137.0f, 0.0f));
+	FName SelectingReason = NAME_None;
+	TestFalse(TEXT("selection screen blocks boss facing rotation"),
+		SelectingContext.Drone->IsBossFacingRotationAllowedForServer(SelectingReason));
+	TestEqual(TEXT("selection screen rotation reason is Selecting"),
+		SelectingReason, FName(TEXT("Selecting")));
+	SelectingContext.Drone->UpdateBossFacingRotationForServer();
+	TestTrue(TEXT("selection screen keeps the spawn rotation"),
+		FMath::IsNearlyZero(
+			FRotator::NormalizeAxis(SelectingContext.Drone->GetActorRotation().Yaw - 137.0f), 0.01f));
+	DestroyDroneMovementTestContext(SelectingContext);
+
+	// 7) 사망하면 멈춘다. 시신이 보스를 따라 도는 일은 없어야 한다.
+	FDroneMovementTestContext DeadContext = CreateDroneMovementTestContext(TEXT("DroneBossFacingDeadWorld"));
+	if (!PrepareInBattleMovementTest(*this, DeadContext, TEXT("dead boss facing")))
+	{
+		DestroyDroneMovementTestContext(DeadContext);
+		return false;
+	}
+	DeadContext.Drone->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
+	DeadContext.Drone->UpdateBossFacingRotationForServer();
+	DeadContext.Drone->ApplyDamageForServer(DeadContext.Drone->GetMaxHealth() + 100, FName(TEXT("Automation")));
+
+	const FRotator RotationAtDeath = DeadContext.Drone->GetActorRotation();
+	FName DeadReason = NAME_None;
+	TestFalse(TEXT("dead drones block boss facing rotation"),
+		DeadContext.Drone->IsBossFacingRotationAllowedForServer(DeadReason));
+	TestEqual(TEXT("dead rotation reason is Dead"), DeadReason, FName(TEXT("Dead")));
+
+	DeadContext.Drone->SetActorLocation(FVector(0.0f, 4000.0f, 0.0f));
+	DeadContext.Drone->UpdateBossFacingRotationForServer();
+	TestTrue(TEXT("dead drones keep their last rotation"),
+		FMath::IsNearlyZero(
+			FRotator::NormalizeAxis(DeadContext.Drone->GetActorRotation().Yaw - RotationAtDeath.Yaw), 0.01f));
+	DestroyDroneMovementTestContext(DeadContext);
+
+	return true;
+}
+
 #endif
