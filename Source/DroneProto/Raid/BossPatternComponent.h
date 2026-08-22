@@ -2,11 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Templates/SubclassOf.h"
 #include "BossPatternTypes.h"
 #include "BossPatternComponent.generated.h"
 
 class ABossPatternActorBase;
+class ACorruptedActinoPatternActor;
 class ADrone;
+class AStellarRemnantPatternActor;
 class UDataTable;
 
 UCLASS(ClassGroup = (Raid), meta = (BlueprintSpawnableComponent))
@@ -59,6 +62,8 @@ public:
 	ABossPatternActorBase* GetActivePatternActorForTest() const;
 	void ResolvePatternDataForTest();
 	bool IsResolvedConfigReadyForTest() const;
+	UClass* ResolvePatternActorClassForTest(EBossPatternKind PatternKind) const;
+	void SetPatternActorClassOverridesForTest(UClass* CorruptedClass, UClass* StellarClass);
 #endif
 
 protected:
@@ -76,6 +81,20 @@ private:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Data")
 	TObjectPtr<UDataTable> StellarRemnantDataTable = nullptr;
+
+	// 패턴 액터를 Blueprint 파생으로 갈아끼우는 자리. **비워 두면 기존 C++ 클래스를 그대로 쓴다.**
+	//
+	// 패턴 연출·사운드 훅(`BP_OnPatternVisualChanged` / `BP_OnPatternVisualEnded`)은 패턴 액터에 있는데
+	// 스폰 클래스를 이 컴포넌트가 직접 정하므로, 지정 수단이 없으면 BP 파생을 만들어도 스폰되지 않는다.
+	// 보스처럼 "맵에 배치해 두면 채택된다"는 우회도 불가능하다 — 패턴 액터는 패턴마다 런타임에 스폰된다.
+	//
+	// `TSubclassOf::Get()`이 파생 관계를 검사하므로 엉뚱한 클래스가 들어오면 자동으로 null이 되고
+	// 아래 폴백이 걸린다. 별도 방어 코드를 두지 않는 이유다.
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Visual")
+	TSubclassOf<ACorruptedActinoPatternActor> CorruptedActinoPatternActorClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Pattern|Visual")
+	TSubclassOf<AStellarRemnantPatternActor> StellarRemnantPatternActorClass;
 
 	FBossPatternResolvedConfig ResolvedConfig;
 	FTimerHandle TransitionTimerHandle;
@@ -106,6 +125,8 @@ private:
 	void FinishActiveForServer();
 	bool TryGetPlayerPlaneZForServer(float& OutPlaneZCm) const;
 	ABossPatternActorBase* SpawnPatternActorForServer(EBossPatternLifecycleState LifecycleState);
+	// 스폰할 패턴 액터 클래스를 정한다. 오버라이드가 비어 있으면 기존 C++ 클래스를 돌려준다.
+	UClass* ResolvePatternActorClassForServer(EBossPatternKind PatternKind) const;
 	void DestroyActivePatternActorForServer();
 	void ClearHitLockForServer(FString PlayerKey);
 	void ClearAllHitLocksForServer();

@@ -444,6 +444,31 @@ bool UBossPatternComponent::TryGetPlayerPlaneZForServer(float& OutPlaneZCm) cons
 	return false;
 }
 
+UClass* UBossPatternComponent::ResolvePatternActorClassForServer(EBossPatternKind PatternKind) const
+{
+	// `TSubclassOf::Get()`은 파생 관계를 검사해 아니면 null을 돌려준다.
+	// 그래서 잘못 지정된 클래스는 여기서 자동으로 폴백으로 떨어진다.
+	switch (PatternKind)
+	{
+	case EBossPatternKind::CorruptedActino:
+		if (UClass* OverrideClass = CorruptedActinoPatternActorClass.Get())
+		{
+			return OverrideClass;
+		}
+		return ACorruptedActinoPatternActor::StaticClass();
+
+	case EBossPatternKind::StellarRemnant:
+		if (UClass* OverrideClass = StellarRemnantPatternActorClass.Get())
+		{
+			return OverrideClass;
+		}
+		return AStellarRemnantPatternActor::StaticClass();
+
+	default:
+		return ABossPatternActorBase::StaticClass();
+	}
+}
+
 ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPatternLifecycleState LifecycleState)
 {
 	DestroyActivePatternActorForServer();
@@ -454,15 +479,7 @@ ABossPatternActorBase* UBossPatternComponent::SpawnPatternActorForServer(EBossPa
 		return nullptr;
 	}
 
-	UClass* PatternActorClass = ABossPatternActorBase::StaticClass();
-	if (CurrentPattern == EBossPatternKind::CorruptedActino)
-	{
-		PatternActorClass = ACorruptedActinoPatternActor::StaticClass();
-	}
-	else if (CurrentPattern == EBossPatternKind::StellarRemnant)
-	{
-		PatternActorClass = AStellarRemnantPatternActor::StaticClass();
-	}
+	UClass* PatternActorClass = ResolvePatternActorClassForServer(CurrentPattern);
 	FTransform PatternSpawnTransform = Owner->GetActorTransform();
 	PatternSpawnTransform.SetScale3D(FVector::OneVector);
 	// 패턴 기하는 확정 명세가 말하는 "플레이어 평면"을 기준으로 놓는다.
@@ -792,5 +809,16 @@ void UBossPatternComponent::ResolvePatternDataForTest()
 bool UBossPatternComponent::IsResolvedConfigReadyForTest() const
 {
 	return bResolvedConfigReady;
+}
+
+UClass* UBossPatternComponent::ResolvePatternActorClassForTest(EBossPatternKind PatternKind) const
+{
+	return ResolvePatternActorClassForServer(PatternKind);
+}
+
+void UBossPatternComponent::SetPatternActorClassOverridesForTest(UClass* CorruptedClass, UClass* StellarClass)
+{
+	CorruptedActinoPatternActorClass = CorruptedClass;
+	StellarRemnantPatternActorClass = StellarClass;
 }
 #endif

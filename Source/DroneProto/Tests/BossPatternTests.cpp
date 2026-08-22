@@ -3920,4 +3920,79 @@ bool FBalanceSandboxManualPatternRestartTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneBossPatternActorClassOverrideTest,
+	"DroneProto.BossPattern.Visual.PatternActorClassOverride",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneBossPatternActorClassOverrideTest::RunTest(const FString& Parameters)
+{
+	// (1) 오버라이드가 비어 있으면 기존 C++ 클래스를 그대로 쓴다 — 기본 동작 변경 0의 계약이다.
+	const UBossPatternComponent* ComponentCDO = GetDefault<UBossPatternComponent>();
+	TestNotNull(TEXT("boss pattern component CDO exists"), ComponentCDO);
+	if (!ComponentCDO)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("empty override keeps the Corrupted C++ class"),
+		ComponentCDO->ResolvePatternActorClassForTest(EBossPatternKind::CorruptedActino),
+		ACorruptedActinoPatternActor::StaticClass());
+	TestEqual(TEXT("empty override keeps the Stellar C++ class"),
+		ComponentCDO->ResolvePatternActorClassForTest(EBossPatternKind::StellarRemnant),
+		AStellarRemnantPatternActor::StaticClass());
+	TestEqual(TEXT("unknown pattern falls back to the base class"),
+		ComponentCDO->ResolvePatternActorClassForTest(EBossPatternKind::None),
+		ABossPatternActorBase::StaticClass());
+
+	UBossPatternComponent* Component = NewObject<UBossPatternComponent>();
+	TestNotNull(TEXT("standalone boss pattern component is created"), Component);
+	if (!Component)
+	{
+		return false;
+	}
+
+	// (2) 슬롯에 맞는 클래스를 넣으면 그 값이 쓰인다.
+	Component->SetPatternActorClassOverridesForTest(
+		ACorruptedActinoPatternActor::StaticClass(),
+		AStellarRemnantPatternActor::StaticClass());
+	TestEqual(TEXT("matching Corrupted override is honored"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::CorruptedActino),
+		ACorruptedActinoPatternActor::StaticClass());
+	TestEqual(TEXT("matching Stellar override is honored"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::StellarRemnant),
+		AStellarRemnantPatternActor::StaticClass());
+
+	// (3) 슬롯을 서로 바꿔 넣으면 `TSubclassOf::Get()`이 null을 돌려주고 폴백이 걸린다.
+	// 이 방어가 없으면 Corrupted 차례에 Stellar 액터가 스폰되어 패턴 자체가 뒤바뀐다.
+	Component->SetPatternActorClassOverridesForTest(
+		AStellarRemnantPatternActor::StaticClass(),
+		ACorruptedActinoPatternActor::StaticClass());
+	TestEqual(TEXT("Stellar class in the Corrupted slot falls back to the Corrupted C++ class"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::CorruptedActino),
+		ACorruptedActinoPatternActor::StaticClass());
+	TestEqual(TEXT("Corrupted class in the Stellar slot falls back to the Stellar C++ class"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::StellarRemnant),
+		AStellarRemnantPatternActor::StaticClass());
+
+	// (4) 패턴 액터가 아닌 상위 클래스도 파생 검사에서 걸러진다.
+	Component->SetPatternActorClassOverridesForTest(
+		ABossPatternActorBase::StaticClass(),
+		ABossPatternActorBase::StaticClass());
+	TestEqual(TEXT("base class in the Corrupted slot falls back"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::CorruptedActino),
+		ACorruptedActinoPatternActor::StaticClass());
+
+	// (5) 다시 비우면 기본값으로 돌아온다.
+	Component->SetPatternActorClassOverridesForTest(nullptr, nullptr);
+	TestEqual(TEXT("cleared override returns to the Corrupted C++ class"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::CorruptedActino),
+		ACorruptedActinoPatternActor::StaticClass());
+	TestEqual(TEXT("cleared override returns to the Stellar C++ class"),
+		Component->ResolvePatternActorClassForTest(EBossPatternKind::StellarRemnant),
+		AStellarRemnantPatternActor::StaticClass());
+
+	return true;
+}
+
 #endif
