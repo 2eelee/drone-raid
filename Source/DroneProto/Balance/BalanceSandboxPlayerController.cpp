@@ -16,7 +16,7 @@ ABalanceSandboxPlayerController::ABalanceSandboxPlayerController()
 	// 프로덕션이 쓰는 WBP_DroneReport를 그대로 재사용한다 — 샌드박스 전용 위젯을 만들지 않는다.
 	// 이 값은 이 클래스의 기본값일 뿐이라 BP_RaidPlayerController의 설정에는 영향이 없다.
 	static ConstructorHelpers::FClassFinder<UDroneReportWidget> DroneReportWidgetFinder(
-		TEXT("/Game/WBP_DroneReport"));
+		TEXT("/Game/UI/WBP_DroneReport"));
 	if (DroneReportWidgetFinder.Succeeded())
 	{
 		DroneReportWidgetClass = DroneReportWidgetFinder.Class;

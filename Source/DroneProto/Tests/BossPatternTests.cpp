@@ -926,7 +926,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FPop04SpawnedDroneVisibilityContractTest::RunTest(const FString& Parameters)
 {
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Pop04VisibleSpawnWorld")));
-	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/BP_Drone.BP_Drone_C"));
+	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/Blueprints/BP_Drone.BP_Drone_C"));
 	TestNotNull(TEXT("test world is created"), World);
 	TestNotNull(TEXT("BP_Drone class loads"), DroneClass);
 	if (!World || !DroneClass)
@@ -972,7 +972,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FPop04FirstMovePreservesSpawnHeightTest::RunTest(const FString& Parameters)
 {
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("Pop04SpawnHeightWorld")));
-	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/BP_Drone.BP_Drone_C"));
+	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/Blueprints/BP_Drone.BP_Drone_C"));
 	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
 	ARaidPlayerController* PlayerController = World ? World->SpawnActor<ARaidPlayerController>() : nullptr;
 	TestNotNull(TEXT("spawn-height world is created"), World);

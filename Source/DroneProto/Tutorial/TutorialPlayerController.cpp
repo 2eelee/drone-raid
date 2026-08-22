@@ -71,7 +71,7 @@ bool IsDialogueOnlyStep(ETutorialStep Step)
 ATutorialPlayerController::ATutorialPlayerController()
 {
 	TutorialHUDWidgetClass = TSoftClassPtr<UTutorialHUDWidget>(
-		FSoftObjectPath(TEXT("/Game/WBP_TutorialHUD.WBP_TutorialHUD_C")));
+		FSoftObjectPath(TEXT("/Game/UI/WBP_TutorialHUD.WBP_TutorialHUD_C")));
 }
 
 void ATutorialPlayerController::BeginPlay()

@@ -9,7 +9,7 @@
 ATutorialGameMode::ATutorialGameMode()
 {
 	PlayerControllerClass = ATutorialPlayerController::StaticClass();
-	static ConstructorHelpers::FClassFinder<ADrone> DronePawnClass(TEXT("/Game/BP_Drone"));
+	static ConstructorHelpers::FClassFinder<ADrone> DronePawnClass(TEXT("/Game/Blueprints/BP_Drone"));
 	DefaultPawnClass = ADrone::StaticClass();
 	if (DronePawnClass.Succeeded())
 	{

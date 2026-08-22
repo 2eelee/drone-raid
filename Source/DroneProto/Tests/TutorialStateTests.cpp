@@ -129,10 +129,10 @@ bool FDronePOR23AssetContractTest::RunTest(const FString& Parameters)
 
 	UClass* TutorialHUDClass = LoadClass<UTutorialHUDWidget>(
 		nullptr,
-		TEXT("/Game/WBP_TutorialHUD.WBP_TutorialHUD_C"));
+		TEXT("/Game/UI/WBP_TutorialHUD.WBP_TutorialHUD_C"));
 	UClass* DroneReportClass = LoadClass<UDroneReportWidget>(
 		nullptr,
-		TEXT("/Game/WBP_DroneReport.WBP_DroneReport_C"));
+		TEXT("/Game/UI/WBP_DroneReport.WBP_DroneReport_C"));
 	TestNotNull(TEXT("tutorial HUD Blueprint class loads"), TutorialHUDClass);
 	TestNotNull(TEXT("DroneReport Blueprint class loads"), DroneReportClass);
 

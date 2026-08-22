@@ -45,7 +45,7 @@ ABalanceSandboxGameMode::ABalanceSandboxGameMode()
 	// GameMode를 직접 쓰므로 여기서 정해 주지 않으면 드론이 아닌 폰을 possess하게 되고
 	// Ready가 "Controlled pawn is not ADrone"으로 막혀 보스도 생기지 않는다.
 	// 스폰 경로 자체는 건드리지 않는다 — 기존 SpawnDefaultPawnAtTransform이 그대로 돈다.
-	static ConstructorHelpers::FClassFinder<ADrone> DronePawnClassFinder(TEXT("/Game/BP_Drone"));
+	static ConstructorHelpers::FClassFinder<ADrone> DronePawnClassFinder(TEXT("/Game/Blueprints/BP_Drone"));
 	DefaultPawnClass = ADrone::StaticClass();
 	if (DronePawnClassFinder.Succeeded())
 	{

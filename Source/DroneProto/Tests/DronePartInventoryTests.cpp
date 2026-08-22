@@ -910,7 +910,7 @@ bool FRaidLobbyWidgetCallsignInputAutoFocusTest::RunTest(const FString& Paramete
 	Context.PC->SetPlayer(LocalPlayer);
 	UClass* LobbyWidgetClass = LoadClass<URaidLobbyWidget>(
 		nullptr,
-		TEXT("/Game/WBP_RaidLobby.WBP_RaidLobby_C"));
+		TEXT("/Game/UI/WBP_RaidLobby.WBP_RaidLobby_C"));
 	URaidLobbyWidget* LobbyWidget = LobbyWidgetClass
 		? CreateWidget<URaidLobbyWidget>(Context.PC, LobbyWidgetClass)
 		: nullptr;
@@ -3109,7 +3109,7 @@ bool FDronePartSelectUIRestoresKeyboardFocusTest::RunTest(const FString& Paramet
 	TestTrue(TEXT("focus restore player controller is local"), Context.PC->IsLocalController());
 	UClass* SelectWidgetClass = LoadClass<UDronePartSelectWidget>(
 		nullptr,
-		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
 	TestNotNull(TEXT("part select widget asset class loads"), SelectWidgetClass);
 	Context.PC->DronePartSelectWidgetClass = SelectWidgetClass;
 	UDronePartSelectWidget* SelectWidget = CreateWidget<UDronePartSelectWidget>(Context.PC, SelectWidgetClass);
@@ -3215,7 +3215,7 @@ bool FDronePartSelectUIMouseArrowNavigationTest::RunTest(const FString& Paramete
 	Context.PC->SetPlayer(LocalPlayer);
 	UClass* SelectWidgetClass = LoadClass<UDronePartSelectWidget>(
 		nullptr,
-		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
 	UDronePartSelectWidget* SelectWidget = SelectWidgetClass
 		? CreateWidget<UDronePartSelectWidget>(Context.PC, SelectWidgetClass)
 		: nullptr;
@@ -3313,7 +3313,7 @@ bool FDronePartSelectUINonSpecifiedWASDTest::RunTest(const FString& Parameters)
 	Context.PC->SetPlayer(LocalPlayer);
 	UClass* SelectWidgetClass = LoadClass<UDronePartSelectWidget>(
 		nullptr,
-		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
 	UDronePartSelectWidget* SelectWidget = SelectWidgetClass
 		? CreateWidget<UDronePartSelectWidget>(Context.PC, SelectWidgetClass)
 		: nullptr;
@@ -3372,7 +3372,7 @@ bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DronePartSelectUIBlueprintStructureWorld")));
 	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
 		nullptr,
-		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
 	UDronePartSelectWidget* Widget = World && WidgetClass
 		? NewObject<UDronePartSelectWidget>(World, WidgetClass)
 		: nullptr;
@@ -3444,7 +3444,7 @@ bool FDroneSelect06ServerErrorPopupFallbackTest::RunTest(const FString& Paramete
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneSelect06ServerErrorPopupWorld")));
 	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
 		nullptr,
-		TEXT("/Game/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
 	UDronePartSelectWidget* Widget = World && WidgetClass
 		? NewObject<UDronePartSelectWidget>(World, WidgetClass)
 		: nullptr;
@@ -3528,7 +3528,7 @@ bool FRaidGameModeDroneSpawnCollisionTest::RunTest(const FString& Parameters)
 	ARaidGameMode* GameMode = World->SpawnActor<ARaidGameMode>();
 	ARaidPlayerController* FirstPC = World->SpawnActor<ARaidPlayerController>();
 	ARaidPlayerController* SecondPC = World->SpawnActor<ARaidPlayerController>();
-	UClass* DronePawnClass = LoadClass<APawn>(nullptr, TEXT("/Game/BP_Drone.BP_Drone_C"));
+	UClass* DronePawnClass = LoadClass<APawn>(nullptr, TEXT("/Game/Blueprints/BP_Drone.BP_Drone_C"));
 	ADefaultPawn* DefaultPawnCDO = GetMutableDefault<ADefaultPawn>();
 
 	TestNotNull(TEXT("raid game mode is spawned"), GameMode);
