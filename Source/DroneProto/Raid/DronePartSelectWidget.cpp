@@ -373,6 +373,8 @@ void UDronePartSelectWidget::CancelFocusedPart()
 		return;
 	}
 
+	// C 키 취소는 서버 왕복 결과를 기다리지 않는다. 입력을 받은 순간이 곧 취소 피드백이다.
+	CachedRaidPlayerController->PlayUICancelSound();
 	CachedRaidPlayerController->RequestCancelPartFromUI(FocusedSlot);
 }
 
@@ -900,10 +902,20 @@ bool UDronePartSelectWidget::ShouldRefreshTimerText() const
 
 void UDronePartSelectWidget::SetFocusedSlot(EDronePartSlot NewFocusedSlot)
 {
+	// 가이드 2절: "부품/메뉴 포커스가 실제로 변경될 때 1회. 단순 마우스 이동에는 재생하지 않음."
+	// 첫 설정은 화면을 여는 초기화라 울리지 않는다. 같은 슬롯을 다시 눌러도 마찬가지다.
+	const bool bFocusActuallyMoved = bHasInitializedFocusAudio && FocusedSlot != NewFocusedSlot;
+	bHasInitializedFocusAudio = true;
+
 	FocusedSlot = NewFocusedSlot;
 	bCombatStartFocused = false;
 	RefreshFromController();
 	SetKeyboardFocus();
+
+	if (bFocusActuallyMoved && CachedRaidPlayerController)
+	{
+		CachedRaidPlayerController->PlayUIFocusSound();
+	}
 }
 
 void UDronePartSelectWidget::RefreshSlot(

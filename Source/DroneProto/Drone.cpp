@@ -21,6 +21,10 @@
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerState.h"
 #include "Materials/MaterialInterface.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "Sound/SoundAttenuation.h"
+#include "Components/AudioComponent.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "Net/UnrealNetwork.h"
@@ -312,14 +316,19 @@ void ADrone::Tick(float DeltaSeconds)
 		// 이동을 적용한 뒤에 돌린다. 같은 틱의 새 위치를 기준으로 보스를 향해야
 		// 카메라가 계산하는 Yaw와 한 프레임도 어긋나지 않는다.
 		UpdateBossFacingRotationForServer();
+		// 이동 누적을 반영한 뒤에 본다. 같은 틱의 새 누적값으로 충전 단계를 판정해야
+		// 발사 시점의 강화 판정과 어긋나지 않는다.
+		UpdateVectorChargeVisualForServer();
 	}
 
 	UpdateLocalCombatCamera(DeltaSeconds);
+	UpdateAudioLoopsLocally(DeltaSeconds);
 }
 
 void ADrone::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	EndDroneHitFlash();
+	StopAudioLoopsLocally();
 
 	if (bCombatCameraRotationInputDisabled)
 	{
@@ -736,6 +745,9 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	bIsInvincible = true;
 	LastServerMoveInput = FVector2D::ZeroVector;
 	ApplyDodgeVisualStateLocally(true);
+	// 권한 측(Standalone·리슨 서버)의 회피음 진입점. 원격 클라이언트는 `OnRep_IsDodging`이 받는다.
+	// 데디케이티드 서버에서는 `PlayLocal2DSound`가 넷모드로 걸러낸다.
+	PlayLocal2DSound(SFX_Drone_DodgeTeleport);
 
 	DodgeStartLocationForServer = StartLocation;
 	DodgeTargetLocationForServer = FinalLocation;
@@ -1774,6 +1786,12 @@ void ADrone::OnRep_IsDead()
 void ADrone::OnRep_IsDodging()
 {
 	ApplyDodgeVisualStateLocally(bIsDodging);
+
+	// 회피 "시작"에만 울린다. 종료 복제에서도 이 OnRep이 불리므로 상태를 확인해야 한다.
+	if (bIsDodging)
+	{
+		PlayLocal2DSound(SFX_Drone_DodgeTeleport);
+	}
 }
 
 void ADrone::OnRep_ReplicatedMovement()
@@ -2286,6 +2304,9 @@ void ADrone::HandleAttackBossForServer()
 		FDroneAttackVisualPayload AttackVisualPayload;
 		AttackVisualPayload.bLeftStrongVariant = LeftWeaponResult.bStrongVariant;
 		AttackVisualPayload.bRightStrongVariant = RightWeaponResult.bStrongVariant;
+		// 타입 조회는 서버에서만 가능하다. 연출을 재생하는 쪽은 클라이언트이므로 여기서 실어 보낸다.
+		AttackVisualPayload.LeftWeaponType = ResolveWeaponTypeForServer(EquippedLeftWeaponPartID);
+		AttackVisualPayload.RightWeaponType = ResolveWeaponTypeForServer(EquippedRightWeaponPartID);
 
 		Multicast_PlayDroneAttackVisual(
 			EquippedLeftWeaponPartID,
@@ -2453,7 +2474,10 @@ bool ADrone::HandleTutorialAttackForServer(ATutorialPlayerController* TutorialPl
 	RecordAttackIgnoredForServer(NAME_None);
 	const FVector AttackFrom = GetActorLocation();
 	// 튜토리얼 공격은 무기 피해 계산을 타지 않는다(고정 1.0). 강화 변형이라는 개념이 없으므로 기본값이다.
-	const FDroneAttackVisualPayload TutorialAttackVisualPayload;
+	// 다만 장착한 무기의 발사음은 나야 하므로 타입은 채운다.
+	FDroneAttackVisualPayload TutorialAttackVisualPayload;
+	TutorialAttackVisualPayload.LeftWeaponType = ResolveWeaponTypeForServer(EquippedLeftWeaponPartID);
+	TutorialAttackVisualPayload.RightWeaponType = ResolveWeaponTypeForServer(EquippedRightWeaponPartID);
 	Multicast_PlayDroneAttackVisual(
 		EquippedLeftWeaponPartID,
 		EquippedRightWeaponPartID,
@@ -3417,6 +3441,10 @@ void ADrone::PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWea
 		return;
 	}
 
+	// BP 훅이 아니라 여기서 재생한다. `BP_OnDroneAttackVisual`은 BlueprintNativeEvent라
+	// BP가 오버라이드하는 순간 C++ 구현이 호출되지 않아 사운드가 조용히 사라진다.
+	PlayAttackSoundsLocally(Payload);
+
 	if (UWorld* World = GetWorld())
 	{
 		DrawDebugLine(World, From, To, FColor::Cyan, false, 0.45f, 0, 6.0f);
@@ -3432,6 +3460,9 @@ void ADrone::PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewH
 		return;
 	}
 
+	// 유효 피해 경로에만 있다. 무적으로 무시된 피해는 `PlayDroneDamageIgnoredVisualLocally`로
+	// 갈라지므로 여기 닿지 않는다.
+	PlayLocal2DSound(SFX_Drone_Hit);
 
 	StartDroneHitFlash(OldHP, NewHP);
 }
@@ -3503,6 +3534,268 @@ void ADrone::EndDroneHitFlash()
 
 	DroneHitFlashMeshes.Reset();
 	DroneHitFlashPreviousOverlays.Reset();
+}
+
+USoundBase* ADrone::ResolveWeaponFireSound(EDroneCombatWeaponType WeaponType, bool bStrongVariant) const
+{
+	switch (WeaponType)
+	{
+	case EDroneCombatWeaponType::PulseLaser:
+		return bStrongVariant ? SFX_Weapon_Pulse_StrongFire.Get() : SFX_Weapon_Pulse_Fire.Get();
+
+	// Fracture는 강화 변형이 없다. 계산 쪽에서도 `bStrongVariant`가 항상 false이며,
+	// 발사·명중·파편을 복합 1개로 처리하기로 확정돼 다단히트마다 울리지 않는다.
+	case EDroneCombatWeaponType::FractureBurst:
+		return SFX_Weapon_Fracture_Fire.Get();
+
+	case EDroneCombatWeaponType::VectorCannon:
+		return bStrongVariant ? SFX_Weapon_Vector_ChargedFire.Get() : SFX_Weapon_Vector_Fire.Get();
+
+	default:
+		return nullptr;
+	}
+}
+
+void ADrone::PlayLocal2DSound(USoundBase* Sound) const
+{
+	// 에셋 미지정은 정상 상태다. 임포트·배선이 끝나지 않은 소리를 로그로 시끄럽게 만들지 않는다.
+	if (!Sound || GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	// 가이드가 무기·피격·회피를 "2D Local"로 지정했다. 16인 레이드에서 남의 드론 발사음까지
+	// 울리면 자기 입력 피드백이 묻힌다.
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	UGameplayStatics::PlaySound2D(this, Sound);
+}
+
+void ADrone::PlayAttackSoundsLocally(const FDroneAttackVisualPayload& Payload) const
+{
+	// 가이드 1절: 같은 무기 타입의 SFX는 1회로 dedupe하고, 서로 다른 타입이면 타입별 1회.
+	if (Payload.LeftWeaponType == Payload.RightWeaponType)
+	{
+		// 한쪽만 강화여도 강화음 하나만 울린다 — 가이드가 Normal과 Strong을 겹치지 말라고 못박았다.
+		PlayLocal2DSound(ResolveWeaponFireSound(
+			Payload.LeftWeaponType,
+			Payload.bLeftStrongVariant || Payload.bRightStrongVariant));
+		return;
+	}
+
+	PlayLocal2DSound(ResolveWeaponFireSound(Payload.LeftWeaponType, Payload.bLeftStrongVariant));
+	PlayLocal2DSound(ResolveWeaponFireSound(Payload.RightWeaponType, Payload.bRightStrongVariant));
+}
+
+void ADrone::UpdateAudioLoopsLocally(float DeltaSeconds)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	// Vector 충전 루프는 서버가 단계 변화를 보낼 때만 갱신되므로 여기서 돌리지 않는다.
+	UpdateHoverLoopLocally(DeltaSeconds);
+}
+
+void ADrone::UpdateHoverLoopLocally(float DeltaSeconds)
+{
+	if (!SFX_Drone_Hover_Loop)
+	{
+		return;
+	}
+
+	// 사망하면 멈춘다. 부활·재선택으로 되살아나면 아래에서 다시 스폰된다.
+	if (bIsDead)
+	{
+		if (HoverLoopAudioComponent)
+		{
+			HoverLoopAudioComponent->Stop();
+			HoverLoopAudioComponent = nullptr;
+		}
+		bHasHoverLoopLocationSample = false;
+		HoverLoopSmoothedSpeedCmPerSecond = 0.0f;
+		return;
+	}
+
+	if (!HoverLoopAudioComponent)
+	{
+		// bAutoDestroy = false — 핸들을 들고 있어야 정지와 피치 갱신을 할 수 있다.
+		HoverLoopAudioComponent = UGameplayStatics::SpawnSoundAttached(
+			SFX_Drone_Hover_Loop,
+			GetRootComponent(),
+			NAME_None,
+			FVector::ZeroVector,
+			EAttachLocation::KeepRelativeOffset,
+			false,
+			1.0f,
+			1.0f,
+			0.0f,
+			HoverLoopAttenuation,
+			nullptr,
+			false);
+	}
+
+	if (!HoverLoopAudioComponent)
+	{
+		return;
+	}
+
+	// 원격 드론은 복제된 위치만 보여 `GetVelocity()`가 0으로 남는다. 위치 변화로 직접 추정한다.
+	const FVector Location = GetActorLocation();
+	float SpeedCmPerSecond = 0.0f;
+	if (bHasHoverLoopLocationSample && DeltaSeconds > KINDA_SMALL_NUMBER)
+	{
+		SpeedCmPerSecond = FVector::Dist(Location, HoverLoopLastLocation) / DeltaSeconds;
+	}
+	HoverLoopLastLocation = Location;
+	bHasHoverLoopLocationSample = true;
+
+	// 회피는 0.25초 순간이동이라 속도가 순간적으로 튄다. 그대로 피치에 넣으면 "삑" 하고 갈라진다.
+	HoverLoopSmoothedSpeedCmPerSecond = FMath::FInterpTo(
+		HoverLoopSmoothedSpeedCmPerSecond, SpeedCmPerSecond, DeltaSeconds, 6.0f);
+
+	const float SpeedRatio = FMath::Clamp(
+		HoverLoopSmoothedSpeedCmPerSecond / DefaultBaseMoveSpeedCmPerSecond, 0.0f, 1.0f);
+	HoverLoopAudioComponent->SetPitchMultiplier(1.0f + SpeedRatio * HoverLoopMaxPitchGain);
+	HoverLoopAudioComponent->SetVolumeMultiplier(1.0f + SpeedRatio * HoverLoopMaxVolumeGain);
+}
+
+void ADrone::StopAudioLoopsLocally()
+{
+	if (HoverLoopAudioComponent)
+	{
+		HoverLoopAudioComponent->Stop();
+		HoverLoopAudioComponent = nullptr;
+	}
+
+	if (VectorChargeAudioComponent)
+	{
+		VectorChargeAudioComponent->Stop();
+		VectorChargeAudioComponent = nullptr;
+	}
+
+	bHasHoverLoopLocationSample = false;
+	HoverLoopSmoothedSpeedCmPerSecond = 0.0f;
+	AppliedVectorChargeStepLocally = 0;
+}
+
+uint8 ADrone::CalculateVectorChargeStepForServer()
+{
+	if (bIsDead)
+	{
+		return 0;
+	}
+
+	const bool bHasVectorEquipped =
+		ResolveWeaponTypeForServer(EquippedLeftWeaponPartID) == EDroneCombatWeaponType::VectorCannon
+		|| ResolveWeaponTypeForServer(EquippedRightWeaponPartID) == EDroneCombatWeaponType::VectorCannon;
+	if (!bHasVectorEquipped || VectorAccumulatedMoveDistanceMeters <= KINDA_SMALL_NUMBER)
+	{
+		return 0;
+	}
+
+	// 구간 폭과 최대 보너스는 데이터테이블이 정한다(Vector: SpecialValue01 = 5m, SpecialMaxValue = 8).
+	// 값을 여기서 다시 정의하면 밸런스 수정이 사운드와 어긋난다.
+	float StepMeters = 5.0f;
+	int32 MaxBonusSteps = 8;
+	const FDroneCombatResolvedConfig& CombatConfig = ResolveDroneCombatConfigForServer();
+	if (const FDroneWeaponRule* Rule = CombatConfig.FindWeaponRule(EDroneCombatWeaponType::VectorCannon))
+	{
+		if (Rule->SpecialValue01 > KINDA_SMALL_NUMBER)
+		{
+			StepMeters = Rule->SpecialValue01;
+		}
+		if (Rule->SpecialMaxValue > 0.0f)
+		{
+			MaxBonusSteps = FMath::RoundToInt(Rule->SpecialMaxValue);
+		}
+	}
+
+	const int32 BonusSteps = FMath::Min(
+		FMath::FloorToInt(VectorAccumulatedMoveDistanceMeters / StepMeters),
+		MaxBonusSteps);
+	// 1은 "충전은 시작됐지만 보너스는 아직 0"이다. 가이드가 누적 거리 > 0에서 루프를 요구한다.
+	return static_cast<uint8>(FMath::Clamp(BonusSteps + 1, 1, MaxBonusSteps + 1));
+}
+
+void ADrone::UpdateVectorChargeVisualForServer()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+
+	const uint8 ChargeStep = CalculateVectorChargeStepForServer();
+	if (ChargeStep == LastSentVectorChargeStepForServer)
+	{
+		return;
+	}
+	LastSentVectorChargeStepForServer = ChargeStep;
+
+	// 기존 연출 경로와 같은 패턴이다 — Standalone에서는 RPC가 돌지 않으므로 직접 적용한다.
+	if (GetNetMode() == NM_Standalone)
+	{
+		ApplyVectorChargeVisualLocally(ChargeStep);
+		return;
+	}
+
+	Client_UpdateVectorChargeVisual(ChargeStep);
+}
+
+void ADrone::Client_UpdateVectorChargeVisual_Implementation(uint8 ChargeStep)
+{
+	ApplyVectorChargeVisualLocally(ChargeStep);
+}
+
+void ADrone::ApplyVectorChargeVisualLocally(uint8 ChargeStep)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	// 가이드가 "2D Local"로 지정했다. 남의 드론 충전음까지 울리면 자기 상태를 알 수 없다.
+	if (!IsLocallyControlled())
+	{
+		return;
+	}
+
+	if (AppliedVectorChargeStepLocally == ChargeStep)
+	{
+		return;
+	}
+	AppliedVectorChargeStepLocally = ChargeStep;
+
+	if (ChargeStep == 0)
+	{
+		if (VectorChargeAudioComponent)
+		{
+			VectorChargeAudioComponent->Stop();
+			VectorChargeAudioComponent = nullptr;
+		}
+		return;
+	}
+
+	if (!SFX_Weapon_Vector_Charge_Loop)
+	{
+		return;
+	}
+
+	if (!VectorChargeAudioComponent)
+	{
+		VectorChargeAudioComponent = UGameplayStatics::SpawnSound2D(
+			this, SFX_Weapon_Vector_Charge_Loop, 1.0f, 1.0f, 0.0f, nullptr, false, false);
+	}
+
+	if (VectorChargeAudioComponent)
+	{
+		VectorChargeAudioComponent->SetPitchMultiplier(
+			1.0f + static_cast<float>(ChargeStep - 1) * VectorChargePitchGainPerStep);
+	}
 }
 
 void ADrone::BP_OnDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, FDroneAttackVisualPayload Payload)

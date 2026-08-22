@@ -8,6 +8,9 @@ class ARaidBossAttackTelegraph;
 class UBossPatternComponent;
 class UStaticMeshComponent;
 class UTextRenderComponent;
+class USoundBase;
+class USoundAttenuation;
+class UAudioComponent;
 
 UENUM(BlueprintType)
 enum class EBossState : uint8
@@ -182,6 +185,35 @@ private:
 	void ApplyPrototypeVisualLabelVisibility();
 	void RefreshPrototypeVisualHPText();
 	void PlayBossDamagedVisualLocally(float Damage, float OldHP, float NewHP, AActor* DamageCauser);
+
+	// ---- 보스 SFX ----
+
+	/** 보스가 전투 맵에 활성일 때 1개만. Death/Clear/TimeOver/Unload 어느 쪽이든 멈춘다. 3D Boss. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Audio")
+	TObjectPtr<USoundBase> SFX_Boss_Idle_Loop = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Audio")
+	TObjectPtr<USoundAttenuation> BossAudioAttenuation = nullptr;
+
+	// 로컬 플레이어가 유효 피해를 준 경우에만 울린다. 16인이 동시에 때리는 보스라
+	// 모든 피격에 울리면 소리가 뭉개진다(가이드 3절).
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Audio")
+	TObjectPtr<USoundBase> SFX_Boss_Hit = nullptr;
+
+	/** HP <= 0. 사망/클리어 전환에 걸쳐 정확히 1회. 3D Boss. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Boss|Audio")
+	TObjectPtr<USoundBase> SFX_Boss_Death = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> BossIdleLoopAudioComponent = nullptr;
+
+	// 사망음은 Dead와 Clear 두 번의 전환에 걸쳐 도착할 수 있다. 한 번만 울리도록 잠근다.
+	bool bHasPlayedBossDeathSound = false;
+
+	// 클라이언트 표현 전용. 상태 전환과 BeginPlay 양쪽에서 부른다 —
+	// 늦게 접속한 클라이언트는 이미 Battle인 보스를 만나 전환 이벤트를 받지 못한다.
+	void UpdateBossAudioLocally();
+	void StopBossIdleLoop();
 	void ExecuteDebugTelegraphedAreaAttackForServer(FVector AttackCenter, float RadiusCm, int32 DamageAmount, ARaidBossAttackTelegraph* TelegraphActor);
 
 #if WITH_DEV_AUTOMATION_TESTS

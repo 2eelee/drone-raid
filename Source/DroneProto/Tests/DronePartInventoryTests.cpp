@@ -47,6 +47,7 @@
 #include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/DefaultPawn.h"
+#include "Misc/App.h"
 #include "NiagaraComponent.h"
 #include "NiagaraSystem.h"
 #include "TimerManager.h"
@@ -5599,6 +5600,34 @@ bool FDroneAttackVisualPayloadTest::RunTest(const FString& Parameters)
 			AttackIndex == 3);
 		TestFalse(FString::Printf(TEXT("Pulse hit %d right slot stays normal"), AttackIndex),
 			Payload.bRightStrongVariant);
+		// 무기 타입은 클라이언트가 발사음을 고르는 유일한 근거다. PartID만으로는 알 수 없다 —
+		// `ResolveWeaponTypeForServer`가 서버 전용이라 연출을 재생하는 원격 클라이언트에서는 못 쓴다.
+		TestEqual(FString::Printf(TEXT("Pulse hit %d left weapon type"), AttackIndex),
+			Payload.LeftWeaponType,
+			EDroneCombatWeaponType::PulseLaser);
+		TestEqual(FString::Printf(TEXT("Pulse hit %d empty right weapon type"), AttackIndex),
+			Payload.RightWeaponType,
+			EDroneCombatWeaponType::None);
+	}
+
+	// 좌우가 서로 다른 무기면 타입이 슬롯별로 갈려 실려야 한다. 발사음 dedupe가 "같은 타입이면 1회,
+	// 다른 타입이면 타입별 1회"라 두 슬롯을 뭉뚱그리면 한쪽 소리가 사라진다.
+	TestTrue(TEXT("mixed weapon loadout applies"),
+		PayloadContext.Drone->ApplyLoadout(
+			NAME_None,
+			ADronePartInventory::GetPulseLaserPartID(),
+			ADronePartInventory::GetFractureBurstPartID()));
+	AttackBossAndMeasureDamage(PayloadContext.Drone, PayloadBoss);
+	{
+		const FDroneAttackVisualPayload MixedPayload = PayloadContext.Drone->GetLastCombatVisualAttackPayloadForTest();
+		TestEqual(TEXT("mixed loadout left weapon type"),
+			MixedPayload.LeftWeaponType,
+			EDroneCombatWeaponType::PulseLaser);
+		TestEqual(TEXT("mixed loadout right weapon type"),
+			MixedPayload.RightWeaponType,
+			EDroneCombatWeaponType::FractureBurst);
+		// Fracture는 강화 변형이 없다. 복합 연출 1회로 확정됐다.
+		TestFalse(TEXT("mixed loadout Fracture stays normal"), MixedPayload.bRightStrongVariant);
 	}
 
 	DestroyDroneSelectionTestContext(PayloadContext);

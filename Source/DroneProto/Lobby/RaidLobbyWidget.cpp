@@ -1,6 +1,7 @@
 #include "RaidLobbyWidget.h"
 
 #include "RaidSessionSubsystem.h"
+#include "LobbyPlayerController.h"
 #include "Components/Button.h"
 #include "Components/EditableTextBox.h"
 #include "Components/PanelWidget.h"
@@ -191,8 +192,42 @@ void URaidLobbyWidget::RequestEntry(const FString& SlotId)
 
 	if (RaidSubsystem)
 	{
+		// 입장 요청을 실제로 보낸 경우만 확정음이다. 서브시스템이 없어 아무것도 못 보냈으면 실패다.
+		PlayLobbyUISound(ELobbyUISound::Confirm);
 		bRaidEntryRequestInFlight = true;
 		RaidSubsystem->RequestRaidEntry(SlotId);
+	}
+	else
+	{
+		PlayLobbyUISound(ELobbyUISound::Error);
+	}
+}
+
+void URaidLobbyWidget::PlayLobbyUISound(ELobbyUISound Sound) const
+{
+	ALobbyPlayerController* LobbyPC = Cast<ALobbyPlayerController>(GetOwningPlayer());
+	if (!LobbyPC)
+	{
+		return;
+	}
+
+	switch (Sound)
+	{
+	case ELobbyUISound::Focus:
+		LobbyPC->PlayUIFocusSound();
+		break;
+	case ELobbyUISound::Confirm:
+		LobbyPC->PlayUIConfirmSound();
+		break;
+	case ELobbyUISound::Cancel:
+		LobbyPC->PlayUICancelSound();
+		break;
+	case ELobbyUISound::Error:
+		LobbyPC->PlayUIErrorSound();
+		break;
+	case ELobbyUISound::MatchSuccess:
+		LobbyPC->PlayUIMatchSuccessSound();
+		break;
 	}
 }
 
@@ -211,6 +246,9 @@ bool URaidLobbyWidget::SubmitCallsign(const FString& RawCallsign)
 		&& (bTutorialComplete
 			? RaidSubsystem->TryLoginWithCallsign(RawCallsign)
 			: RaidSubsystem->TryLoginWithCallsignAndTravel(RawCallsign));
+
+	// 가이드 2절: 확정은 Confirm, 입력 실패는 Error.
+	PlayLobbyUISound(bAccepted ? ELobbyUISound::Confirm : ELobbyUISound::Error);
 
 	if (CallsignErrorText)
 	{
@@ -263,6 +301,8 @@ void URaidLobbyWidget::CancelMatchmakingFromLobby()
 		}
 	}
 
+	PlayLobbyUISound(ELobbyUISound::Cancel);
+
 	if (RaidSubsystem)
 	{
 		RaidSubsystem->CancelMatchmaking();
@@ -275,6 +315,7 @@ void URaidLobbyWidget::CancelMatchmakingFromLobby()
 
 void URaidLobbyWidget::ConfirmNoServerFromLobby()
 {
+	PlayLobbyUISound(ELobbyUISound::Confirm);
 	ShowMainLobby();
 }
 
@@ -357,6 +398,28 @@ void URaidLobbyWidget::HandleNoServerConfirmClicked()
 
 void URaidLobbyWidget::SetLobbyUIState(ERaidLobbyUIState NewState)
 {
+	// 상태가 실제로 바뀐 경우에만 소리를 낸다. 같은 상태로 다시 설정하는 갱신 호출이 있다.
+	// 첫 설정은 화면을 여는 초기화라 울리지 않는다.
+	if (bHasInitializedLobbyStateAudio && CurrentUIState != NewState)
+	{
+		switch (NewState)
+		{
+		// 서버를 못 찾은 팝업. 가이드 2절이 "매칭/로드 실패 팝업"을 Error에 묶었다.
+		case ERaidLobbyUIState::NoServer:
+			PlayLobbyUISound(ELobbyUISound::Error);
+			break;
+
+		// 서버 배정이 끝나 실제로 들어가는 단계다. 가이드의 "서버/레이드 입장 성공"이 여기다.
+		case ERaidLobbyUIState::Loading:
+			PlayLobbyUISound(ELobbyUISound::MatchSuccess);
+			break;
+
+		default:
+			break;
+		}
+	}
+	bHasInitializedLobbyStateAudio = true;
+
 	CurrentUIState = NewState;
 	bRaidEntryRequestInFlight = (NewState == ERaidLobbyUIState::Waiting || NewState == ERaidLobbyUIState::Loading);
 

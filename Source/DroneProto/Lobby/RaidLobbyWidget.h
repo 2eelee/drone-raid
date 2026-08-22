@@ -98,6 +98,22 @@ private:
 	void HandleNoServerConfirmClicked();
 
 	void SetLobbyUIState(ERaidLobbyUIState NewState);
+
+	// 로비 UI 사운드 종류. 실제 에셋은 `ALobbyPlayerController`가 들고 있다 —
+	// 위젯은 언제 울릴지만 알고, 무엇을 울릴지는 컨트롤러가 안다.
+	enum class ELobbyUISound : uint8
+	{
+		Focus,
+		Confirm,
+		Cancel,
+		Error,
+		MatchSuccess
+	};
+	void PlayLobbyUISound(ELobbyUISound Sound) const;
+
+	// 화면을 처음 여는 초기 상태 설정에는 소리를 내지 않는다.
+	bool bHasInitializedLobbyStateAudio = false;
+
 	void RestoreLoginInputFocus();
 	void BindCallsignInput();
 	void TryAutoSubmitCallsign();

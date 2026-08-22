@@ -3,6 +3,10 @@
 #include "BossPatternComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "Sound/SoundAttenuation.h"
+#include "Components/AudioComponent.h"
 #include "Net/UnrealNetwork.h"
 
 namespace
@@ -146,6 +150,9 @@ void ABossPatternActorBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		BP_OnPatternVisualEnded();
 	}
+	// 패턴 종료·중단·보스 사망·레이드 종료가 전부 이 액터의 파괴로 수렴한다.
+	// 종료 사유마다 따로 훅을 걸 필요 없이 여기 한 곳에서 루프를 끊는다.
+	StopPatternActiveLoop();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -212,6 +219,75 @@ void ABossPatternActorBase::NotifyVisualChanged()
 	if (GetNetMode() != NM_DedicatedServer)
 	{
 		BP_OnPatternVisualChanged(PatternState);
+		// BP 훅이 아니라 여기서 낸다. `BP_OnPatternVisualChanged`는 BlueprintNativeEvent라
+		// 파생 BP가 연출을 붙이려고 오버라이드하는 순간 사운드가 조용히 사라진다.
+		UpdatePatternAudioLocally(PatternState);
+	}
+}
+
+void ABossPatternActorBase::UpdatePatternAudioLocally(const FBossPatternRepState& NewState)
+{
+	// 복제는 같은 값으로 다시 도착할 수 있다. 그때마다 예고음이 겹치면
+	// 가이드의 "state transition당 정확히 1회"가 깨진다.
+	if (bHasAppliedPatternAudioState
+		&& AppliedPatternAudioInstanceID == NewState.InstanceID
+		&& AppliedPatternAudioLifecycle == NewState.LifecycleState)
+	{
+		return;
+	}
+	bHasAppliedPatternAudioState = true;
+	AppliedPatternAudioInstanceID = NewState.InstanceID;
+	AppliedPatternAudioLifecycle = NewState.LifecycleState;
+
+	if (NewState.LifecycleState == EBossPatternLifecycleState::Telegraphing)
+	{
+		PlayPattern2DSound(SFX_PatternTelegraph);
+		return;
+	}
+
+	PlayPattern2DSound(SFX_PatternStart);
+
+	if (!SFX_PatternActiveLoop || PatternActiveLoopAudioComponent)
+	{
+		return;
+	}
+
+	// 3D Boss. 패턴 액터는 보스 위치에 스폰되므로 액터에 붙이면 그대로 보스 소리가 된다.
+	// bAutoDestroy = false — 핸들을 들고 있어야 `EndPlay`에서 끊을 수 있다.
+	PatternActiveLoopAudioComponent = UGameplayStatics::SpawnSoundAttached(
+		SFX_PatternActiveLoop,
+		GetRootComponent(),
+		NAME_None,
+		FVector::ZeroVector,
+		EAttachLocation::KeepRelativeOffset,
+		false,
+		1.0f,
+		1.0f,
+		0.0f,
+		PatternActiveLoopAttenuation,
+		nullptr,
+		false);
+}
+
+void ABossPatternActorBase::PlayPattern2DSound(USoundBase* Sound, float PitchMultiplier) const
+{
+	// 에셋 미지정은 정상 상태다. 배선이 끝나지 않은 소리를 로그로 시끄럽게 만들지 않는다.
+	if (!Sound || GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	// 가이드가 예고·시작·웨이브를 "2D Global"로 지정했다. 예고를 놓치면 회피할 수 없으므로
+	// 보스와의 거리에 따라 작아지면 안 된다.
+	UGameplayStatics::PlaySound2D(this, Sound, 1.0f, PitchMultiplier);
+}
+
+void ABossPatternActorBase::StopPatternActiveLoop()
+{
+	if (PatternActiveLoopAudioComponent)
+	{
+		PatternActiveLoopAudioComponent->Stop();
+		PatternActiveLoopAudioComponent = nullptr;
 	}
 }
 

@@ -1,5 +1,9 @@
 #include "LobbyPlayerController.h"
 
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "Components/AudioComponent.h"
+
 namespace
 {
 const TCHAR* ToLobbyNetModeText(ENetMode NetMode)
@@ -41,6 +45,14 @@ void ALobbyPlayerController::BeginPlay()
 		return;
 	}
 
+	// 위젯 생성이 실패해도 배경음은 나야 한다. 아래 조기 반환보다 앞에 둔다.
+	if (BGM_Lobby && !BGMAudioComponent)
+	{
+		// bAutoDestroy = false — 핸들을 들고 있어야 레이드로 떠날 때 끊을 수 있다.
+		BGMAudioComponent = UGameplayStatics::SpawnSound2D(
+			this, BGM_Lobby, BGMVolumeMultiplier, 1.0f, 0.0f, nullptr, false, false);
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] LobbyWidgetCreateAttempt PC=%s WidgetClassValid=%d WidgetClass=%s"),
 		*GetName(),
 		LobbyWidgetClass ? 1 : 0,
@@ -74,4 +86,52 @@ void ALobbyPlayerController::BeginPlay()
 		*GetNameSafe(ActiveLobbyWidget),
 		*GetPathNameSafe(LobbyWidgetClass.Get()),
 		bShowMouseCursor ? 1 : 0);
+}
+
+void ALobbyPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// 레이드로 떠나면 컨트롤러가 사라지므로 로비 BGM도 함께 멎는다.
+	if (BGMAudioComponent)
+	{
+		BGMAudioComponent->Stop();
+		BGMAudioComponent = nullptr;
+	}
+
+	Super::EndPlay(EndPlayReason);
+}
+
+void ALobbyPlayerController::PlayUISound(USoundBase* Sound) const
+{
+	// 에셋 미지정은 정상 상태다. 배선이 끝나지 않은 소리를 로그로 시끄럽게 만들지 않는다.
+	if (!Sound || GetNetMode() == NM_DedicatedServer || !IsLocalController())
+	{
+		return;
+	}
+
+	UGameplayStatics::PlaySound2D(this, Sound);
+}
+
+void ALobbyPlayerController::PlayUIFocusSound()
+{
+	PlayUISound(SFX_UI_Focus);
+}
+
+void ALobbyPlayerController::PlayUIConfirmSound()
+{
+	PlayUISound(SFX_UI_Confirm);
+}
+
+void ALobbyPlayerController::PlayUICancelSound()
+{
+	PlayUISound(SFX_UI_Cancel);
+}
+
+void ALobbyPlayerController::PlayUIErrorSound()
+{
+	PlayUISound(SFX_UI_Error);
+}
+
+void ALobbyPlayerController::PlayUIMatchSuccessSound()
+{
+	PlayUISound(SFX_UI_MatchSuccess);
 }

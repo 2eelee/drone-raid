@@ -17,6 +17,8 @@ class UDroneReportWidget;
 class UDataTable;
 class UTexture2D;
 class UDronePartReturnManager;
+class USoundBase;
+class UAudioComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FOnPartSelectionResult, EPartSlot, Slot, FName, PartID, bool, bSuccess, FString, Reason);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnSelectedPartsChanged);
@@ -321,6 +323,26 @@ public:
 	UFUNCTION(Client, Reliable, Category = "Raid")
 	void Client_NotifyRaidLoadFailed(FName Reason, FName TargetMap);
 
+	// ---- UI SFX / BGM ----
+	// 대부분은 아래 `Client_Notify*` 경로가 자동으로 낸다. UMG에서 따로 부를 필요가 없다.
+	// 포커스 이동과 취소만 순수 UI 입력이라 위젯이 직접 불러야 한다.
+
+	/** 부품·메뉴 포커스가 실제로 바뀐 순간 UMG에서 부른다. 단순 마우스 이동에는 부르지 않는다. */
+	UFUNCTION(BlueprintCallable, Category = "Raid|Audio")
+	void PlayUIFocusSound();
+
+	/** 취소·뒤로 입력에서 UMG가 부른다. */
+	UFUNCTION(BlueprintCallable, Category = "Raid|Audio")
+	void PlayUICancelSound();
+
+	/** 팝업 확인처럼 서버 왕복이 없는 확정에서 UMG가 부른다. 부품 선택 확정은 자동으로 난다. */
+	UFUNCTION(BlueprintCallable, Category = "Raid|Audio")
+	void PlayUIConfirmSound();
+
+	/** 사용 불가·입력 실패에서 UMG가 부른다. 서버가 거부한 선택은 자동으로 난다. */
+	UFUNCTION(BlueprintCallable, Category = "Raid|Audio")
+	void PlayUIErrorSound();
+
 	UFUNCTION(Exec)
 	void D4SelectPart(FString SlotName, FString PartIDText);
 
@@ -340,7 +362,55 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// ---- UI SFX / BGM 슬롯 ----
+	// 전부 2D Local이다. 소유 클라이언트에서만 재생되며 서버는 아무것도 하지 않는다.
+
+	/** 포커스 이동. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_Focus = nullptr;
+
+	/** 확정·OK. 부품 선택이 서버에서 수락된 순간 자동으로 난다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_Confirm = nullptr;
+
+	/** 취소·뒤로. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_Cancel = nullptr;
+
+	/** 실패·사용 불가. 부품 수량 0, 준비 거부, 레이드 로드 실패에서 자동으로 난다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_Error = nullptr;
+
+	/** 선택 카운트다운. 남은 5초 동안 1초마다 1회. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_CountdownTick = nullptr;
+
+	/** 레이드 입장 확정. 준비가 서버에서 수락된 순간 1회. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_MatchSuccess = nullptr;
+
+	/** DRONE REPORT가 화면에 열린 순간 1회. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|UI")
+	TObjectPtr<USoundBase> SFX_UI_DroneReport_Open = nullptr;
+
+	/** 레이드 배경음. 컨트롤러 수명과 함께 시작·정지하므로 맵을 벗어나면 자동으로 멈춘다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|BGM")
+	TObjectPtr<USoundBase> BGM_Raid = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Raid|Audio|BGM", meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float BGMVolumeMultiplier = 1.0f;
+
+	// 소유 클라이언트에서만 2D로 재생한다. `Sound`가 nullptr이면 조용히 건너뛴다.
+	void PlayUISound(USoundBase* Sound) const;
+
+	void StartBGMLocally();
+	void StopBGMLocally();
+
+	// 남은 시간이 정수 초를 넘어설 때마다 1회. 마지막 5초에만 운다.
+	void UpdateSelectionCountdownAudioLocally();
 
 	// 선택 시간(15초) 종료 시 자동 확정 여부. 원문 (7)/3.(2)의 프로덕션 계약은 항상 true이므로
 	// 여기서 값을 바꾸지 않는다. 시험자가 전투 시작 시점을 직접 잡아야 하는 밸런스 샌드박스만
@@ -349,6 +419,15 @@ protected:
 
 private:
 	static constexpr float SelectionDurationSeconds = 15.0f;
+
+	// 카운트다운이 우는 마지막 구간. 가이드가 "마지막 5초에 1초마다"를 권장한다.
+	static constexpr int32 SelectionCountdownAudioStartSecond = 5;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> BGMAudioComponent = nullptr;
+
+	// 마지막으로 운 남은 초. 같은 초에 두 번 울지 않게 하는 잠금이다.
+	int32 LastPlayedCountdownSecond = -1;
 
 	UPROPERTY(ReplicatedUsing = OnRep_PlayerSelectionState, VisibleInstanceOnly, BlueprintReadOnly, Category = "Drone Parts", meta = (AllowPrivateAccess = "true"))
 	EPlayerSelectionState PlayerSelectionState = EPlayerSelectionState::Selecting;

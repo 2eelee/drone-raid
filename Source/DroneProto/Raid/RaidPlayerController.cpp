@@ -14,6 +14,8 @@
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
 #include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "Components/AudioComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -233,11 +235,15 @@ void ARaidPlayerController::BeginPlay()
 	{
 		GetWorldTimerManager().SetTimerForNextTick(this, &ARaidPlayerController::ShowDronePartSelectUI);
 	}
+
+	StartBGMLocally();
 }
 
 void ARaidPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	HideBossHUDForLocalPlayer();
+	// 맵을 벗어나면 컨트롤러가 사라지므로 BGM도 함께 멎는다.
+	StopBGMLocally();
 
 	if (HasAuthority())
 	{
@@ -246,6 +252,96 @@ void ARaidPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	Super::EndPlay(EndPlayReason);
+}
+
+void ARaidPlayerController::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	UpdateSelectionCountdownAudioLocally();
+}
+
+void ARaidPlayerController::PlayUISound(USoundBase* Sound) const
+{
+	// 에셋 미지정은 정상 상태다. 배선이 끝나지 않은 소리를 로그로 시끄럽게 만들지 않는다.
+	if (!Sound || GetNetMode() == NM_DedicatedServer || !IsLocalController())
+	{
+		return;
+	}
+
+	UGameplayStatics::PlaySound2D(this, Sound);
+}
+
+void ARaidPlayerController::PlayUIFocusSound()
+{
+	PlayUISound(SFX_UI_Focus);
+}
+
+void ARaidPlayerController::PlayUICancelSound()
+{
+	PlayUISound(SFX_UI_Cancel);
+}
+
+void ARaidPlayerController::PlayUIConfirmSound()
+{
+	PlayUISound(SFX_UI_Confirm);
+}
+
+void ARaidPlayerController::PlayUIErrorSound()
+{
+	PlayUISound(SFX_UI_Error);
+}
+
+void ARaidPlayerController::StartBGMLocally()
+{
+	if (!BGM_Raid || BGMAudioComponent || GetNetMode() == NM_DedicatedServer || !IsLocalController())
+	{
+		return;
+	}
+
+	// bAutoDestroy = false — 핸들을 들고 있어야 맵을 벗어날 때 끊을 수 있다.
+	BGMAudioComponent = UGameplayStatics::SpawnSound2D(
+		this, BGM_Raid, BGMVolumeMultiplier, 1.0f, 0.0f, nullptr, false, false);
+}
+
+void ARaidPlayerController::StopBGMLocally()
+{
+	if (BGMAudioComponent)
+	{
+		BGMAudioComponent->Stop();
+		BGMAudioComponent = nullptr;
+	}
+}
+
+void ARaidPlayerController::UpdateSelectionCountdownAudioLocally()
+{
+	if (!SFX_UI_CountdownTick || GetNetMode() == NM_DedicatedServer || !IsLocalController())
+	{
+		return;
+	}
+
+	// 선택 중이 아니면 다음 선택 페이즈를 위해 잠금을 푼다.
+	if (GetCurrentSelectionState() != EPlayerSelectionState::Selecting)
+	{
+		LastPlayedCountdownSecond = -1;
+		return;
+	}
+
+	const float RemainingSeconds = GetSelectionRemainingTime();
+	if (RemainingSeconds <= 0.0f)
+	{
+		return;
+	}
+
+	// 5.0초 남았을 때 5, 4.2초면 5가 아니라 5(올림)다. 초가 바뀌는 순간마다 정확히 한 번 운다.
+	const int32 RemainingSecondMark = FMath::CeilToInt(RemainingSeconds);
+	if (RemainingSecondMark > SelectionCountdownAudioStartSecond
+		|| RemainingSecondMark == LastPlayedCountdownSecond)
+	{
+		return;
+	}
+
+	LastPlayedCountdownSecond = RemainingSecondMark;
+	PlayUISound(SFX_UI_CountdownTick);
 }
 
 void ARaidPlayerController::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -995,6 +1091,10 @@ void ARaidPlayerController::Client_NotifyPartSelectionResult_Implementation(
 		bSuccess ? TEXT("true") : TEXT("false"),
 		*Reason);
 
+	// 가이드 2절: 확정은 Confirm, 사용 불가(부품 수량 0 포함)는 Error.
+	// 서버 판정 결과가 도착하는 이 지점이 "실제로 확정됐는가"를 아는 유일한 곳이다.
+	PlayUISound(bSuccess ? SFX_UI_Confirm : SFX_UI_Error);
+
 	bool bSelectedPartsChanged = false;
 	if (bSuccess && (Reason == TEXT("Selected") || Reason == TEXT("Replaced")))
 	{
@@ -1052,6 +1152,9 @@ void ARaidPlayerController::Client_NotifyRaidReadyResult_Implementation(
 		*CorePartID.ToString(),
 		*LeftWeaponPartID.ToString(),
 		*RightWeaponPartID.ToString());
+
+	// 가이드 2절: 입장 확정 시 1회. 준비가 거부되면 실패음으로 갈린다.
+	PlayUISound(bSuccess ? SFX_UI_MatchSuccess : SFX_UI_Error);
 
 	if (!bSuccess)
 	{
@@ -1133,6 +1236,8 @@ void ARaidPlayerController::HandleRaidLoadFailedForClient(FName Reason, FName Ta
 		*LobbyTargetMap.ToString());
 
 	BP_OnRaidLoadFailed(NormalizedReason, LobbyTargetMap);
+	// 가이드 2절이 "매칭/로드 실패 팝업"을 Error에 함께 묶었다.
+	PlayUISound(SFX_UI_Error);
 	HideBossHUDForLocalPlayer();
 	ReturnToLobbyForRaidLoadFailure(NormalizedReason, LobbyTargetMap);
 }
@@ -1700,6 +1805,10 @@ void ARaidPlayerController::ShowDroneReportWidget(const FDroneReportData& Report
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		SetInputMode(InputMode);
 		CurrentDroneReportWidget->SetKeyboardFocus();
+
+		// 가이드 4절 인수검사: "Report Open → 화면 표시당 1회".
+		// 이미 떠 있는 리포트를 갱신하는 경우는 새로 연 것이 아니므로 울리지 않는다.
+		PlayUISound(SFX_UI_DroneReport_Open);
 	}
 
 	// 새로 띄웠든 이미 떠 있던 것을 갱신했든, 결과는 "화면에 리포트가 있다"로 같다.

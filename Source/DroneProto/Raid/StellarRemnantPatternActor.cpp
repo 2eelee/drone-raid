@@ -12,6 +12,9 @@
 #include "NiagaraDataInterfaceArrayFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "Engine/StaticMesh.h"
+#include "Kismet/GameplayStatics.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -117,10 +120,101 @@ void AStellarRemnantPatternActor::Tick(float DeltaSeconds)
 	if (GetNetMode() != NM_DedicatedServer)
 	{
 		RefreshPatternVFX(ElapsedSeconds);
+		UpdateStellarAudioLocally(ElapsedSeconds);
 		if (bEnableDebugVisualization)
 		{
 			DrawDebugPattern(ElapsedSeconds);
 		}
+	}
+}
+
+void AStellarRemnantPatternActor::UpdateStellarAudioLocally(float ElapsedSeconds)
+{
+	if (GetPatternState().LifecycleState != EBossPatternLifecycleState::Active)
+	{
+		// 예고 중에는 아직 웨이브가 없다. 다음 Active를 위해 상태만 되돌려둔다.
+		LastPlayedWaveIndexForAudio = INDEX_NONE;
+		FlybyPlayedSamples.Reset();
+		return;
+	}
+
+	// 웨이브 방출음 — 가이드는 "1차/2차에 각각 1회, 총 2회"를 요구한다.
+	// 지금 활성 인덱스만 보면 안 된다. 두 웨이브가 동시에 떠 있다가 1차가 먼저 사라지면
+	// 활성 최댓값이 0 → 1 → 0으로 오르내려 같은 웨이브가 다시 울린다.
+	const int32 ActiveWaveIndex = GetActiveWaveIndexForVisual();
+	if (ActiveWaveIndex != INDEX_NONE && ActiveWaveIndex > LastPlayedWaveIndexForAudio)
+	{
+		LastPlayedWaveIndexForAudio = ActiveWaveIndex;
+		// 2차는 피치를 2% 올린다. 같은 파일이 0.5초 간격으로 두 번 울리면 복사처럼 들린다.
+		PlayPattern2DSound(SFX_StellarWave, 1.0f + static_cast<float>(ActiveWaveIndex) * 0.02f);
+	}
+
+	UpdateStellarFlybyLocally(ElapsedSeconds);
+}
+
+void AStellarRemnantPatternActor::UpdateStellarFlybyLocally(float ElapsedSeconds)
+{
+	if (!SFX_StellarFlyby || Samples.Num() <= 0)
+	{
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	const APlayerController* LocalPC = World ? World->GetFirstPlayerController() : nullptr;
+	const APawn* LocalPawn = LocalPC ? LocalPC->GetPawn() : nullptr;
+	if (!LocalPawn)
+	{
+		return;
+	}
+
+	if (FlybyPlayedSamples.Num() != Samples.Num())
+	{
+		FlybyPlayedSamples.Init(false, Samples.Num());
+	}
+
+	const float NowSeconds = World->GetTimeSeconds();
+	if (NowSeconds - LastFlybyPlayTimeSeconds < StellarFlybyCooldownSeconds)
+	{
+		return;
+	}
+
+	const FVector PawnLocation = LocalPawn->GetActorLocation();
+	const FTransform BossTransform = GetActorTransform();
+	const float RadiusSquared = StellarFlybyRadiusCm * StellarFlybyRadiusCm;
+
+	int32 PlayedThisFrame = 0;
+	for (int32 SampleIndex = 0; SampleIndex < Samples.Num(); ++SampleIndex)
+	{
+		if (PlayedThisFrame >= StellarFlybyMaxConcurrent)
+		{
+			break;
+		}
+		if (FlybyPlayedSamples[SampleIndex])
+		{
+			continue;
+		}
+
+		const FStellarRemnantSample& Sample = Samples[SampleIndex];
+		if (!IsSampleActive(Sample, ElapsedSeconds, Config))
+		{
+			continue;
+		}
+
+		const FVector ShardWorldLocation =
+			BossTransform.TransformPosition(EvaluateLocalPosition(Sample, ElapsedSeconds, Config));
+		if (FVector::DistSquared(ShardWorldLocation, PawnLocation) > RadiusSquared)
+		{
+			continue;
+		}
+
+		// 한 파편은 한 번만 스쳐 지나간다. 다시 판정 반경 안에 들어와도 재생하지 않는다.
+		FlybyPlayedSamples[SampleIndex] = true;
+		++PlayedThisFrame;
+		LastFlybyPlayTimeSeconds = NowSeconds;
+
+		// 3D Local — 어느 방향에서 스쳤는지가 정보다. 파편의 실제 위치에서 낸다.
+		UGameplayStatics::PlaySoundAtLocation(
+			this, SFX_StellarFlyby, ShardWorldLocation, 1.0f, 1.0f, 0.0f, StellarFlybyAttenuation);
 	}
 }
 

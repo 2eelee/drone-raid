@@ -190,6 +190,8 @@ private:
 	TObjectPtr<ARaidPlayerController> CachedRaidPlayerController = nullptr;
 
 	EDronePartSlot FocusedSlot = EDronePartSlot::Core;
+	// 화면을 처음 열 때의 초기 포커스 설정에는 소리를 내지 않는다. 실제 이동만 센다.
+	bool bHasInitializedFocusAudio = false;
 	bool bCombatStartFocused = false;
 	int32 CorePreviewIndex = 0;
 	int32 RightWeaponPreviewIndex = 0;

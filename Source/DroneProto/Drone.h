@@ -18,6 +18,9 @@ class ARaidBoss;
 class UWorld;
 class UPrimitiveComponent;
 class UMeshComponent;
+class USoundBase;
+class USoundAttenuation;
+class UAudioComponent;
 class UNiagaraComponent;
 class UMaterialInterface;
 class UDataTable;
@@ -128,6 +131,16 @@ struct FDroneAttackVisualPayload
 	/** 오른쪽 슬롯이 강화 변형이었는가. 판정 기준은 왼쪽과 같다. */
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat|Visual")
 	bool bRightStrongVariant = false;
+
+	// 슬롯별 무기 타입. 연출·사운드가 Pulse/Fracture/Vector를 가르는 유일한 근거다.
+	// PartID만으로는 클라이언트가 타입을 알 수 없다 — `ResolveWeaponTypeForServer`는 서버 전용
+	// DataTable 조회라 연출을 실제로 재생하는 원격 클라이언트에서는 쓸 수 없다.
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat|Visual")
+	EDroneCombatWeaponType LeftWeaponType = EDroneCombatWeaponType::None;
+
+	/** 오른쪽 슬롯 무기 타입. 판정 근거는 왼쪽과 같다. */
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat|Visual")
+	EDroneCombatWeaponType RightWeaponType = EDroneCombatWeaponType::None;
 };
 
 UCLASS()
@@ -454,6 +467,84 @@ private:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Combat|Visual", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMaterialInterface> DroneHitFlashMaterial = nullptr;
+
+	// ---- SFX 슬롯 ----
+	// 에디터에서 `BP_Drone`의 Details 패널로 지정한다. 비워두면 그 소리만 조용히 건너뛴다.
+	// 재생 시점·중복 제거·강화 변형 판정은 전부 C++이 한다(SFX 가이드 1·2절).
+	// 가이드가 이 7종을 전부 "2D Local"로 지정했으므로 로컬 플레이어의 드론에서만 울린다.
+
+	/** Pulse 1·2타. 3타는 `SFX_Weapon_Pulse_StrongFire`가 대신하며 둘은 겹치지 않는다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Weapon_Pulse_Fire = nullptr;
+
+	/** Pulse 3타 강공격. */
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Weapon_Pulse_StrongFire = nullptr;
+
+	// Fracture는 발사·명중·파편을 복합 1개로 처리한다. 다단히트마다 재생하지 않는다.
+	// 강화 변형이 없으므로 슬롯도 하나뿐이다.
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Weapon_Fracture_Fire = nullptr;
+
+	/** Vector 무충전 발사. 누적 이동 보너스가 0일 때. */
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Weapon_Vector_Fire = nullptr;
+
+	/** Vector 충전 발사. 누적 이동 보너스가 1 이상이면 무충전 대신 이쪽만 울린다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Weapon_Vector_ChargedFire = nullptr;
+
+	/** 로컬 플레이어가 유효 피해를 받은 순간. 무적으로 무시된 피해에는 울리지 않는다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Drone", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Drone_Hit = nullptr;
+
+	/** 회피가 승인된 순간 1회. 0.25초 회피 전체를 이 한 파일로 표현한다. */
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Drone", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Drone_DodgeTeleport = nullptr;
+
+	// ---- 루프 SFX ----
+
+	// 부유 + 이동 공통 루프. 원샷 7종과 달리 3D Attached라 살아 있는 모든 드론에서 울린다.
+	// 남의 드론 호버음은 위치를 알려주는 정보이므로 로컬 한정으로 걸지 않는다.
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Drone", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Drone_Hover_Loop = nullptr;
+
+	// Hover 루프의 거리 감쇠. `ATT_3D_Default`를 지정한다. 비워두면 감쇠 없이 들린다.
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Drone", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundAttenuation> HoverLoopAttenuation = nullptr;
+
+	// Vector 이동 에너지 축적 루프. 2D Local이며 자기 드론에서만 울린다.
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USoundBase> SFX_Weapon_Vector_Charge_Loop = nullptr;
+
+	// 호버 루프의 이동 반응 폭. 가이드가 "소폭 증가"라 했으므로 기본값을 작게 잡는다.
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Drone", meta = (ClampMin = "0.0", ClampMax = "1.0", AllowPrivateAccess = "true"))
+	float HoverLoopMaxPitchGain = 0.08f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Drone", meta = (ClampMin = "0.0", ClampMax = "1.0", AllowPrivateAccess = "true"))
+	float HoverLoopMaxVolumeGain = 0.15f;
+
+	// Vector 충전 단계당 피치 상승폭. 단계는 0~9이므로 최대 +0.16이 된다.
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Audio|Weapon", meta = (ClampMin = "0.0", ClampMax = "0.2", AllowPrivateAccess = "true"))
+	float VectorChargePitchGainPerStep = 0.02f;
+
+	// 루프 재생 핸들. 복제하지 않는다 — 각 클라이언트가 자기 것만 들고 있으면 된다.
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> HoverLoopAudioComponent = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> VectorChargeAudioComponent = nullptr;
+
+	// 호버 피치 계산용 이전 위치. 원격 드론은 속도를 직접 알 수 없어 위치 변화로 추정한다.
+	FVector HoverLoopLastLocation = FVector::ZeroVector;
+	bool bHasHoverLoopLocationSample = false;
+	float HoverLoopSmoothedSpeedCmPerSecond = 0.0f;
+
+	// 마지막으로 Owner에게 보낸 Vector 충전 단계. 값이 바뀔 때만 RPC를 보내기 위한 비교 기준이다.
+	uint8 LastSentVectorChargeStepForServer = 0;
+
+	// 클라이언트가 적용 중인 단계. 같은 값이 다시 오면 재생을 건드리지 않는다.
+	uint8 AppliedVectorChargeStepLocally = 0;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Drone|Camera", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
 	float CombatCameraDistanceCm = 1400.0f;
@@ -799,6 +890,36 @@ private:
 	void PlayDroneDamageIgnoredVisualLocally(FName Reason);
 	void StartDroneHitFlash(float OldHP, float NewHP);
 	void EndDroneHitFlash();
+
+	// 이번 타격에서 슬롯 하나가 낼 소리를 고른다. 지정되지 않았거나 무기가 없으면 nullptr.
+	USoundBase* ResolveWeaponFireSound(EDroneCombatWeaponType WeaponType, bool bStrongVariant) const;
+
+	// 로컬 플레이어의 드론에서만 2D로 재생한다. 데디케이티드 서버와 남의 드론에서는 아무것도 하지 않는다.
+	// `Sound`가 nullptr이면 조용히 건너뛴다 — 에셋 미지정이 로그를 더럽히지 않게 한다.
+	void PlayLocal2DSound(USoundBase* Sound) const;
+
+	// 좌우 슬롯의 발사음을 가이드 dedupe 규칙대로 재생한다.
+	void PlayAttackSoundsLocally(const FDroneAttackVisualPayload& Payload) const;
+
+	// ---- 루프 SFX ----
+
+	// 클라이언트 표현 전용. 데디케이티드 서버에서는 아무것도 하지 않는다.
+	void UpdateAudioLoopsLocally(float DeltaSeconds);
+	void UpdateHoverLoopLocally(float DeltaSeconds);
+	void StopAudioLoopsLocally();
+
+	// Vector 충전 단계를 계산해 값이 바뀐 경우에만 Owner에게 보낸다.
+	// 누적 거리 자체는 복제하지 않는다 — 매 프레임 변하는 값이라 16인 레이드에서 대역폭을 계속 먹는다.
+	void UpdateVectorChargeVisualForServer();
+
+	// 0 = 정지, 1 = 충전 시작(보너스 아직 0), 2~9 = 보너스 1~8단계.
+	// 데이터테이블 조회가 const가 아니라 이 함수도 const로 둘 수 없다.
+	uint8 CalculateVectorChargeStepForServer();
+
+	UFUNCTION(Client, Unreliable)
+	void Client_UpdateVectorChargeVisual(uint8 ChargeStep);
+
+	void ApplyVectorChargeVisualLocally(uint8 ChargeStep);
 	void ApplyDodgeVisualStateLocally(bool bDodging);
 	void ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual);
 	void SetDodgeInvincibleVisualHidden(bool bShouldHideVisual);

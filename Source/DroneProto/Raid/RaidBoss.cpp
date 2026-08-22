@@ -11,6 +11,10 @@
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "Engine/StaticMesh.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
+#include "Sound/SoundAttenuation.h"
+#include "Components/AudioComponent.h"
 #include "TimerManager.h"
 #include "Net/UnrealNetwork.h"
 #include "UObject/ConstructorHelpers.h"
@@ -120,6 +124,9 @@ void ARaidBoss::BeginPlay()
 	}
 	RefreshPrototypeVisualHPText();
 	ApplyPrototypeVisualLabelVisibility();
+	// 늦게 접속한 클라이언트는 이미 Battle인 보스를 만나 상태 전환 복제를 받지 못한다.
+	// 여기서 한 번 맞춰야 Idle 루프가 시작된다.
+	UpdateBossAudioLocally();
 
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Boss VisualReady: Boss=%s VisualReady=%s Mesh=%s MeshVisible=%s LabelVisible=%s Collision=%s Location=%s"),
 		*GetName(),
@@ -140,6 +147,9 @@ void ARaidBoss::BeginPlay()
 
 void ARaidBoss::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// 레벨 언로드로 사라지는 경우에도 Idle 루프가 남지 않게 한다(가이드의 Unload 시 Stop).
+	StopBossIdleLoop();
+
 	// defeat 경로 없이 Destroy/레벨 언로드되는 경우에도 서버의 모든 PC 타겟을 무효화한다.
 	if (HasAuthority())
 	{
@@ -313,6 +323,7 @@ void ARaidBoss::SetBossStateForServer(EBossState NewBossState, FName Reason)
 	if (GetNetMode() == NM_Standalone)
 	{
 		BP_OnBossStateChangedVisual(BossState);
+		UpdateBossAudioLocally();
 	}
 }
 
@@ -831,6 +842,18 @@ void ARaidBoss::PlayBossDamagedVisualLocally(float Damage, float OldHP, float Ne
 		return;
 	}
 
+	// 가이드 3절: 16인 중복 방지 — 내가 때린 타격에만 울린다.
+	// Multicast라 모든 클라이언트가 모든 타격을 받으므로 여기서 걸러내지 않으면
+	// 16명분 피격음이 한꺼번에 겹친다.
+	if (SFX_Boss_Hit)
+	{
+		const APawn* CauserPawn = Cast<APawn>(DamageCauser);
+		if (CauserPawn && CauserPawn->IsLocallyControlled())
+		{
+			UGameplayStatics::PlaySound2D(this, SFX_Boss_Hit);
+		}
+	}
+
 	if (UWorld* World = GetWorld())
 	{
 		DrawDebugSphere(World, GetActorLocation(), PrototypeVisualRadiusCm + 16.0f, 16, FColor::Orange, false, 0.40f, 0, 4.0f);
@@ -987,4 +1010,56 @@ void ARaidBoss::OnRep_BossState()
 		ToBossStateLogStringForBoss(BossState),
 		*GetName());
 	BP_OnBossStateChangedVisual(BossState);
+	UpdateBossAudioLocally();
+}
+
+void ARaidBoss::UpdateBossAudioLocally()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	const bool bBossActive = BossState == EBossState::Spawn || BossState == EBossState::Battle;
+
+	if (bBossActive)
+	{
+		if (SFX_Boss_Idle_Loop && !BossIdleLoopAudioComponent)
+		{
+			// 3D Boss. bAutoDestroy = false — 핸들을 들고 있어야 사망·클리어에서 끊을 수 있다.
+			BossIdleLoopAudioComponent = UGameplayStatics::SpawnSoundAttached(
+				SFX_Boss_Idle_Loop,
+				GetRootComponent(),
+				NAME_None,
+				FVector::ZeroVector,
+				EAttachLocation::KeepRelativeOffset,
+				false,
+				1.0f,
+				1.0f,
+				0.0f,
+				BossAudioAttenuation,
+				nullptr,
+				false);
+		}
+		return;
+	}
+
+	StopBossIdleLoop();
+
+	// Dead와 Clear 두 전환에 걸쳐 도착할 수 있어 잠금이 필요하다.
+	if (!bHasPlayedBossDeathSound && SFX_Boss_Death)
+	{
+		bHasPlayedBossDeathSound = true;
+		UGameplayStatics::PlaySoundAtLocation(
+			this, SFX_Boss_Death, GetActorLocation(), 1.0f, 1.0f, 0.0f, BossAudioAttenuation);
+	}
+}
+
+void ARaidBoss::StopBossIdleLoop()
+{
+	if (BossIdleLoopAudioComponent)
+	{
+		BossIdleLoopAudioComponent->Stop();
+		BossIdleLoopAudioComponent = nullptr;
+	}
 }
