@@ -5453,6 +5453,68 @@ bool FDroneCombatVisualHooksTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneAttackVisualPayloadTest,
+	"DroneProto.D19.CombatVisual.AttackPayload",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneAttackVisualPayloadTest::RunTest(const FString& Parameters)
+{
+	// (1) 순수 규칙 계층 — 강화 변형 판정은 무기 종류마다 근거가 다르다.
+	const auto ExpectStrongVariant = [this](EDroneCombatWeaponType WeaponType, int32 PulseCount, float VectorMeters, bool bExpected, const TCHAR* Label)
+	{
+		FDroneWeaponCalculationInput Input;
+		Input.WeaponType = WeaponType;
+		Input.PulseAttackCount = PulseCount;
+		Input.VectorAccumulatedMoveDistanceMeters = VectorMeters;
+		const FDroneWeaponCalculationResult Result = FDroneCombatRules::CalculateWeaponDamage(Input);
+		TestEqual(FString::Printf(TEXT("%s strong variant flag"), Label), Result.bStrongVariant, bExpected);
+	};
+
+	ExpectStrongVariant(EDroneCombatWeaponType::None, 0, 0.0f, false, TEXT("empty weapon"));
+	ExpectStrongVariant(EDroneCombatWeaponType::PulseLaser, 0, 0.0f, false, TEXT("Pulse first"));
+	ExpectStrongVariant(EDroneCombatWeaponType::PulseLaser, 1, 0.0f, false, TEXT("Pulse second"));
+	ExpectStrongVariant(EDroneCombatWeaponType::PulseLaser, 2, 0.0f, true, TEXT("Pulse third"));
+	// 3타 뒤 카운터가 0으로 되감기므로 다음 타격은 다시 Normal이다.
+	ExpectStrongVariant(EDroneCombatWeaponType::PulseLaser, 0, 0.0f, false, TEXT("Pulse after reset"));
+	// Fracture는 BonusDamage가 항상 0보다 크지만 강화 변형이 아니다. 복합 연출 1회로 확정됐다.
+	ExpectStrongVariant(EDroneCombatWeaponType::FractureBurst, 0, 0.0f, false, TEXT("Fracture burst"));
+	ExpectStrongVariant(EDroneCombatWeaponType::VectorCannon, 0, 0.0f, false, TEXT("Vector uncharged"));
+	// 보너스 1칸(5m)에 못 미치면 BonusDamage가 0이라 여전히 Normal이다.
+	ExpectStrongVariant(EDroneCombatWeaponType::VectorCannon, 0, 4.99f, false, TEXT("Vector below first step"));
+	ExpectStrongVariant(EDroneCombatWeaponType::VectorCannon, 0, 5.0f, true, TEXT("Vector first step"));
+	ExpectStrongVariant(EDroneCombatWeaponType::VectorCannon, 0, 43.0f, true, TEXT("Vector capped bonus"));
+
+	// (2) 연출 payload — 서버가 계산 시점에 확정한 값이 그대로 실려 나가는가.
+	FDroneSelectionTestContext PayloadContext = CreateDroneSelectionTestContext(TEXT("AttackVisualPayloadWorld"));
+	ARaidBoss* PayloadBoss = nullptr;
+	if (!PrepareBattleAttackTest(*this, PayloadContext, PayloadBoss, TEXT("attack visual payload")))
+	{
+		DestroyDroneSelectionTestContext(PayloadContext);
+		return false;
+	}
+
+	PayloadBoss->SetActorLocation(FVector(-2000.0f, 0.0f, 0.0f));
+	TestTrue(TEXT("attack visual payload loadout applies"),
+		PayloadContext.Drone->ApplyLoadout(NAME_None, ADronePartInventory::GetPulseLaserPartID(), NAME_None));
+
+	// Pulse는 왼쪽 슬롯에만 있다. 1·2타는 Normal, 3타에서만 Strong이 서야 한다.
+	for (int32 AttackIndex = 1; AttackIndex <= 3; ++AttackIndex)
+	{
+		AttackBossAndMeasureDamage(PayloadContext.Drone, PayloadBoss);
+		const FDroneAttackVisualPayload Payload = PayloadContext.Drone->GetLastCombatVisualAttackPayloadForTest();
+		TestEqual(FString::Printf(TEXT("Pulse hit %d left strong flag"), AttackIndex),
+			Payload.bLeftStrongVariant,
+			AttackIndex == 3);
+		TestFalse(FString::Printf(TEXT("Pulse hit %d right slot stays normal"), AttackIndex),
+			Payload.bRightStrongVariant);
+	}
+
+	DestroyDroneSelectionTestContext(PayloadContext);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneD20LogSemanticsTest,
 	"DroneProto.D20.LogSemantics.NoDamageAttack",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

@@ -101,6 +101,13 @@ struct DRONEPROTO_API FDroneWeaponCalculationResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
 	bool bResetVectorDistance = false;
+
+	// 이번 타격이 그 무기의 강화 변형이었는가. 연출·사운드가 Normal과 Strong을 가르는 유일한 근거다.
+	// 계산 시점에만 확정할 수 있다 — Pulse는 3타에 도달하는 순간 `PulseAttackCount`가 0으로 되감겨
+	// 나중에 값을 다시 읽으면 3타를 구분할 수 없고, Vector는 발사 후 누적 거리가 리셋된다.
+	// Fracture는 항상 false다. 다단히트를 복합 연출 1회로 처리하기로 확정됐다.
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat")
+	bool bStrongVariant = false;
 };
 
 USTRUCT(BlueprintType)
@@ -377,6 +384,7 @@ struct DRONEPROTO_API FDroneCombatRules
 				Result.WeaponDamage = Rule->SpecialValue02;
 				Result.BonusDamage = Result.WeaponDamage - Result.BaseDamage;
 				Result.PulseAttackCount = 0;
+				Result.bStrongVariant = true;
 			}
 			else
 			{
@@ -400,6 +408,7 @@ struct DRONEPROTO_API FDroneCombatRules
 			Result.HitCount = Rule->HitCount;
 			Result.WeaponDamage = Result.BaseDamage + Result.BonusDamage;
 			Result.bResetVectorDistance = true;
+			Result.bStrongVariant = Result.BonusDamage > KINDA_SMALL_NUMBER;
 			break;
 
 		default:

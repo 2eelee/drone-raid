@@ -105,6 +105,30 @@ struct FDroneLastAttackBreakdown
 	float CoreBonusAttackModifier = 1.0f;
 };
 
+/**
+ * 공격 연출이 Normal과 Strong을 가르는 데 필요한 슬롯별 판정값.
+ *
+ * 클라이언트는 이 값을 스스로 알 수 없다 — `LeftPulseAttackCount`/`RightPulseAttackCount`와
+ * `VectorAccumulatedMoveDistanceMeters`는 `Transient`이고 복제되지 않으며, `LastAttackBreakdown`도
+ * 복제 대상이 아니다. 게다가 Pulse 카운터는 3타에서 0으로 되감기므로 연출 시점에 다시 읽으면
+ * 3타를 영영 구분할 수 없다. 그래서 서버가 계산 시점에 확정한 값을 payload로 실어 보낸다.
+ *
+ * 좌우 동일 무기의 중복 재생 방지(dedupe)는 Blueprint가 한다. 여기서는 슬롯별로만 준다.
+ */
+USTRUCT(BlueprintType)
+struct FDroneAttackVisualPayload
+{
+	GENERATED_BODY()
+
+	/** 왼쪽 슬롯이 강화 변형이었는가. Pulse 3타 또는 Vector 충전 발사. */
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat|Visual")
+	bool bLeftStrongVariant = false;
+
+	/** 오른쪽 슬롯이 강화 변형이었는가. 판정 기준은 왼쪽과 같다. */
+	UPROPERTY(BlueprintReadOnly, Category = "Drone|Combat|Visual")
+	bool bRightStrongVariant = false;
+};
+
 UCLASS()
 class DRONEPROTO_API ADrone : public APawn
 {
@@ -277,8 +301,9 @@ public:
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Dodge")
 	void BP_OnDodgeInvincibleVisualChanged(bool bIsInvincibleVisual);
 
+	// `Payload`는 뒤에 붙였다. 기존 BP 노드는 핀이 하나 늘 뿐 재배선이 필요 없다.
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
-	void BP_OnDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
+	void BP_OnDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, FDroneAttackVisualPayload Payload);
 
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
 	void BP_OnDroneDamagedVisual(float Damage, float OldHP, float NewHP);
@@ -293,6 +318,7 @@ public:
 	float GetLastCombatVisualAttackDamageForTest() const;
 	FVector GetLastCombatVisualAttackFromForTest() const;
 	FVector GetLastCombatVisualAttackToForTest() const;
+	FDroneAttackVisualPayload GetLastCombatVisualAttackPayloadForTest() const;
 	int32 GetCombatVisualDroneDamagedCountForTest() const;
 	float GetLastCombatVisualDroneDamageForTest() const;
 	float GetLastCombatVisualDroneDamageOldHPForTest() const;
@@ -758,12 +784,12 @@ private:
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_SetDodgeInvincibleVisual(bool bIsInvincibleVisual);
 	UFUNCTION(NetMulticast, Unreliable)
-	void Multicast_PlayDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
+	void Multicast_PlayDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, FDroneAttackVisualPayload Payload);
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayDroneDamagedVisual(float Damage, float OldHP, float NewHP);
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayDroneDamageIgnoredVisual(FName Reason);
-	void PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To);
+	void PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, const FDroneAttackVisualPayload& Payload);
 	void PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewHP);
 	void PlayDroneDamageIgnoredVisualLocally(FName Reason);
 	void StartDroneHitFlash(float OldHP, float NewHP);
@@ -810,6 +836,7 @@ private:
 	float LastCombatVisualAttackDamageForTest = 0.0f;
 	FVector LastCombatVisualAttackFromForTest = FVector::ZeroVector;
 	FVector LastCombatVisualAttackToForTest = FVector::ZeroVector;
+	FDroneAttackVisualPayload LastCombatVisualAttackPayloadForTest;
 	int32 CombatVisualDroneDamagedCountForTest = 0;
 	float LastCombatVisualDroneDamageForTest = 0.0f;
 	float LastCombatVisualDroneDamageOldHPForTest = 0.0f;

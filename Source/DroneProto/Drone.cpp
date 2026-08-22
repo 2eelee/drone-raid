@@ -1489,6 +1489,11 @@ FVector ADrone::GetLastCombatVisualAttackToForTest() const
 	return LastCombatVisualAttackToForTest;
 }
 
+FDroneAttackVisualPayload ADrone::GetLastCombatVisualAttackPayloadForTest() const
+{
+	return LastCombatVisualAttackPayloadForTest;
+}
+
 int32 ADrone::GetCombatVisualDroneDamagedCountForTest() const
 {
 	return CombatVisualDroneDamagedCountForTest;
@@ -2267,12 +2272,19 @@ void ADrone::HandleAttackBossForServer()
 		const FVector AttackTo = AttackDirection.IsNearlyZero()
 			? Boss->GetActorLocation()
 			: AttackFrom + AttackDirection * AttackDistance;
+		// 강화 변형 판정은 위 `CalculateWeaponDamageForServer` 결과에만 남아 있다.
+		// 여기서 슬롯 상태를 다시 읽으면 Pulse 3타는 이미 카운터가 0으로 되감긴 뒤다.
+		FDroneAttackVisualPayload AttackVisualPayload;
+		AttackVisualPayload.bLeftStrongVariant = LeftWeaponResult.bStrongVariant;
+		AttackVisualPayload.bRightStrongVariant = RightWeaponResult.bStrongVariant;
+
 		Multicast_PlayDroneAttackVisual(
 			EquippedLeftWeaponPartID,
 			EquippedRightWeaponPartID,
 			DamageDealt,
 			AttackFrom,
-			AttackTo);
+			AttackTo,
+			AttackVisualPayload);
 		if (GetNetMode() == NM_Standalone)
 		{
 			PlayDroneAttackVisualLocally(
@@ -2280,7 +2292,8 @@ void ADrone::HandleAttackBossForServer()
 				EquippedRightWeaponPartID,
 				DamageDealt,
 				AttackFrom,
-				AttackTo);
+				AttackTo,
+				AttackVisualPayload);
 		}
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] CombatVisual Attack: Player=%s Damage=%.2f From=%s To=%s AimDirection=%s LeftWeapon=%s RightWeapon=%s"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
@@ -2430,12 +2443,15 @@ bool ADrone::HandleTutorialAttackForServer(ATutorialPlayerController* TutorialPl
 
 	RecordAttackIgnoredForServer(NAME_None);
 	const FVector AttackFrom = GetActorLocation();
+	// 튜토리얼 공격은 무기 피해 계산을 타지 않는다(고정 1.0). 강화 변형이라는 개념이 없으므로 기본값이다.
+	const FDroneAttackVisualPayload TutorialAttackVisualPayload;
 	Multicast_PlayDroneAttackVisual(
 		EquippedLeftWeaponPartID,
 		EquippedRightWeaponPartID,
 		1.0f,
 		AttackFrom,
-		AttackTo);
+		AttackTo,
+		TutorialAttackVisualPayload);
 	if (GetNetMode() == NM_Standalone)
 	{
 		PlayDroneAttackVisualLocally(
@@ -2443,7 +2459,8 @@ bool ADrone::HandleTutorialAttackForServer(ATutorialPlayerController* TutorialPl
 			EquippedRightWeaponPartID,
 			1.0f,
 			AttackFrom,
-			AttackTo);
+			AttackTo,
+			TutorialAttackVisualPayload);
 	}
 
 	return true;
@@ -3351,9 +3368,9 @@ void ADrone::BP_OnDodgeInvincibleVisualChanged_Implementation(bool bIsInvincible
 	SetDodgeInvincibleVisualHidden(bIsInvincibleVisual);
 }
 
-void ADrone::Multicast_PlayDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)
+void ADrone::Multicast_PlayDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, FDroneAttackVisualPayload Payload)
 {
-	PlayDroneAttackVisualLocally(LeftWeaponPartID, RightWeaponPartID, Damage, From, To);
+	PlayDroneAttackVisualLocally(LeftWeaponPartID, RightWeaponPartID, Damage, From, To, Payload);
 }
 
 void ADrone::Multicast_PlayDroneDamagedVisual_Implementation(float Damage, float OldHP, float NewHP)
@@ -3366,9 +3383,9 @@ void ADrone::Multicast_PlayDroneDamageIgnoredVisual_Implementation(FName Reason)
 	PlayDroneDamageIgnoredVisualLocally(Reason);
 }
 
-void ADrone::PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)
+void ADrone::PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, const FDroneAttackVisualPayload& Payload)
 {
-	BP_OnDroneAttackVisual(LeftWeaponPartID, RightWeaponPartID, Damage, From, To);
+	BP_OnDroneAttackVisual(LeftWeaponPartID, RightWeaponPartID, Damage, From, To, Payload);
 	if (GetNetMode() == NM_DedicatedServer)
 	{
 		return;
@@ -3462,15 +3479,17 @@ void ADrone::EndDroneHitFlash()
 	DroneHitFlashPreviousOverlays.Reset();
 }
 
-void ADrone::BP_OnDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To)
+void ADrone::BP_OnDroneAttackVisual_Implementation(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, FDroneAttackVisualPayload Payload)
 {
 	(void)LeftWeaponPartID;
 	(void)RightWeaponPartID;
+	(void)Payload;
 #if WITH_DEV_AUTOMATION_TESTS
 	CombatVisualAttackCountForTest++;
 	LastCombatVisualAttackDamageForTest = Damage;
 	LastCombatVisualAttackFromForTest = From;
 	LastCombatVisualAttackToForTest = To;
+	LastCombatVisualAttackPayloadForTest = Payload;
 #endif
 }
 
