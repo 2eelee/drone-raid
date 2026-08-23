@@ -17,7 +17,7 @@ struct FDroneBossDamageContribution
 	float Damage = 0.0f;
 };
 
-UCLASS()
+UCLASS(Config = Engine, DefaultConfig)
 class DRONEPROTO_API ARaidGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
@@ -97,6 +97,10 @@ public:
 #endif
 
 private:
+	/** Runtime boss class. Empty or invalid config keeps the existing native fallback. */
+	UPROPERTY(EditDefaultsOnly, GlobalConfig, Category = "Raid|Boss")
+	TSubclassOf<ARaidBoss> RaidBossClass;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Raid|Timer", meta = (ClampMin = "1.0"))
 	float RaidTimeLimitSeconds = 180.0f;
 

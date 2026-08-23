@@ -3,6 +3,7 @@
 #include "Balance/BalanceSandboxGameMode.h"
 #include "Engine/World.h"
 #include "Raid/DroneReportWidget.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
 ABalanceSandboxPlayerController::ABalanceSandboxPlayerController()
@@ -20,6 +21,13 @@ ABalanceSandboxPlayerController::ABalanceSandboxPlayerController()
 	if (DroneReportWidgetFinder.Succeeded())
 	{
 		DroneReportWidgetClass = DroneReportWidgetFinder.Class;
+	}
+
+	static ConstructorHelpers::FObjectFinder<USoundBase> RaidBGMFinder(
+		TEXT("/Game/Audio/BGM/Raid_BGM.Raid_BGM"));
+	if (RaidBGMFinder.Succeeded())
+	{
+		BGM_Raid = RaidBGMFinder.Object;
 	}
 }
 

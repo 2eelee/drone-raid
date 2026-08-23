@@ -288,7 +288,7 @@ bool UBalanceSandboxWidget::CreateDroneReport()
 	}
 
 	const bool bCreated = SandboxGameMode->CreateSandboxReportForServer();
-	SetStatusText(bCreated ? TEXT("DroneReport 생성") : TEXT("DroneReport 거부 — 이미 생성됐거나 전투 기록 없음"));
+	SetStatusText(bCreated ? TEXT("DroneReport 열기") : TEXT("DroneReport 거부 — 저장된 전투 기록 없음"));
 	return bCreated;
 }
 

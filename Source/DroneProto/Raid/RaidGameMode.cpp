@@ -219,9 +219,10 @@ ARaidBoss* ARaidGameMode::EnsureRaidBossForServer()
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.Owner = GS;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		UClass* const SpawnClass = RaidBossClass.Get() ? RaidBossClass.Get() : ARaidBoss::StaticClass();
 
 		ExistingBoss = World->SpawnActor<ARaidBoss>(
-			ARaidBoss::StaticClass(),
+			SpawnClass,
 			FVector::ZeroVector,
 			FRotator::ZeroRotator,
 			SpawnParams);

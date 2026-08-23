@@ -399,6 +399,21 @@ bool ABalanceSandboxGameMode::CreateSandboxReportForServer()
 		return false;
 	}
 
+	if (RaidPC->HasDroneReportGenerated())
+	{
+		// ponytail: BalanceMap is single-player; look up by player key if multiplayer sandbox support is added.
+		const TArray<FDroneReportData>& Reports = GetDroneReportDataListForServer();
+		if (Reports.IsEmpty())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[DR_SUMMARY] SandboxReport Result=Fail Reason=StoredReportMissing"));
+			return false;
+		}
+
+		RaidPC->Client_ReceiveDroneReport(Reports.Last());
+		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SandboxReport Result=Reopened"));
+		return true;
+	}
+
 	// 기존 리포트 생성 경로다. 점수·등급·보너스 계산과 1회 제한이 그대로 적용된다.
 	const bool bCreated = RaidPC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] SandboxReport Result=%s"), bCreated ? TEXT("Success") : TEXT("Rejected"));

@@ -9848,6 +9848,121 @@ bool FBalanceSandboxReportDismissKeepsDedupTest::RunTest(const FString& Paramete
 // OpenLevel(LobbyMap)을 직접 부르는 Blueprint 이벤트가 남아 있었고, 그 경로는 컨트롤러에게
 // 아무것도 묻지 않아 샌드박스가 이동을 막아도 그대로 LobbyMap으로 나갔다.
 // 이 테스트는 그 두 번째 경로가 배선 단계에서 걷힌다는 것을 고정한다.
+// Reopening a dismissed sandbox report must reuse the stored result. Creating a second
+// report would either trip dedup or recalculate a different score after combat ended.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxReportButtonReopensStoredReportTest,
+	"DroneProto.BALANCE.Sandbox.ReportButtonReopensStoredReport",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxReportButtonReopensStoredReportTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("SandboxReportReopenWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ABalanceSandboxGameMode* GameMode = World ? World->SpawnActor<ABalanceSandboxGameMode>() : nullptr;
+	ABalanceSandboxPlayerController* SandboxPC = World ? World->SpawnActor<ABalanceSandboxPlayerController>() : nullptr;
+	ADrone* Drone = World ? World->SpawnActor<ADrone>() : nullptr;
+
+	TestNotNull(TEXT("reopen world is created"), World);
+	TestNotNull(TEXT("reopen game state is spawned"), GameState);
+	TestNotNull(TEXT("reopen game mode is spawned"), GameMode);
+	TestNotNull(TEXT("reopen controller is spawned"), SandboxPC);
+	TestNotNull(TEXT("reopen drone is spawned"), Drone);
+	if (!World || !GameState || !GameMode || !SandboxPC || !Drone)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameMode->SetGameStateForTest(GameState);
+	World->AddController(SandboxPC);
+	SandboxPC->Possess(Drone);
+
+	TestTrue(TEXT("the combat result is generated once"),
+		SandboxPC->TryCreateDroneReportForServer(EDroneReportTrigger::RaidTimeLimit, false));
+	TestEqual(TEXT("one report is stored before reopening"),
+		GameMode->GetDroneReportDataListForServer().Num(), 1);
+	TestTrue(TEXT("the report button reopens the stored result"),
+		GameMode->CreateSandboxReportForServer());
+	TestEqual(TEXT("reopening does not generate another report"),
+		GameMode->GetDroneReportDataListForServer().Num(), 1);
+	TestTrue(TEXT("reopening keeps server dedup armed"), SandboxPC->HasDroneReportGeneratedForTest());
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+// BalanceMap destroys its boss during reset. The next Ensure call must recreate the
+// configured Blueprint class so boss and pattern asset wiring survives every cycle.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxResetRespawnsConfiguredBossTest,
+	"DroneProto.BALANCE.Sandbox.ResetRespawnsConfiguredBoss",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxResetRespawnsConfiguredBossTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("SandboxConfiguredBossWorld")));
+	ARaidGameState* GameState = World ? World->SpawnActor<ARaidGameState>() : nullptr;
+	ABalanceSandboxGameMode* GameMode = World ? World->SpawnActor<ABalanceSandboxGameMode>() : nullptr;
+	TestNotNull(TEXT("configured boss world is created"), World);
+	TestNotNull(TEXT("configured boss game state is spawned"), GameState);
+	TestNotNull(TEXT("configured boss game mode is spawned"), GameMode);
+	if (!World || !GameState || !GameMode)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	World->SetGameState(GameState);
+	GameMode->SetGameStateForTest(GameState);
+	ARaidBoss* Boss = GameMode->EnsureRaidBossForServer();
+	TestNotNull(TEXT("Ensure spawns a boss after reset"), Boss);
+	if (Boss)
+	{
+		TestEqual(TEXT("the configured Blueprint boss is spawned"),
+			Boss->GetClass()->GetPathName(),
+			FString(TEXT("/Game/Blueprints/Raid/BP_RaidBoss.BP_RaidBoss_C")));
+	}
+
+	World->DestroyWorld(false);
+	return true;
+}
+
+// BalanceMap uses the native sandbox controller, not BP_RaidPlayerController. Its CDO
+// therefore needs the raid BGM assigned explicitly or BeginPlay exits with silence.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBalanceSandboxRaidBGMBootstrapTest,
+	"DroneProto.BALANCE.Sandbox.RaidBGMBootstrap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBalanceSandboxRaidBGMBootstrapTest::RunTest(const FString& Parameters)
+{
+	const ABalanceSandboxPlayerController* Defaults = GetDefault<ABalanceSandboxPlayerController>();
+	const FObjectPropertyBase* BGMProperty = FindFProperty<FObjectPropertyBase>(
+		ARaidPlayerController::StaticClass(), TEXT("BGM_Raid"));
+	TestNotNull(TEXT("the inherited raid BGM property exists"), BGMProperty);
+	if (!Defaults || !BGMProperty)
+	{
+		return false;
+	}
+
+	const UObject* RaidBGM = BGMProperty->GetObjectPropertyValue_InContainer(Defaults);
+	TestNotNull(TEXT("the sandbox controller bootstraps raid BGM"), RaidBGM);
+	if (RaidBGM)
+	{
+		TestEqual(TEXT("the sandbox uses the production raid BGM asset"),
+			RaidBGM->GetPathName(), FString(TEXT("/Game/Audio/BGM/Raid_BGM.Raid_BGM")));
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDroneReportConfirmButtonSingleClickPathTest,
 	"DroneProto.D11.DroneReport.ConfirmButtonHasOneClickPath",
