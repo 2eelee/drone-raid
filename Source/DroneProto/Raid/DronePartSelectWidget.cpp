@@ -14,6 +14,18 @@
 #include "UObject/FieldIterator.h"
 #include "UObject/UnrealType.h"
 
+FText UDronePartSelectWidget::GetControlGuideText()
+{
+	// 기획 원문 `현현_드론부품선택시스템_기획서.md:359-371` `(5) 조작 방식 팝업`의 표시 정보를 그대로 옮긴다.
+	// 종전 한 줄 문구(`↑/↓ 항목 이동 …`)는 원문의 `슬롯`·`드론부품` 용어와 콜론 표기를 잃어버려 교체했다.
+	return FText::FromString(
+		TEXT("조작 방식\n")
+		TEXT("↑↓: 슬롯 이동\n")
+		TEXT("←→: 드론부품 변경\n")
+		TEXT("Z: 선택\n")
+		TEXT("C: 취소"));
+}
+
 void UDronePartSelectWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -170,8 +182,7 @@ void UDronePartSelectWidget::RefreshFromController()
 
 	if (Text_ControlGuide)
 	{
-		Text_ControlGuide->SetText(FText::FromString(
-			TEXT("↑/↓ 항목 이동   ←/→ 부품 변경   Z 선택·참가   C 취소")));
+		Text_ControlGuide->SetText(GetControlGuideText());
 	}
 
 	UE_LOG(LogTemp, VeryVerbose, TEXT("[Client] DronePartSelectWidget RefreshFromController: Player=%s FocusedSlot=%s Core=%s Right=%s Left=%s"),
