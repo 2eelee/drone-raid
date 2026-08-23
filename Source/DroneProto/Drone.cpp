@@ -737,6 +737,10 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 			*RequestedLocation.ToString());
 	}
 	FVector FinalLocation = ClampFinalMovementPositionForServer(RequestedLocation);
+	const FVector ActualDodgeDirection = (FinalLocation - StartLocation).GetSafeNormal2D();
+	const FVector DodgeVisualDirection = ActualDodgeDirection.IsNearlyZero()
+		? DodgeDirection
+		: ActualDodgeDirection;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	LastDodgeIgnoredReasonForTest = NAME_None;
@@ -744,6 +748,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	bIsDodging = true;
 	bIsInvincible = true;
 	LastServerMoveInput = FVector2D::ZeroVector;
+	ApplyDodgeVisualDirectionLocally(DodgeVisualDirection);
 	ApplyDodgeVisualStateLocally(true);
 	// 권한 측(Standalone·리슨 서버)의 회피음 진입점. 원격 클라이언트는 `OnRep_IsDodging`이 받는다.
 	// 데디케이티드 서버에서는 `PlayLocal2DSound`가 넷모드로 걸러낸다.
@@ -784,7 +789,7 @@ bool ADrone::RequestDodgeForServer(FVector2D RawDirection)
 	}
 
 	const float PlannedDistanceMeters = FVector::Dist2D(StartLocation, FinalLocation) * MoveDistanceCmToMeters;
-	Multicast_SetDodgeInvincibleVisual(true);
+	Multicast_SetDodgeInvincibleVisual(true, DodgeVisualDirection);
 	ApplyDodgeInvincibleVisualLocally(true);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleStart Player=%s Duration=%.2f"),
 		*BuildDroneControllerLogString(PlayerPC),
@@ -3004,7 +3009,7 @@ void ADrone::CancelDodgeForServer(FName Reason)
 	bHasMoveDistanceSample = true;
 	if (bHadInvincibleVisual)
 	{
-		Multicast_SetDodgeInvincibleVisual(false);
+		Multicast_SetDodgeInvincibleVisual(false, FVector::ZeroVector);
 		ApplyDodgeInvincibleVisualLocally(false);
 		UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge VisualShown: Player=%s Reason=%s"),
 			*BuildDroneControllerLogString(Cast<AController>(GetController())),
@@ -3382,8 +3387,14 @@ void ADrone::ClearDodgeInterpolationForServer()
 	DodgeAccumulatedActualDistanceMetersForServer = 0.0f;
 }
 
-void ADrone::Multicast_SetDodgeInvincibleVisual_Implementation(bool bIsInvincibleVisual)
+void ADrone::Multicast_SetDodgeInvincibleVisual_Implementation(
+	bool bIsInvincibleVisual,
+	FVector_NetQuantizeNormal DodgeVisualDirection)
 {
+	if (bIsInvincibleVisual)
+	{
+		ApplyDodgeVisualDirectionLocally(DodgeVisualDirection);
+	}
 	ApplyDodgeInvincibleVisualLocally(bIsInvincibleVisual);
 }
 
@@ -3411,6 +3422,21 @@ void ADrone::ApplyDodgeVisualStateLocally(bool bDodging)
 	}
 
 	DodgeTeleportVFX->Deactivate();
+}
+
+void ADrone::ApplyDodgeVisualDirectionLocally(const FVector& DodgeVisualDirection)
+{
+	if (GetNetMode() == NM_DedicatedServer || !DodgeTeleportVFX)
+	{
+		return;
+	}
+
+	const FVector Direction2D = DodgeVisualDirection.GetSafeNormal2D();
+	if (!Direction2D.IsNearlyZero())
+	{
+		DodgeTeleportVFX->SetAbsolute(false, true, false);
+		DodgeTeleportVFX->SetWorldRotation(Direction2D.Rotation());
+	}
 }
 
 void ADrone::BP_OnDodgeInvincibleVisualChanged_Implementation(bool bIsInvincibleVisual)
@@ -3892,7 +3918,7 @@ void ADrone::EndDodgeInvincibilityForServer()
 	}
 
 	bIsInvincible = false;
-	Multicast_SetDodgeInvincibleVisual(false);
+	Multicast_SetDodgeInvincibleVisual(false, FVector::ZeroVector);
 	ApplyDodgeInvincibleVisualLocally(false);
 	UE_LOG(LogTemp, Log, TEXT("[DR_SUMMARY] Dodge InvincibleEnd Player=%s"),
 		*BuildDroneControllerLogString(Cast<AController>(GetController())));

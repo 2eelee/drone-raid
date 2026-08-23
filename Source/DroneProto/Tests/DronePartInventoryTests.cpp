@@ -4899,6 +4899,64 @@ bool FDroneDodgeTeleportVisualLifecycleTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDodgeTeleportVisualDirectionTest,
+	"DroneProto.D14_6.Drone.DodgeTeleportVisualDirection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDodgeTeleportVisualDirectionTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneDodgeTeleportVisualDirectionWorld"));
+	TestNotNull(TEXT("dodge teleport direction world is created"), Context.World);
+	TestNotNull(TEXT("dodge teleport direction game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("dodge teleport direction player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("dodge teleport direction drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ARaidBoss* Boss = Context.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("dodge teleport direction boss is spawned"), Boss);
+	if (Boss)
+	{
+		Boss->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
+		Context.GameState->SetRaidBossForServer(Boss);
+	}
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+	Context.Drone->SetActorRotation(FRotator(0.0f, 90.0f, 0.0f));
+
+	UNiagaraComponent* DodgeTeleportVFX = nullptr;
+	TArray<UNiagaraComponent*> NiagaraComponents;
+	Context.Drone->GetComponents<UNiagaraComponent>(NiagaraComponents);
+	for (UNiagaraComponent* NiagaraComponent : NiagaraComponents)
+	{
+		if (NiagaraComponent && NiagaraComponent->GetFName() == FName(TEXT("DodgeTeleportVFX")))
+		{
+			DodgeTeleportVFX = NiagaraComponent;
+			break;
+		}
+	}
+
+	TestNotNull(TEXT("drone owns directional DodgeTeleportVFX component"), DodgeTeleportVFX);
+	if (DodgeTeleportVFX)
+	{
+		TestTrue(TEXT("dodge starts along world +X while drone faces world +Y"),
+			Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
+		TestTrue(TEXT("teleport VFX local +X aligns with actual world dodge direction"),
+			DodgeTeleportVFX->GetForwardVector().Equals(FVector::ForwardVector, 0.01f));
+
+		Context.Drone->SetActorRotation(FRotator(0.0f, -90.0f, 0.0f));
+		TestTrue(TEXT("teleport VFX direction does not follow later drone facing changes"),
+			DodgeTeleportVFX->GetForwardVector().Equals(FVector::ForwardVector, 0.01f));
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRaidBossSpecMaxHPTest,
 	"DroneProto.Q1.RaidBoss.SpecMaxHP",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
