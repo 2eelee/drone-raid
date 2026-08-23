@@ -4973,12 +4973,12 @@ bool FDroneDodgeTeleportVisualDirectionTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("dodge starts along world +X while drone faces world +Y"),
 			Context.Drone->RequestDodgeForServer(FVector2D(1.0f, 0.0f)));
-		TestTrue(TEXT("teleport VFX authored local +Z aligns with actual world dodge direction"),
-			DodgeTeleportVFX->GetUpVector().Equals(FVector::ForwardVector, 0.01f));
+		TestTrue(TEXT("teleport VFX local +X aligns with actual world dodge direction"),
+			DodgeTeleportVFX->GetForwardVector().Equals(FVector::ForwardVector, 0.01f));
 
 		Context.Drone->SetActorRotation(FRotator(0.0f, -90.0f, 0.0f));
 		TestTrue(TEXT("teleport VFX direction does not follow later drone facing changes"),
-			DodgeTeleportVFX->GetUpVector().Equals(FVector::ForwardVector, 0.01f));
+			DodgeTeleportVFX->GetForwardVector().Equals(FVector::ForwardVector, 0.01f));
 	}
 
 	DestroyDroneSelectionTestContext(Context);

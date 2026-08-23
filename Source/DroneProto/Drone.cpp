@@ -3435,7 +3435,7 @@ void ADrone::ApplyDodgeVisualDirectionLocally(const FVector& DodgeVisualDirectio
 	if (!Direction2D.IsNearlyZero())
 	{
 		DodgeTeleportVFX->SetAbsolute(false, true, false);
-		DodgeTeleportVFX->SetWorldRotation(FQuat::FindBetweenNormals(FVector::UpVector, Direction2D));
+		DodgeTeleportVFX->SetWorldRotation(Direction2D.Rotation());
 	}
 }
 
