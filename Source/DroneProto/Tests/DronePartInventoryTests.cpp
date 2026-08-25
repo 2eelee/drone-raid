@@ -38,6 +38,7 @@
 #include "Components/Button.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableTextBox.h"
+#include "Components/SceneComponent.h"
 #include "Components/TextBlock.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
@@ -10370,6 +10371,186 @@ bool FDroneReportConfirmButtonSingleClickPathTest::RunTest(const FString& Parame
 	TestEqual(TEXT("one click produces exactly one confirm handling"),
 		Widget->GetReturnToLobbyTravelRequestCountForTest(), 1);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectTimerFixedCentisecondsTest,
+	"DroneProto.D5.DronePartSelectUI.TimerUsesFixedCentiseconds",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectTimerFixedCentisecondsTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DronePartSelectTimerFormatWorld"));
+	TestNotNull(TEXT("timer format world is created"), Context.World);
+	TestNotNull(TEXT("timer format player controller is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	Context.PC->SetPlayer(LocalPlayer);
+	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* Widget = WidgetClass
+		? CreateWidget<UDronePartSelectWidget>(Context.PC, WidgetClass)
+		: nullptr;
+	TestNotNull(TEXT("timer format widget class loads"), WidgetClass);
+	TestNotNull(TEXT("timer format widget is created"), Widget);
+	if (!Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	AddExpectedError(TEXT("DronePartSelectWidget has no ARaidPlayerController owning player"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedError(TEXT("RefreshFromController skipped: Owning ARaidPlayerController is missing"), EAutomationExpectedErrorFlags::Contains, 1);
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[Widget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(Window, false);
+
+	FObjectProperty* CachedControllerProperty = FindFProperty<FObjectProperty>(
+		UDronePartSelectWidget::StaticClass(),
+		TEXT("CachedRaidPlayerController"));
+	TestNotNull(TEXT("timer format widget controller cache is reflected"), CachedControllerProperty);
+	if (CachedControllerProperty)
+	{
+		CachedControllerProperty->SetObjectPropertyValue_InContainer(Widget, Context.PC);
+	}
+	UFunction* RefreshFunction = Widget->FindFunction(TEXT("HandlePartSelectUIRefreshRequested"));
+	TestNotNull(TEXT("timer format widget exposes its native refresh callback"), RefreshFunction);
+	UTextBlock* TimerText = Widget->WidgetTree
+		? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("TimerText")))
+		: nullptr;
+	TestNotNull(TEXT("selection widget binds TimerText"), TimerText);
+
+	const auto TestRemainingTime = [this, &Context, Widget, RefreshFunction, TimerText](
+		float RemainingSeconds,
+		const TCHAR* ExpectedText,
+		const TCHAR* Label)
+	{
+		TestTrue(
+			FString::Printf(TEXT("%s end time is injected"), Label),
+			SetFloatPropertyForAutomationTest(
+				Context.PC,
+				FName(TEXT("SelectionEndServerTime")),
+				RemainingSeconds));
+		if (RefreshFunction)
+		{
+			Widget->ProcessEvent(RefreshFunction, nullptr);
+		}
+		TestEqual(
+			FString::Printf(TEXT("%s uses fixed SS:ff text"), Label),
+			TimerText ? TimerText->GetText().ToString() : FString(),
+			FString(ExpectedText));
+	};
+
+	TestRemainingTime(15.0f, TEXT("15:00"), TEXT("selection start"));
+	TestRemainingTime(14.999f, TEXT("15:00"), TEXT("sub-centisecond start boundary"));
+	TestRemainingTime(0.01f, TEXT("00:01"), TEXT("one centisecond remaining"));
+	TestRemainingTime(0.001f, TEXT("00:01"), TEXT("positive fractional centisecond"));
+	TestRemainingTime(0.0f, TEXT("00:00"), TEXT("selection end"));
+	TestRemainingTime(-0.01f, TEXT("00:00"), TEXT("expired selection"));
+
+	FSlateApplication::Get().RequestDestroyWindow(Window);
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneEngineAndIdlePresentationTest,
+	"DroneProto.DroneVisual.EngineAndIdlePresentation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneEngineAndIdlePresentationTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, FName(TEXT("DroneEngineIdlePresentationWorld")));
+	UClass* DroneClass = LoadClass<ADrone>(nullptr, TEXT("/Game/Blueprints/BP_Drone.BP_Drone_C"));
+	if (World)
+	{
+		World->InitializeActorsForPlay(FURL());
+	}
+	ADrone* Drone = World && DroneClass ? World->SpawnActor<ADrone>(DroneClass) : nullptr;
+	TestNotNull(TEXT("presentation world is created"), World);
+	TestNotNull(TEXT("BP_Drone class loads"), DroneClass);
+	TestNotNull(TEXT("BP_Drone is spawned"), Drone);
+	if (!World || !Drone)
+	{
+		if (World)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	USceneComponent* VisualRoot = nullptr;
+	UStaticMeshComponent* DroneMesh = nullptr;
+	UNiagaraComponent* EngineVFX = nullptr;
+	TArray<USceneComponent*> SceneComponents;
+	Drone->GetComponents<USceneComponent>(SceneComponents);
+	for (USceneComponent* Component : SceneComponents)
+	{
+		if (!Component)
+		{
+			continue;
+		}
+		if (Component->GetFName() == FName(TEXT("DroneVisualRoot")))
+		{
+			VisualRoot = Component;
+		}
+		else if (Component->GetFName() == FName(TEXT("Cube")))
+		{
+			DroneMesh = Cast<UStaticMeshComponent>(Component);
+		}
+		else if (Component->GetFName() == FName(TEXT("DroneEngineVFX")))
+		{
+			EngineVFX = Cast<UNiagaraComponent>(Component);
+		}
+	}
+
+	TestNotNull(TEXT("drone has a presentation-only visual root"), VisualRoot);
+	TestNotNull(TEXT("BP_Drone keeps its visible mesh"), DroneMesh);
+	TestNotNull(TEXT("drone has the engine Niagara component"), EngineVFX);
+	if (VisualRoot)
+	{
+		TestEqual(TEXT("visual root stays under the gameplay root"),
+			VisualRoot->GetAttachParent(), Drone->GetRootComponent());
+	}
+	if (DroneMesh)
+	{
+		TestEqual(FString::Printf(
+			TEXT("visible mesh is routed through the visual root (actual parent: %s)"),
+			DroneMesh->GetAttachParent() ? *DroneMesh->GetAttachParent()->GetName() : TEXT("None")),
+			DroneMesh->GetAttachParent(), VisualRoot);
+	}
+	if (EngineVFX)
+	{
+		TestEqual(TEXT("engine VFX follows the visual root"),
+			EngineVFX->GetAttachParent(), VisualRoot);
+		TestNotNull(TEXT("engine VFX has a Niagara system"), EngineVFX->GetAsset());
+		if (EngineVFX->GetAsset())
+		{
+			TestEqual(TEXT("engine VFX uses NS_Drone_Engine"),
+				EngineVFX->GetAsset()->GetPathName(),
+				FString(TEXT("/Game/VFX/Particle/NS_Drone_Engine.NS_Drone_Engine")));
+		}
+	}
+
+	const FVector GameplayLocationBefore = Drone->GetActorLocation();
+	Drone->TickForTest(0.5f);
+	TestEqual(TEXT("idle presentation never changes the gameplay actor location"),
+		Drone->GetActorLocation(), GameplayLocationBefore);
+	if (VisualRoot)
+	{
+		TestTrue(TEXT("idle presentation gives the visual root a visible vertical offset"),
+			VisualRoot->GetRelativeLocation().Z > 0.0f);
+	}
+
+	World->DestroyWorld(false);
 	return true;
 }
 
