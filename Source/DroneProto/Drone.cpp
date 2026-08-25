@@ -219,12 +219,22 @@ ADrone::ADrone()
 	USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
 
+	DroneVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("DroneVisualRoot"));
+	DroneVisualRoot->SetupAttachment(RootComponent);
+
 	DodgeTeleportVFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("DodgeTeleportVFX"));
 	DodgeTeleportVFX->SetupAttachment(RootComponent);
 	DodgeTeleportVFX->SetAutoActivate(false);
 	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> DodgeTeleportVFXAsset(
 		TEXT("/Game/VFX/Particle/NS_Drone_Teleport.NS_Drone_Teleport"));
 	DodgeTeleportVFX->SetAsset(DodgeTeleportVFXAsset.Object);
+
+	DroneEngineVFX = CreateDefaultSubobject<UNiagaraComponent>(TEXT("DroneEngineVFX"));
+	DroneEngineVFX->SetupAttachment(DroneVisualRoot);
+	DroneEngineVFX->SetAutoActivate(true);
+	static ConstructorHelpers::FObjectFinder<UNiagaraSystem> DroneEngineVFXAsset(
+		TEXT("/Game/VFX/Particle/NS_Drone_Engine.NS_Drone_Engine"));
+	DroneEngineVFX->SetAsset(DroneEngineVFXAsset.Object);
 
 	FloatingMovement = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("FloatingMovement"));
 	if (FloatingMovement)
@@ -250,6 +260,26 @@ ADrone::ADrone()
 	CombatCameraComponent->SetupAttachment(CombatCameraSpringArm, USpringArmComponent::SocketName);
 	CombatCameraComponent->bUsePawnControlRotation = false;
 	CombatCameraComponent->SetFieldOfView(CombatCameraFOV);
+}
+
+void ADrone::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+
+	if (!DroneVisualRoot)
+	{
+		return;
+	}
+
+	TArray<UMeshComponent*> VisualMeshes;
+	GetComponents<UMeshComponent>(VisualMeshes);
+	for (UMeshComponent* VisualMesh : VisualMeshes)
+	{
+		if (VisualMesh && VisualMesh->GetAttachParent() == RootComponent)
+		{
+			VisualMesh->AttachToComponent(DroneVisualRoot, FAttachmentTransformRules::KeepRelativeTransform);
+		}
+	}
 }
 
 void ADrone::BeginPlay()
@@ -321,8 +351,34 @@ void ADrone::Tick(float DeltaSeconds)
 		UpdateVectorChargeVisualForServer();
 	}
 
+	UpdateIdleVisualLocally(DeltaSeconds);
 	UpdateLocalCombatCamera(DeltaSeconds);
 	UpdateAudioLoopsLocally(DeltaSeconds);
+}
+
+void ADrone::UpdateIdleVisualLocally(float DeltaSeconds)
+{
+	if (GetNetMode() == NM_DedicatedServer || !DroneVisualRoot)
+	{
+		return;
+	}
+
+	const FVector ActorLocation = GetActorLocation();
+	const float PlanarDistance = bHasIdleVisualActorLocation
+		? FVector::Dist2D(ActorLocation, LastIdleVisualActorLocation)
+		: 0.0f;
+	LastIdleVisualActorLocation = ActorLocation;
+	bHasIdleVisualActorLocation = true;
+
+	IdleBobElapsedSeconds += FMath::Max(0.0f, DeltaSeconds);
+	const bool bIdle = !bIsDead
+		&& !bIsDodging
+		&& (DeltaSeconds <= KINDA_SMALL_NUMBER || PlanarDistance / DeltaSeconds <= 1.0f);
+	const float OffsetZ = bIdle
+		? FMath::Max(0.0f, IdleBobAmplitudeCm)
+			* FMath::Sin(2.0f * UE_PI * FMath::Max(0.0f, IdleBobFrequencyHz) * IdleBobElapsedSeconds)
+		: 0.0f;
+	DroneVisualRoot->SetRelativeLocation(FVector(0.0f, 0.0f, OffsetZ));
 }
 
 void ADrone::EndPlay(const EEndPlayReason::Type EndPlayReason)

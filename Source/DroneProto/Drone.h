@@ -382,6 +382,7 @@ public:
 #endif
 
 protected:
+	virtual void PostInitializeComponents() override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -393,6 +394,29 @@ protected:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 private:
+	/** 실제 위치·충돌·복제와 분리된 메시/VFX 전용 부유 루트. */
+	UPROPERTY(VisibleDefaultsOnly, Category = "Drone|Visual", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USceneComponent> DroneVisualRoot = nullptr;
+
+	/** 이동 속도를 자체 Owner Velocity로 읽는 드론 추진광 Niagara. */
+	UPROPERTY(VisibleDefaultsOnly, Category = "Drone|Visual", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UNiagaraComponent> DroneEngineVFX = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Visual|Idle", meta = (ClampMin = "0.0", Units = "cm", AllowPrivateAccess = "true"))
+	float IdleBobAmplitudeCm = 12.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Drone|Visual|Idle", meta = (ClampMin = "0.0", Units = "Hz", AllowPrivateAccess = "true"))
+	float IdleBobFrequencyHz = 0.5f;
+
+	UPROPERTY(Transient)
+	float IdleBobElapsedSeconds = 0.0f;
+
+	UPROPERTY(Transient)
+	FVector LastIdleVisualActorLocation = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	bool bHasIdleVisualActorLocation = false;
+
 	UPROPERTY(VisibleAnywhere)
 	UFloatingPawnMovement* FloatingMovement;
 
@@ -858,6 +882,7 @@ private:
 	void EmitAttackResolvedForServer(FName Result, FName Reason, float RawDamage, float AppliedDamage, float HealAmount, float BossHPBefore, float BossHPAfter);
 	void LogDeadInputIgnored(const TCHAR* ActionName) const;
 	void UpdateLocalCombatCamera(float DeltaSeconds);
+	void UpdateIdleVisualLocally(float DeltaSeconds);
 	void DisableLocalCombatCameraRotationInput(APlayerController* PC);
 	ARaidBoss* FindRaidBossForLocalCamera() const;
 	FRotator ResolveLocalCameraRelativeInputRotation() const;
