@@ -1,4 +1,4 @@
-﻿#include "DronePartSelectWidget.h"
+#include "DronePartSelectWidget.h"
 
 #include "Components/Button.h"
 #include "Components/Border.h"
@@ -255,21 +255,24 @@ void UDronePartSelectWidget::RefreshFromController()
 	RefreshSlot(
 		EDronePartSlot::Core,
 		GetPreviewPartIDForSlot(EDronePartSlot::Core),
-		Text_CoreDescription,
+		Text_CoreName,
+		Text_CoreBody,
 		Text_CoreCount,
 		Image_Core);
 
 	RefreshSlot(
 		EDronePartSlot::RightWeapon,
 		GetPreviewPartIDForSlot(EDronePartSlot::RightWeapon),
-		Text_RightWeaponDescription,
+		Text_RightName,
+		Text_RightBody,
 		Text_RightWeaponCount,
 		Image_RightWeapon);
 
 	RefreshSlot(
 		EDronePartSlot::LeftWeapon,
 		GetPreviewPartIDForSlot(EDronePartSlot::LeftWeapon),
-		Text_LeftWeaponDescription,
+		Text_LeftName,
+		Text_LeftBody,
 		Text_LeftWeaponCount,
 		Image_LeftWeapon);
 
@@ -618,20 +621,6 @@ void UDronePartSelectWidget::ApplyPlanningLayout()
 		FLinearColor(0.27f, 0.93f, 0.45f, 0.92f), -20);
 	AddPanel(TEXT("Planning_LeftCard"), FVector2D(0.0f, 220.0f), FVector2D(520.0f, 190.0f),
 		FLinearColor(0.33f, 0.62f, 0.96f, 0.92f), -20);
-	// 설명 패널은 카드 바깥 가장자리에서 190px 떨어뜨리고 폭을 440으로 통일한다.
-	// 종전에는 간격이 코어 190 / 우측 무기 120 / 좌측 무기 170으로 제각각이라
-	// 우측 무기 설명이 화살표 버튼에 붙어 보였다. 폭 440은 좌우 화면 여백을 70으로 대칭시킨다
-	// (앵커가 화면 중앙이므로 1920 기준 바깥 끝이 ±890이다).
-	// 카드 절반폭: 코어 140, 무기 260. 설명 절반폭 220. 따라서 중심 오프셋은 카드절반 + 190 + 220이다.
-	AddPanel(TEXT("Planning_CoreDescription"), FVector2D(550.0f, -350.0f), FVector2D(440.0f, 200.0f),
-		FLinearColor(0.80f, 0.96f, 0.65f, 0.95f), -20);
-	AddPanel(TEXT("Planning_RightDescription"), FVector2D(-670.0f, -70.0f), FVector2D(440.0f, 190.0f),
-		FLinearColor(1.0f, 0.85f, 0.72f, 0.95f), -20);
-	AddPanel(TEXT("Planning_LeftDescription"), FVector2D(670.0f, 220.0f), FVector2D(440.0f, 190.0f),
-		FLinearColor(0.52f, 0.93f, 0.91f, 0.95f), -20);
-	AddPanel(TEXT("Planning_Timer"), FVector2D(-660.0f, 410.0f), FVector2D(420.0f, 120.0f),
-		FLinearColor(0.72f, 0.74f, 0.78f, 0.98f), -20);
-
 	// 목업 `08` 확정 계약: `슬롯 하단 중앙에 회색 원형(남은 수량 표시 위치)이 붙는다`.
 	// 원형은 에셋 없이 `RoundedBox` + `HalfHeightRadius`로 그린다 — 정사각형이면 정원이 된다.
 	// 수량 텍스트를 배지의 Content로 넣어 세로·가로 중앙을 Border가 잡게 한다.
@@ -738,9 +727,6 @@ void UDronePartSelectWidget::ApplyPlanningLayout()
 	const FSlateColor PrimaryTextColor(FLinearColor(0.05f, 0.08f, 0.12f, 1.0f));
 	for (UTextBlock* TextBlock : {
 		Text_ControlGuide.Get(),
-		Text_CoreDescription.Get(),
-		Text_RightWeaponDescription.Get(),
-		Text_LeftWeaponDescription.Get(),
 		Text_CoreCount.Get(),
 		Text_RightWeaponCount.Get(),
 		Text_LeftWeaponCount.Get(),
@@ -1009,7 +995,8 @@ void UDronePartSelectWidget::SetFocusedSlot(EDronePartSlot NewFocusedSlot)
 void UDronePartSelectWidget::RefreshSlot(
 	EDronePartSlot PartSlot,
 	FName PartID,
-	UTextBlock* DescriptionText,
+	UTextBlock* NameText,
+	UTextBlock* BodyText,
 	UTextBlock* CountText,
 	UImage* Image) const
 {
@@ -1020,9 +1007,13 @@ void UDronePartSelectWidget::RefreshSlot(
 
 	if (PartID.IsNone())
 	{
-		if (DescriptionText)
+		if (NameText)
 		{
-			DescriptionText->SetText(FText::FromString(TEXT("부품 없음")));
+			NameText->SetText(FText::FromString(TEXT("부품 없음")));
+		}
+		if (BodyText)
+		{
+			BodyText->SetText(FText::GetEmpty());
 		}
 		if (CountText)
 		{
@@ -1042,13 +1033,16 @@ void UDronePartSelectWidget::RefreshSlot(
 	const bool bIsSelected = SelectedPartID == PartID;
 	const bool bIsFocused = !bCombatStartFocused && FocusedSlot == PartSlot;
 
-	if (DescriptionText)
+	if (NameText)
 	{
-		DescriptionText->SetText(FText::Format(
-			FText::FromString(TEXT("{0}{1}\n{2}")),
+		NameText->SetText(FText::Format(
+			FText::FromString(TEXT("{0}{1}")),
 			bIsFocused ? FText::FromString(TEXT("> ")) : FText::GetEmpty(),
-			DisplayName,
-			Description));
+			DisplayName));
+	}
+	if (BodyText)
+	{
+		BodyText->SetText(Description);
 	}
 
 	if (CountText)
@@ -1235,17 +1229,29 @@ void UDronePartSelectWidget::SetLoadingText(const FString& Reason)
 	const FText LoadingText = FText::FromString(TEXT("부품 재고 동기화 중..."));
 	const FText CountText = FText::FromString(TEXT("남은 수량: 동기화 중"));
 
-	if (Text_CoreDescription)
+	if (Text_CoreName)
 	{
-		Text_CoreDescription->SetText(LoadingText);
+		Text_CoreName->SetText(LoadingText);
 	}
-	if (Text_RightWeaponDescription)
+	if (Text_CoreBody)
 	{
-		Text_RightWeaponDescription->SetText(LoadingText);
+		Text_CoreBody->SetText(FText::GetEmpty());
 	}
-	if (Text_LeftWeaponDescription)
+	if (Text_RightName)
 	{
-		Text_LeftWeaponDescription->SetText(LoadingText);
+		Text_RightName->SetText(LoadingText);
+	}
+	if (Text_RightBody)
+	{
+		Text_RightBody->SetText(FText::GetEmpty());
+	}
+	if (Text_LeftName)
+	{
+		Text_LeftName->SetText(LoadingText);
+	}
+	if (Text_LeftBody)
+	{
+		Text_LeftBody->SetText(FText::GetEmpty());
 	}
 	if (Text_CoreCount)
 	{

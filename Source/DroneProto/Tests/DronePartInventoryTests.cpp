@@ -39,7 +39,9 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableTextBox.h"
 #include "Components/SceneComponent.h"
+#include "Components/ScaleBox.h"
 #include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
 #include "Blueprint/WidgetTree.h"
 #include "Engine/DataTable.h"
 #include "Engine/Engine.h"
@@ -3638,6 +3640,113 @@ bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters
 			AddError(TEXT("planning core card is not attached to the selection canvas"));
 		}
 
+		struct FDescriptionPanelExpectation
+		{
+			const TCHAR* PanelName;
+			const TCHAR* VerticalBoxName;
+			const TCHAR* NameTextName;
+			const TCHAR* ScaleBoxName;
+			const TCHAR* BodyTextName;
+			FVector2D Position;
+			FVector2D Size;
+			float BodyWrapTextAt;
+		};
+		for (const FDescriptionPanelExpectation& Expectation : {
+			FDescriptionPanelExpectation{
+				TEXT("Planning_CoreDescription"), TEXT("VBox_CoreDescription"), TEXT("Text_CoreName"),
+				TEXT("Scale_CoreBodySafety"), TEXT("Text_CoreBody"),
+				FVector2D(590.0f, -350.0f), FVector2D(520.0f, 250.0f), 472.0f},
+			FDescriptionPanelExpectation{
+				TEXT("Planning_RightDescription"), TEXT("VBox_RightDescription"), TEXT("Text_RightName"),
+				TEXT("Scale_RightBodySafety"), TEXT("Text_RightBody"),
+				FVector2D(-660.0f, -70.0f), FVector2D(460.0f, 210.0f), 412.0f},
+			FDescriptionPanelExpectation{
+				TEXT("Planning_LeftDescription"), TEXT("VBox_LeftDescription"), TEXT("Text_LeftName"),
+				TEXT("Scale_LeftBodySafety"), TEXT("Text_LeftBody"),
+				FVector2D(660.0f, 220.0f), FVector2D(460.0f, 210.0f), 412.0f}})
+		{
+			UBorder* DescriptionPanel = Cast<UBorder>(Widget->WidgetTree->FindWidget(Expectation.PanelName));
+			UVerticalBox* DescriptionBox = Cast<UVerticalBox>(Widget->WidgetTree->FindWidget(Expectation.VerticalBoxName));
+			UTextBlock* NameText = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(Expectation.NameTextName));
+			UScaleBox* DescriptionScaleBox = Cast<UScaleBox>(Widget->WidgetTree->FindWidget(Expectation.ScaleBoxName));
+			UTextBlock* BodyText = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(Expectation.BodyTextName));
+			TestNotNull(FString::Printf(TEXT("%s description panel exists"), Expectation.PanelName), DescriptionPanel);
+			TestNotNull(FString::Printf(TEXT("%s vertical box exists"), Expectation.VerticalBoxName), DescriptionBox);
+			TestNotNull(FString::Printf(TEXT("%s fixed-size name text exists"), Expectation.NameTextName), NameText);
+			TestNotNull(FString::Printf(TEXT("%s body safety scale box exists"), Expectation.ScaleBoxName), DescriptionScaleBox);
+			TestNotNull(FString::Printf(TEXT("%s body text exists"), Expectation.BodyTextName), BodyText);
+			if (DescriptionPanel && DescriptionBox && NameText && DescriptionScaleBox && BodyText)
+			{
+				TestTrue(FString::Printf(TEXT("%s keeps the authored vertical box"), Expectation.PanelName),
+					DescriptionPanel->GetContent() == DescriptionBox);
+				TestEqual(FString::Printf(TEXT("%s has name and body rows"), Expectation.VerticalBoxName),
+					DescriptionBox->GetChildrenCount(), 2);
+				TestTrue(FString::Printf(TEXT("%s is the first row"), Expectation.NameTextName),
+					DescriptionBox->GetChildAt(0) == NameText);
+				TestTrue(FString::Printf(TEXT("%s is the second row"), Expectation.ScaleBoxName),
+					DescriptionBox->GetChildAt(1) == DescriptionScaleBox);
+				TestTrue(FString::Printf(TEXT("%s is contained by its scale box"), Expectation.BodyTextName),
+					DescriptionScaleBox->GetContent() == BodyText);
+				TestEqual(FString::Printf(TEXT("%s keeps 24px internal padding"), Expectation.PanelName),
+					DescriptionPanel->GetPadding(), FMargin(24.0f));
+				if (const UCanvasPanelSlot* DescriptionSlot = Cast<UCanvasPanelSlot>(DescriptionPanel->Slot))
+				{
+					TestEqual(FString::Printf(TEXT("%s keeps its authored position"), Expectation.PanelName),
+						DescriptionSlot->GetPosition(), Expectation.Position);
+					TestEqual(FString::Printf(TEXT("%s keeps its authored size"), Expectation.PanelName),
+						DescriptionSlot->GetSize(), Expectation.Size);
+				}
+				else
+				{
+					AddError(FString::Printf(TEXT("%s is not attached to the selection canvas"), Expectation.PanelName));
+				}
+				TestEqual(FString::Printf(TEXT("%s name size remains fixed"), Expectation.NameTextName),
+					NameText->GetFont().Size, 32.0f);
+				const FLinearColor ApprovedTextColor(0.05f, 0.08f, 0.12f, 1.0f);
+				TestTrue(FString::Printf(TEXT("%s uses the approved dark text color"), Expectation.NameTextName),
+					NameText->GetColorAndOpacity().GetSpecifiedColor().Equals(ApprovedTextColor, 0.01f));
+				TestEqual(FString::Printf(TEXT("%s scales overflowing text to fit"), Expectation.ScaleBoxName),
+					DescriptionScaleBox->GetStretch(),
+					EStretch::ScaleToFit);
+				TestEqual(FString::Printf(TEXT("%s never enlarges short descriptions"), Expectation.ScaleBoxName),
+					DescriptionScaleBox->GetStretchDirection(),
+					EStretchDirection::DownOnly);
+				TestEqual(FString::Printf(TEXT("%s body size remains readable"), Expectation.BodyTextName),
+					BodyText->GetFont().Size, 28.0f);
+				TestTrue(FString::Printf(TEXT("%s uses the approved dark text color"), Expectation.BodyTextName),
+					BodyText->GetColorAndOpacity().GetSpecifiedColor().Equals(ApprovedTextColor, 0.01f));
+				TestEqual(FString::Printf(TEXT("%s wraps at the padded panel width"), Expectation.BodyTextName),
+					BodyText->GetWrapTextAt(), Expectation.BodyWrapTextAt);
+			}
+		}
+
+		UBorder* TimerPanel = Cast<UBorder>(Widget->WidgetTree->FindWidget(TEXT("Planning_Timer")));
+		UTextBlock* PlanningTimerText = Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("TimerText")));
+		TestNotNull(TEXT("planning timer panel exists"), TimerPanel);
+		TestNotNull(TEXT("planning timer text exists"), PlanningTimerText);
+		if (TimerPanel && PlanningTimerText)
+		{
+			TestTrue(TEXT("timer text is contained by the timer panel"),
+				TimerPanel->GetContent() == PlanningTimerText);
+			TestEqual(TEXT("timer text is centered horizontally"),
+				TimerPanel->GetHorizontalAlignment(),
+				HAlign_Center);
+			TestEqual(TEXT("timer text is centered vertically"),
+				TimerPanel->GetVerticalAlignment(),
+				VAlign_Center);
+		}
+
+		for (const TCHAR* LegacyDescriptionName : {
+			TEXT("Text_CoreDescription"),
+			TEXT("Text_RightWeaponDescription"),
+			TEXT("Text_LeftWeaponDescription")})
+		{
+			const UWidget* LegacyDescription = Widget->WidgetTree->FindWidget(LegacyDescriptionName);
+			TestNull(
+				FString::Printf(TEXT("%s is removed after the UMG transition"), LegacyDescriptionName),
+				LegacyDescription);
+		}
+
 		UWidget* RedundantStateText = Widget->WidgetTree->FindWidget(TEXT("ResultText"));
 		TestTrue(TEXT("planning layout collapses the redundant state text"),
 			RedundantStateText && RedundantStateText->GetVisibility() == ESlateVisibility::Collapsed);
@@ -3645,6 +3754,85 @@ bool FDronePartSelectUIBlueprintStructureTest::RunTest(const FString& Parameters
 	}
 
 	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIDescriptionNameAndBodyTest,
+	"DroneProto.D5.DronePartSelectUI.DescriptionNameAndBody",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIDescriptionNameAndBodyTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DronePartSelectUIDescriptionNameAndBodyWorld"));
+	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* Widget = Context.PC && WidgetClass
+		? NewObject<UDronePartSelectWidget>(Context.PC, WidgetClass)
+		: nullptr;
+
+	TestNotNull(TEXT("description split world is created"), Context.World);
+	TestNotNull(TEXT("description split player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("description split widget class loads"), WidgetClass);
+	TestNotNull(TEXT("description split widget is created"), Widget);
+	if (!Context.World || !Context.PC || !Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TestTrue(TEXT("description split widget initializes"), Widget->Initialize());
+	FObjectProperty* CachedControllerProperty = FindFProperty<FObjectProperty>(
+		UDronePartSelectWidget::StaticClass(),
+		TEXT("CachedRaidPlayerController"));
+	TestNotNull(TEXT("description split controller cache is reflected"), CachedControllerProperty);
+	if (!CachedControllerProperty)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	CachedControllerProperty->SetObjectPropertyValue_InContainer(Widget, Context.PC);
+	Widget->RefreshFromController();
+
+	struct FDescriptionTextExpectation
+	{
+		const TCHAR* NameWidget;
+		const TCHAR* BodyWidget;
+		const TCHAR* ExpectedName;
+		const TCHAR* ExpectedBody;
+	};
+	for (const FDescriptionTextExpectation& Expectation : {
+		FDescriptionTextExpectation{
+			TEXT("Text_CoreName"), TEXT("Text_CoreBody"), TEXT("> Zenith Core"),
+			TEXT("HP가 높을수록 공격력이 증가합니다.")},
+		FDescriptionTextExpectation{
+			TEXT("Text_RightName"), TEXT("Text_RightBody"), TEXT("Pulse Laser"),
+			TEXT("3번째 공격마다 강력한 펄스 공격이 발생합니다.")},
+		FDescriptionTextExpectation{
+			TEXT("Text_LeftName"), TEXT("Text_LeftBody"), TEXT("Pulse Laser"),
+			TEXT("3번째 공격마다 강력한 펄스 공격이 발생합니다.")}})
+	{
+		const UTextBlock* NameText = Widget->WidgetTree
+			? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(Expectation.NameWidget))
+			: nullptr;
+		const UTextBlock* BodyText = Widget->WidgetTree
+			? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(Expectation.BodyWidget))
+			: nullptr;
+		TestNotNull(FString::Printf(TEXT("%s binds from the WBP"), Expectation.NameWidget), NameText);
+		TestNotNull(FString::Printf(TEXT("%s binds from the WBP"), Expectation.BodyWidget), BodyText);
+		TestEqual(
+			FString::Printf(TEXT("%s receives only the focused display name"), Expectation.NameWidget),
+			NameText ? NameText->GetText().ToString() : FString(),
+			FString(Expectation.ExpectedName));
+		TestEqual(
+			FString::Printf(TEXT("%s receives only the part description"), Expectation.BodyWidget),
+			BodyText ? BodyText->GetText().ToString() : FString(),
+			FString(Expectation.ExpectedBody));
+	}
+
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 

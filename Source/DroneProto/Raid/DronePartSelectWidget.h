@@ -135,13 +135,22 @@ private:
 	TObjectPtr<UTextBlock> Text_ControlGuide = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> Text_CoreDescription = nullptr;
+	TObjectPtr<UTextBlock> Text_CoreName = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> Text_RightWeaponDescription = nullptr;
+	TObjectPtr<UTextBlock> Text_CoreBody = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> Text_LeftWeaponDescription = nullptr;
+	TObjectPtr<UTextBlock> Text_RightName = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> Text_RightBody = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> Text_LeftName = nullptr;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> Text_LeftBody = nullptr;
 
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> Text_CoreCount = nullptr;
@@ -237,7 +246,7 @@ private:
 	void RefreshTimerText();
 	bool ShouldRefreshTimerText() const;
 	void SetFocusedSlot(EDronePartSlot NewFocusedSlot);
-	void RefreshSlot(EDronePartSlot PartSlot, FName PartID, UTextBlock* DescriptionText, UTextBlock* CountText, UImage* Image) const;
+	void RefreshSlot(EDronePartSlot PartSlot, FName PartID, UTextBlock* NameText, UTextBlock* BodyText, UTextBlock* CountText, UImage* Image) const;
 	int32& GetMutablePreviewIndexForSlot(EDronePartSlot PartSlot);
 	int32 GetPreviewIndexForSlot(EDronePartSlot PartSlot) const;
 	const TArray<FName>& GetPartIDsForSlot(EDronePartSlot PartSlot) const;
