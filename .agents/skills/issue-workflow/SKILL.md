@@ -34,7 +34,7 @@ For `docs-only` work that changes implementation status, require `known-symbol` 
 ## Fast Evidence Ladder
 
 1. Batch status/HEAD with the Linear body/current state. Read relations/comments only for a named dependency/blocker or unclear acceptance; search sources/code after keywords are fixed.
-2. If Linear gives a source or requirement ID, search it directly. Otherwise use `rg -n -C 2` on `docs/AI/DRONERAID_DOC_MAP_20260708.md` to select one source. Read only its matching section and `ImplementationMap_Current.md` row; never raw-read routed documents.
+2. If Linear gives a source or requirement ID, search it directly. Otherwise search the issue-title keywords in `docs/sources/*.md` and select the latest matching source. Read only its matching section and `ImplementationMap_Current.md` row; never raw-read unrelated documents.
 3. If exact symbols/files are known, batch targeted `rg` for definitions, callers, authority/replication boundaries, and direct tests. Skip both graph tools.
 4. For an unknown symbol, query Codebase Memory once with limit 5. If callers/shared lifecycle remain unclear, call Code Review Graph `get_minimal_context` for one exact symbol and depth 1. Pass `changed_files=[]` during planning/dry-run, then only planned files. Use the second tool only for a named gap; request flows only for lifecycle ambiguity.
 5. Confirm candidates in live `.h/.cpp` and tests. Graph or memory output is never proof.
