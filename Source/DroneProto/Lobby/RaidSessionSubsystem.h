@@ -90,6 +90,17 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category="Raid|Popups")
 	TSubclassOf<UUserWidget> LoadFailedWidgetClass;
 
+	/**
+	 * 개발 전용: 예약 HTTP 대신 `ULocalAssignment`를 쓸지 판정한다.
+	 *
+	 * 예약 서비스는 `NM_DedicatedServer`에서만 뜨므로 단일 PIE에서는 로비 입장이 항상 `NoServerAvailable`로 막힌다.
+	 * 이 스위치가 그 구간만 우회해 로비 → 부품 선택 → 레이드 → 리포트 흐름을 PIE에서 확인할 수 있게 한다.
+	 *
+	 * **Shipping 빌드에서는 설정·커맨드라인과 무관하게 항상 `false`다.** 그 외 빌드에서는
+	 * `-LocalRaidAssignment` 커맨드라인이 있거나 `URaidServerDirectorySettings::bUseLocalAssignment`가 켜져 있으면 `true`다.
+	 */
+	static bool ShouldUseLocalAssignment();
+
 #if WITH_DEV_AUTOMATION_TESTS
 	void SetAssignmentForTest(URaidAssignmentBase* InAssignment);
 	void SetSuppressTravelForTest(bool bInSuppressTravel);

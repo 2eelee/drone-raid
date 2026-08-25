@@ -5,7 +5,10 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "LocalAssignment.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "RaidLobbyWidget.h"
+#include "RaidServerDirectorySettings.h"
 #include "RemoteRaidAssignment.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -50,13 +53,42 @@ const TCHAR* ToRaidFailReasonText(ERaidEntryFailReason Reason)
 }
 }
 
+bool URaidSessionSubsystem::ShouldUseLocalAssignment()
+{
+#if UE_BUILD_SHIPPING
+	// Shipping은 설정·커맨드라인과 무관하게 항상 원격 예약을 쓴다. 개발 스위치가 새어 나가지 않게 하는 유일한 가드다.
+	return false;
+#else
+	if (FParse::Param(FCommandLine::Get(), TEXT("LocalRaidAssignment")))
+	{
+		return true;
+	}
+
+	const URaidServerDirectorySettings* Settings = GetDefault<URaidServerDirectorySettings>();
+	return Settings && Settings->bUseLocalAssignment;
+#endif
+}
+
 void URaidSessionSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	URemoteRaidAssignment* RemoteAssignment = NewObject<URemoteRaidAssignment>(this);
-	RemoteAssignment->InitializeFromSettings();
-	Assignment = RemoteAssignment;
+	if (ShouldUseLocalAssignment())
+	{
+		// 예약 서비스는 NM_DedicatedServer에서만 뜬다. 단일 PIE에서는 127.0.0.1:7787~7789에 아무도 없어
+		// 로비 입장이 항상 NoServerAvailable로 막히므로, 개발 중에는 이 경로로 후보를 즉시 만든다.
+		// 서버 쪽은 손대지 않는다 — PIE는 NM_DedicatedServer가 아니라 bAdmissionRequired가 이미 false다.
+		Assignment = NewObject<ULocalAssignment>(this);
+		UE_LOG(LogTemp, Warning,
+			TEXT("[DR_SUMMARY] RaidAssignmentMode Mode=Local Reason=DevelopmentSwitch Note=ReservationBypassed"));
+	}
+	else
+	{
+		URemoteRaidAssignment* RemoteAssignment = NewObject<URemoteRaidAssignment>(this);
+		RemoteAssignment->InitializeFromSettings();
+		Assignment = RemoteAssignment;
+	}
+
 	LoadLocalProfile();
 
 	PostLoadMapDelegateHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(

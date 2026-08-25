@@ -3,6 +3,8 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Lobby/LocalAssignment.h"
+#include "Lobby/RaidServerDirectorySettings.h"
 #include "Lobby/RemoteRaidAssignment.h"
 #include "Lobby/RaidSessionSubsystem.h"
 #include "Raid/RaidReservationLedger.h"
@@ -447,6 +449,68 @@ bool FRaidServerDirectorySettingsAreLoadedFromConfigTest::RunTest(const FString&
 		FRaidServerDefinition{TEXT("A"), 0, TEXT("   ")},
 	});
 	TestFalse(TEXT("a blank reservation url disables the slot"), Assignment->IsSlotEnabled(TEXT("A")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRaidLocalAssignmentDevelopmentSwitchTest,
+	"DroneProto.RaidEntry.Assignment.LocalDevelopmentSwitch",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FRaidLocalAssignmentDevelopmentSwitchTest::RunTest(const FString& Parameters)
+{
+	// 예약 서비스는 NM_DedicatedServer에서만 뜨므로 단일 PIE의 로비 입장은 항상 NoServerAvailable로 막힌다.
+	// 이 스위치는 그 구간만 우회한다. 기본은 꺼짐이어야 하고, Shipping에서는 켜도 무시돼야 한다.
+	URaidServerDirectorySettings* Settings = GetMutableDefault<URaidServerDirectorySettings>();
+	TestNotNull(TEXT("raid server directory settings are available"), Settings);
+	if (!Settings)
+	{
+		return false;
+	}
+
+	const bool bOriginal = Settings->bUseLocalAssignment;
+
+	Settings->bUseLocalAssignment = false;
+	TestFalse(
+		TEXT("local assignment stays off by default"),
+		URaidSessionSubsystem::ShouldUseLocalAssignment());
+
+	Settings->bUseLocalAssignment = true;
+	TestTrue(
+		TEXT("enabling the development setting selects local assignment"),
+		URaidSessionSubsystem::ShouldUseLocalAssignment());
+
+	Settings->bUseLocalAssignment = bOriginal;
+
+	// Shipping 가드는 컴파일 타임 분기라 런타임으로 관측할 수 없다. 소스에 가드가 남아 있는지로 확인한다.
+	FString SubsystemSource;
+	const bool bSourceLoaded = FFileHelper::LoadFileToString(
+		SubsystemSource,
+		*(FPaths::ProjectDir() / TEXT("Source/DroneProto/Lobby/RaidSessionSubsystem.cpp")));
+	TestTrue(TEXT("raid session subsystem source loads"), bSourceLoaded);
+	if (bSourceLoaded)
+	{
+		TestTrue(
+			TEXT("shipping builds are guarded from the local assignment switch"),
+			SubsystemSource.Contains(TEXT("UE_BUILD_SHIPPING")));
+	}
+
+	// 로컬 후보는 로비가 실제로 이동할 수 있는 대상을 줘야 한다.
+	ULocalAssignment* LocalAssignment = NewObject<ULocalAssignment>();
+	TestNotNull(TEXT("local assignment is constructible"), LocalAssignment);
+	if (LocalAssignment)
+	{
+		const FRaidAssignmentResult Assigned = LocalAssignment->ResolveRaidAssignment(FString());
+		TestEqual(
+			TEXT("local assignment resolves a candidate without a reservation server"),
+			static_cast<int32>(Assigned.Result),
+			static_cast<int32>(ERaidAssignmentResultType::Success));
+		TestEqual(
+			TEXT("local candidate travels to the raid map"),
+			Assigned.Endpoint.TravelTarget,
+			FString(TEXT("TestMap")));
+	}
 
 	return true;
 }
