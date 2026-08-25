@@ -37,6 +37,15 @@ FText UDronePartSelectWidget::FormatPartCountText(int32 CurrentCount)
 	return FText::FromString(FString::Printf(TEXT("%d"), CurrentCount));
 }
 
+FText UDronePartSelectWidget::FormatSelectionTimerText(float RemainingSeconds)
+{
+	const int32 RemainingCentiseconds = FMath::CeilToInt(FMath::Max(0.0f, RemainingSeconds) * 100.0f);
+	return FText::FromString(FString::Printf(
+		TEXT("%02d:%02d"),
+		RemainingCentiseconds / 100,
+		RemainingCentiseconds % 100));
+}
+
 void UDronePartSelectWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -952,7 +961,7 @@ void UDronePartSelectWidget::RefreshTimerText()
 
 	if (TimerText)
 	{
-		TimerText->SetText(FText::FromString(FString::Printf(TEXT("Timer: %.1fs"), RemainingTime)));
+		TimerText->SetText(FormatSelectionTimerText(RemainingTime));
 	}
 
 	if (!bShouldRefresh)

@@ -35,6 +35,9 @@ public:
 	 */
 	static FText FormatPartCountText(int32 CurrentCount);
 
+	/** 서버 남은 시간을 고정 `SS:ff`(ff = 10ms) 선택 타이머 문자열로 만든다. */
+	static FText FormatSelectionTimerText(float RemainingSeconds);
+
 	UFUNCTION(BlueprintPure, Category = "UI")
 	ARaidPlayerController* GetOwningRaidPlayerController() const;
 
