@@ -3033,6 +3033,35 @@ bool FDronePartSelectUIGlueTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIControlGuideTextTest,
+	"DroneProto.D5.DronePartSelectUI.ControlGuideMatchesSpec",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIControlGuideTextTest::RunTest(const FString& Parameters)
+{
+	// `SELECT-UI-02` — 기획 원문 `현현_드론부품선택시스템_기획서.md:359-371` `(5) 조작 방식 팝업`이
+	// 제목 1줄 + 조작 4줄을 문자 단위로 확정한다. 표시 순서와 콜론 표기까지 원문을 따른다.
+	const FString GuideText = UDronePartSelectWidget::GetControlGuideText().ToString();
+
+	TArray<FString> GuideLines;
+	GuideText.ParseIntoArray(GuideLines, TEXT("\n"), false);
+
+	TestEqual(TEXT("control guide has spec title line plus four control lines"), GuideLines.Num(), 5);
+	if (GuideLines.Num() != 5)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("control guide title matches spec"), GuideLines[0], TEXT("조작 방식"));
+	TestEqual(TEXT("slot move line matches spec"), GuideLines[1], TEXT("↑↓: 슬롯 이동"));
+	TestEqual(TEXT("part change line matches spec"), GuideLines[2], TEXT("←→: 드론부품 변경"));
+	TestEqual(TEXT("select line matches spec"), GuideLines[3], TEXT("Z: 선택"));
+	TestEqual(TEXT("cancel line matches spec"), GuideLines[4], TEXT("C: 취소"));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartSelectUIKeyboardCombatStartTest,
 	"DroneProto.D5.DronePartSelectUI.KeyboardCombatStart",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

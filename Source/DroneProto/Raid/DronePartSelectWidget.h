@@ -18,6 +18,13 @@ class DRONEPROTO_API UDronePartSelectWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	/**
+	 * 부품 선택 화면 좌상단에 고정 표시하는 조작 방식 안내다(`SELECT-UI-02`).
+	 * 문구는 기획 원문 `현현_드론부품선택시스템_기획서.md:359-371`의 `(5) 조작 방식 팝업`이 문자 단위로 확정한다.
+	 * `Text_ControlGuide`가 `BindWidgetOptional`이라 위젯 인스턴스만으로는 검증할 수 없어 static getter로 분리했다.
+	 */
+	static FText GetControlGuideText();
+
 	UFUNCTION(BlueprintPure, Category = "UI")
 	ARaidPlayerController* GetOwningRaidPlayerController() const;
 
