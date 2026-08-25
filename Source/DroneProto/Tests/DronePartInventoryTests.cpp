@@ -5154,13 +5154,15 @@ bool FDroneDodgeTeleportVisualDirectionTest::RunTest(const FString& Parameters)
 	{
 		const TMap<FName, bool> ExpectedLocalSpaceByEmitter = {
 			{ FName(TEXT("Light_01")), false },
-			{ FName(TEXT("GPU_Move")), true },
+			{ FName(TEXT("GPU_Move")), false },
 			{ FName(TEXT("GPU_LIght_Hit")), false },
 			{ FName(TEXT("GPU_Dust_Start")), false },
 			{ FName(TEXT("Wave_01")), true },
-			{ FName(TEXT("GPU_Last")), true },
+			{ FName(TEXT("GPU_Last")), false },
 			{ FName(TEXT("BlowingParticles")), false },
 			{ FName(TEXT("GPU_Dust_End")), true },
+			{ FName(TEXT("Wave_In")), false },
+			{ FName(TEXT("Wave_Out")), false },
 		};
 		int32 SpriteEmitterCount = 0;
 		for (const FNiagaraEmitterHandle& EmitterHandle : DodgeTeleportVFX->GetAsset()->GetEmitterHandles())
@@ -5194,25 +5196,60 @@ bool FDroneDodgeTeleportVisualDirectionTest::RunTest(const FString& Parameters)
 				TestFalse(TEXT("delivered BlowingParticles emitter remains disabled"), EmitterHandle.GetIsEnabled());
 			}
 		}
-		TestEqual(TEXT("teleport system has eight directional sprite emitters"), SpriteEmitterCount, 8);
+		TestEqual(TEXT("approved teleport system has nine sprite emitters"), SpriteEmitterCount, 9);
 
 		const FName DirectionLSParameterName(TEXT("User.DodgeDirectionLS"));
 		const FName DirectionWSParameterName(TEXT("User.DodgeDirectionWS"));
-		DodgeTeleportVFX->SetVariableVec3(DirectionLSParameterName, FVector::UpVector);
-		DodgeTeleportVFX->SetVariableVec3(DirectionWSParameterName, FVector::UpVector);
-		TestTrue(TEXT("dodge starts along world +Y while drone faces world +X"),
-			Context.Drone->RequestDodgeForServer(FVector2D(0.0f, 1.0f)));
-		TestTrue(TEXT("teleport VFX authored local +X aligns with actual world dodge direction"),
-			DodgeTeleportVFX->GetForwardVector().Equals(FVector::RightVector, 0.01f));
-
 		const FNiagaraVariable DirectionLSVariable(FNiagaraTypeDefinition::GetVec3Def(), DirectionLSParameterName);
 		const FNiagaraVariable DirectionWSVariable(FNiagaraTypeDefinition::GetVec3Def(), DirectionWSParameterName);
-		const FVector3f DirectionLS = DodgeTeleportVFX->GetOverrideParameters().GetParameterValue<FVector3f>(DirectionLSVariable);
-		const FVector3f DirectionWS = DodgeTeleportVFX->GetOverrideParameters().GetParameterValue<FVector3f>(DirectionWSVariable);
-		TestTrue(TEXT("local-space emitters receive actual dodge direction in component local space"),
-			FVector(DirectionLS).Equals(FVector::ForwardVector, 0.01f));
-		TestTrue(TEXT("world-space emitters receive actual dodge direction in world space"),
-			FVector(DirectionWS).Equals(FVector::RightVector, 0.01f));
+
+		// 드론 본체를 임의 방향으로 돌려 두고 시작한다. 본체 회전(전투 중 보스 바라보기)이나
+		// 카메라 방향이 VFX 방향에 섞이면 아래 8방향 판정 중 하나는 반드시 깨진다.
+		Context.Drone->SetActorRotation(FRotator(0.0f, 37.0f, 0.0f));
+
+		const TArray<TPair<FVector2D, FString>> DodgeInputDirections = {
+			{ FVector2D(1.0f, 0.0f), TEXT("Up") },
+			{ FVector2D(-1.0f, 0.0f), TEXT("Down") },
+			{ FVector2D(0.0f, -1.0f), TEXT("Left") },
+			{ FVector2D(0.0f, 1.0f), TEXT("Right") },
+			{ FVector2D(1.0f, 1.0f), TEXT("UpRight") },
+			{ FVector2D(1.0f, -1.0f), TEXT("UpLeft") },
+			{ FVector2D(-1.0f, 1.0f), TEXT("DownRight") },
+			{ FVector2D(-1.0f, -1.0f), TEXT("DownLeft") },
+		};
+
+		for (const TPair<FVector2D, FString>& DodgeInputDirection : DodgeInputDirections)
+		{
+			const FString& Label = DodgeInputDirection.Value;
+			Context.Drone->SetActorLocation(FVector::ZeroVector);
+			Context.Drone->SetLastDodgeEndTimeForTest(-1000.0f);
+			DodgeTeleportVFX->SetVariableVec3(DirectionLSParameterName, FVector::UpVector);
+			DodgeTeleportVFX->SetVariableVec3(DirectionWSParameterName, FVector::UpVector);
+
+			const FVector StartLocation = Context.Drone->GetActorLocation();
+			TestTrue(*FString::Printf(TEXT("%s dodge succeeds"), *Label),
+				Context.Drone->RequestDodgeForServer(DodgeInputDirection.Key));
+
+			const FVector DirectionLS = FVector(
+				DodgeTeleportVFX->GetOverrideParameters().GetParameterValue<FVector3f>(DirectionLSVariable));
+			const FVector DirectionWS = FVector(
+				DodgeTeleportVFX->GetOverrideParameters().GetParameterValue<FVector3f>(DirectionWSVariable));
+
+			TickWorldForAutomationTest(Context.World, 0.30f);
+			const FVector ActualDodgeDirection = (Context.Drone->GetActorLocation() - StartLocation).GetSafeNormal2D();
+			TestFalse(*FString::Printf(TEXT("%s dodge actually moves the drone"), *Label),
+				ActualDodgeDirection.IsNearlyZero());
+
+			// 모든 emitter가 읽는 정본 파라미터가 실제 이동 방향과 같아야 한다.
+			TestTrue(*FString::Printf(TEXT("%s world-space parameter matches the actual dodge direction"), *Label),
+				DirectionWS.Equals(ActualDodgeDirection, 0.01f));
+			// 컴포넌트 축이 월드 축에 고정되어 있으므로 local space emitter가 받는 값도 같아야 한다.
+			TestTrue(*FString::Printf(TEXT("%s local-space parameter equals the world-space parameter"), *Label),
+				DirectionLS.Equals(ActualDodgeDirection, 0.01f));
+			// 방향을 컴포넌트 회전에 이중으로 싣지 않는다는 계약.
+			TestTrue(*FString::Printf(TEXT("%s teleport VFX keeps its world axis regardless of drone facing"), *Label),
+				DodgeTeleportVFX->GetComponentRotation().Equals(FRotator::ZeroRotator, 0.01f));
+		}
 	}
 
 	DestroyDroneSelectionTestContext(Context);

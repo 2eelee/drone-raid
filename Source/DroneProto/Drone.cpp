@@ -3437,8 +3437,14 @@ void ADrone::ApplyDodgeVisualDirectionLocally(const FVector& DodgeVisualDirectio
 		return;
 	}
 
+	// NS_Drone_Teleport의 모든 emitter는 `User.DodgeDirectionWS` 하나만 읽는다.
+	// 그중 local space emitter는 받은 벡터를 컴포넌트 트랜스폼으로 한 번 더 회전시키므로,
+	// 컴포넌트 회전에 회피 방향을 실어 보내면 회전이 두 번 적용되어 각도가 어긋난다.
+	// 따라서 컴포넌트 회전은 월드 축에 고정(절대 회전 + ZeroRotator)해서 로컬 축과 월드 축을
+	// 일치시키고, 방향은 오직 파라미터로만 전달한다. 드론 본체가 보스를 향해 회전해도
+	// 절대 회전이라 이 축은 흔들리지 않는다.
 	DodgeTeleportVFX->SetAbsolute(false, true, false);
-	DodgeTeleportVFX->SetWorldRotation(DirectionWS.Rotation());
+	DodgeTeleportVFX->SetWorldRotation(FRotator::ZeroRotator);
 	const FVector DirectionLS = DodgeTeleportVFX->GetComponentTransform()
 		.InverseTransformVectorNoScale(DirectionWS)
 		.GetSafeNormal();
