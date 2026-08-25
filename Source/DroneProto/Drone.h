@@ -878,7 +878,7 @@ private:
 	void UpdateDodgeForServer(float DeltaSeconds);
 	void ClearDodgeInterpolationForServer();
 	UFUNCTION(NetMulticast, Reliable)
-	void Multicast_SetDodgeInvincibleVisual(bool bIsInvincibleVisual);
+	void Multicast_SetDodgeInvincibleVisual(bool bIsInvincibleVisual, FVector_NetQuantizeNormal DodgeVisualDirection);
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_PlayDroneAttackVisual(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, FDroneAttackVisualPayload Payload);
 	UFUNCTION(NetMulticast, Unreliable)
@@ -921,6 +921,7 @@ private:
 
 	void ApplyVectorChargeVisualLocally(uint8 ChargeStep);
 	void ApplyDodgeVisualStateLocally(bool bDodging);
+	void ApplyDodgeVisualDirectionLocally(const FVector& DodgeVisualDirection);
 	void ApplyDodgeInvincibleVisualLocally(bool bIsInvincibleVisual);
 	void SetDodgeInvincibleVisualHidden(bool bShouldHideVisual);
 	void EndDodgeInvincibilityForServer();

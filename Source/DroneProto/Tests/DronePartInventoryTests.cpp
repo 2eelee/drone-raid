@@ -49,6 +49,10 @@
 #include "GameFramework/DefaultPawn.h"
 #include "Misc/App.h"
 #include "NiagaraComponent.h"
+#include "NiagaraEmitter.h"
+#include "NiagaraEmitterHandle.h"
+#include "NiagaraParameterStore.h"
+#include "NiagaraSpriteRendererProperties.h"
 #include "NiagaraSystem.h"
 #include "TimerManager.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -4988,6 +4992,117 @@ bool FDroneDodgeTeleportVisualLifecycleTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("dodge cancel requests teleport effect deactivation"),
 			DodgeTeleportVFX->GetRequestedExecutionState() != ENiagaraExecutionState::Active);
+	}
+
+	DestroyDroneSelectionTestContext(Context);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneDodgeTeleportVisualDirectionTest,
+	"DroneProto.D14_6.Drone.DodgeTeleportVisualDirection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneDodgeTeleportVisualDirectionTest::RunTest(const FString& Parameters)
+{
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DroneDodgeTeleportVisualDirectionWorld"));
+	TestNotNull(TEXT("dodge teleport direction world is created"), Context.World);
+	TestNotNull(TEXT("dodge teleport direction game state is spawned"), Context.GameState);
+	TestNotNull(TEXT("dodge teleport direction player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("dodge teleport direction drone is spawned"), Context.Drone);
+	if (!Context.World || !Context.GameState || !Context.PC || !Context.Drone)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	ARaidBoss* Boss = Context.World->SpawnActor<ARaidBoss>();
+	TestNotNull(TEXT("dodge teleport direction boss is spawned"), Boss);
+	if (Boss)
+	{
+		Boss->SetActorLocation(FVector(-3000.0f, 0.0f, 0.0f));
+		Context.GameState->SetRaidBossForServer(Boss);
+	}
+	Context.PC->Server_RequestReadyForRaid_Implementation();
+	Context.Drone->SetActorLocation(FVector::ZeroVector);
+	Context.Drone->SetActorRotation(FRotator::ZeroRotator);
+
+	UNiagaraComponent* DodgeTeleportVFX = nullptr;
+	TArray<UNiagaraComponent*> NiagaraComponents;
+	Context.Drone->GetComponents<UNiagaraComponent>(NiagaraComponents);
+	for (UNiagaraComponent* NiagaraComponent : NiagaraComponents)
+	{
+		if (NiagaraComponent && NiagaraComponent->GetFName() == FName(TEXT("DodgeTeleportVFX")))
+		{
+			DodgeTeleportVFX = NiagaraComponent;
+			break;
+		}
+	}
+
+	TestNotNull(TEXT("drone owns directional DodgeTeleportVFX component"), DodgeTeleportVFX);
+	if (DodgeTeleportVFX && DodgeTeleportVFX->GetAsset())
+	{
+		const TMap<FName, bool> ExpectedLocalSpaceByEmitter = {
+			{ FName(TEXT("Light_01")), false },
+			{ FName(TEXT("GPU_Move")), true },
+			{ FName(TEXT("GPU_LIght_Hit")), false },
+			{ FName(TEXT("GPU_Dust_Start")), false },
+			{ FName(TEXT("Wave_01")), true },
+			{ FName(TEXT("GPU_Last")), true },
+			{ FName(TEXT("BlowingParticles")), false },
+			{ FName(TEXT("GPU_Dust_End")), true },
+		};
+		int32 SpriteEmitterCount = 0;
+		for (const FNiagaraEmitterHandle& EmitterHandle : DodgeTeleportVFX->GetAsset()->GetEmitterHandles())
+		{
+			bool bHasSpriteRenderer = false;
+			EmitterHandle.ForEachEnabledRendererWithIndex(
+				[&bHasSpriteRenderer](const UNiagaraRendererProperties* Renderer, int32)
+				{
+					bHasSpriteRenderer |= Renderer && Renderer->IsA<UNiagaraSpriteRendererProperties>();
+				});
+			if (!bHasSpriteRenderer)
+			{
+				continue;
+			}
+
+			++SpriteEmitterCount;
+			const FVersionedNiagaraEmitterData* EmitterData = EmitterHandle.GetEmitterData();
+			const bool* bExpectedLocalSpace = ExpectedLocalSpaceByEmitter.Find(EmitterHandle.GetName());
+			TestNotNull(
+				*FString::Printf(TEXT("directional sprite emitter %s is expected"), *EmitterHandle.GetName().ToString()),
+				bExpectedLocalSpace);
+			if (bExpectedLocalSpace)
+			{
+				TestEqual(
+					*FString::Printf(TEXT("directional sprite emitter %s keeps its authored simulation space"), *EmitterHandle.GetName().ToString()),
+					EmitterData && EmitterData->bLocalSpace,
+					*bExpectedLocalSpace);
+			}
+			if (EmitterHandle.GetName() == FName(TEXT("BlowingParticles")))
+			{
+				TestFalse(TEXT("delivered BlowingParticles emitter remains disabled"), EmitterHandle.GetIsEnabled());
+			}
+		}
+		TestEqual(TEXT("teleport system has eight directional sprite emitters"), SpriteEmitterCount, 8);
+
+		const FName DirectionLSParameterName(TEXT("User.DodgeDirectionLS"));
+		const FName DirectionWSParameterName(TEXT("User.DodgeDirectionWS"));
+		DodgeTeleportVFX->SetVariableVec3(DirectionLSParameterName, FVector::UpVector);
+		DodgeTeleportVFX->SetVariableVec3(DirectionWSParameterName, FVector::UpVector);
+		TestTrue(TEXT("dodge starts along world +Y while drone faces world +X"),
+			Context.Drone->RequestDodgeForServer(FVector2D(0.0f, 1.0f)));
+		TestTrue(TEXT("teleport VFX authored local +X aligns with actual world dodge direction"),
+			DodgeTeleportVFX->GetForwardVector().Equals(FVector::RightVector, 0.01f));
+
+		const FNiagaraVariable DirectionLSVariable(FNiagaraTypeDefinition::GetVec3Def(), DirectionLSParameterName);
+		const FNiagaraVariable DirectionWSVariable(FNiagaraTypeDefinition::GetVec3Def(), DirectionWSParameterName);
+		const FVector3f DirectionLS = DodgeTeleportVFX->GetOverrideParameters().GetParameterValue<FVector3f>(DirectionLSVariable);
+		const FVector3f DirectionWS = DodgeTeleportVFX->GetOverrideParameters().GetParameterValue<FVector3f>(DirectionWSVariable);
+		TestTrue(TEXT("local-space emitters receive actual dodge direction in component local space"),
+			FVector(DirectionLS).Equals(FVector::ForwardVector, 0.01f));
+		TestTrue(TEXT("world-space emitters receive actual dodge direction in world space"),
+			FVector(DirectionWS).Equals(FVector::RightVector, 0.01f));
 	}
 
 	DestroyDroneSelectionTestContext(Context);
