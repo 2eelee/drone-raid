@@ -242,13 +242,17 @@ struct FDroneSelectionTestContext
 	ADrone* Drone = nullptr;
 };
 
-FDroneSelectionTestContext CreateDroneSelectionTestContext(const TCHAR* WorldName)
+FDroneSelectionTestContext CreateDroneSelectionTestContext(const TCHAR* WorldName, bool bInitializeWorld = false)
 {
 	FDroneSelectionTestContext Context;
 	Context.World = UWorld::CreateWorld(EWorldType::Game, false, FName(WorldName));
 	if (!Context.World)
 	{
 		return Context;
+	}
+	if (bInitializeWorld)
+	{
+		Context.World->InitializeActorsForPlay(FURL());
 	}
 
 	Context.GameState = Context.World->SpawnActor<ARaidGameState>();
@@ -292,9 +296,10 @@ void ResolveBossPatternForSyntheticWorld(ARaidBoss* Boss)
 
 FDroneSelectionTestContext CreateDroneReturnTestContext(
 	const TCHAR* WorldName,
-	UDronePartReturnManager*& OutReturnManager)
+	UDronePartReturnManager*& OutReturnManager,
+	bool bInitializeWorld = false)
 {
-	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(WorldName);
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(WorldName, bInitializeWorld);
 	OutReturnManager = NewObject<UDronePartReturnManager>();
 
 	if (OutReturnManager && Context.Inventory)
@@ -3055,6 +3060,111 @@ bool FDronePartSelectUIPartCountFormatTest::RunTest(const FString& Parameters)
 		UDronePartSelectWidget::FormatPartCountText(0).ToString(),
 		FString(TEXT("0")));
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDroneReturnedPartRefreshesVisibleStockCountTest,
+	"DroneProto.REPORTUI06.DronePartSelectUI.ReturnRefreshesVisibleStockCount",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDroneReturnedPartRefreshesVisibleStockCountTest::RunTest(const FString& Parameters)
+{
+	UDronePartReturnManager* ReturnManager = nullptr;
+	FDroneSelectionTestContext Context = CreateDroneReturnTestContext(
+		TEXT("DroneReturnedPartRefreshesVisibleStockCountWorld"),
+		ReturnManager,
+		true);
+	TestNotNull(TEXT("stock refresh world is created"), Context.World);
+	TestNotNull(TEXT("stock refresh inventory is spawned"), Context.Inventory);
+	TestNotNull(TEXT("stock refresh player controller is spawned"), Context.PC);
+	TestNotNull(TEXT("stock refresh return manager is initialized"), ReturnManager);
+	if (!Context.World || !Context.Inventory || !Context.PC || !ReturnManager)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	const FName CoreZenith = ADronePartInventory::GetCoreZenithPartID();
+	Context.PC->SetSelectedPartIDForSlotForServer(EPartSlot::Core, CoreZenith);
+	TestTrue(TEXT("selected core consumes one shared stock before return"),
+		Context.Inventory->TryConsumePart(CoreZenith));
+
+	ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine);
+	Context.PC->SetPlayer(LocalPlayer);
+	UClass* WidgetClass = LoadClass<UDronePartSelectWidget>(
+		nullptr,
+		TEXT("/Game/UI/WBP_DronePartSelect.WBP_DronePartSelect_C"));
+	UDronePartSelectWidget* Widget = WidgetClass
+		? CreateWidget<UDronePartSelectWidget>(Context.PC, WidgetClass)
+		: nullptr;
+	TestNotNull(TEXT("stock refresh selection widget class loads"), WidgetClass);
+	TestNotNull(TEXT("stock refresh selection widget is created"), Widget);
+	if (!Widget)
+	{
+		DestroyDroneSelectionTestContext(Context);
+		return false;
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.ClientSize(FVector2D(1280.0f, 720.0f))
+		[Widget->TakeWidget()];
+	FSlateApplication::Get().AddWindow(Window, false);
+
+	TestTrue(TEXT("player controller binds to the shared inventory stock delegate"),
+		Context.PC->RefreshDronePartInventoryBinding());
+	TestTrue(TEXT("shared inventory is specifically bound to the player controller stock handler"),
+		Context.Inventory->OnPartStocksChanged.Contains(
+			Context.PC,
+			FName(TEXT("HandleDronePartStocksChanged"))));
+	TestTrue(TEXT("player controller refresh delegate is specifically bound to the selection widget"),
+		Context.PC->OnPartSelectUIRefreshRequested.Contains(
+			Widget,
+			FName(TEXT("HandlePartSelectUIRefreshRequested"))));
+	Widget->RefreshFromController();
+
+	UTextBlock* CoreCountText = Widget->WidgetTree
+		? Cast<UTextBlock>(Widget->WidgetTree->FindWidget(TEXT("Text_CoreCount")))
+		: nullptr;
+	TestNotNull(TEXT("selection widget binds the visible core stock count"), CoreCountText);
+	const auto GetVisibleCountLine = [](const UTextBlock* CountText)
+	{
+		TArray<FString> Lines;
+		if (CountText)
+		{
+			CountText->GetText().ToString().ParseIntoArrayLines(Lines, false);
+		}
+		return Lines.IsEmpty() ? FString() : Lines[0];
+	};
+	TestEqual(TEXT("visible core stock starts at the consumed count"),
+		GetVisibleCountLine(CoreCountText),
+		FString(TEXT("4")));
+
+	const bool bReturned = ReturnManager->ReturnSingleSelectedPart(
+		Context.PC,
+		EPartSlot::Core,
+		EDronePartReturnReason::Cancel);
+	TestTrue(TEXT("selected core return succeeds"), bReturned);
+	TestEqual(TEXT("server stock is restored by the return"),
+		Context.Inventory->GetCurrentCount(CoreZenith),
+		5);
+	TestEqual(TEXT("visible core stock refreshes immediately without a manual widget refresh"),
+		GetVisibleCountLine(CoreCountText),
+		FString(TEXT("5")));
+
+	CoreCountText->SetText(FText::FromString(TEXT("stale")));
+	UFunction* OnRepPartStocks = Context.Inventory->FindFunction(FName(TEXT("OnRep_PartStocks")));
+	TestNotNull(TEXT("replicated stock notify function is reflected"), OnRepPartStocks);
+	if (OnRepPartStocks)
+	{
+		Context.Inventory->ProcessEvent(OnRepPartStocks, nullptr);
+	}
+	TestEqual(TEXT("OnRep stock notification refreshes the visible stock text"),
+		GetVisibleCountLine(CoreCountText),
+		FString(TEXT("5")));
+
+	FSlateApplication::Get().RequestDestroyWindow(Window);
+	DestroyDroneSelectionTestContext(Context);
 	return true;
 }
 
