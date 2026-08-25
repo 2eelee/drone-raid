@@ -25,6 +25,16 @@ public:
 	 */
 	static FText GetControlGuideText();
 
+	/**
+	 * 슬롯 하단 회색 원형 안에 들어가는 남은 수량 표시다(`SELECT-UI-01`·`STOCK-07`).
+	 * 목업 `08` 확정 계약이 `슬롯 하단 중앙에 회색 원형(남은 수량 표시 위치)`이고 그 안에는 **숫자만** 들어간다.
+	 * `남은 수량`은 요소 이름(`:334,342,350`)이자 목업의 설명 주석이지 출력 문자열이 아니며,
+	 * `:133-149`의 `레이저포 남은 수량 2 → 남은 수량 1`은 재고 변화를 설명하는 시퀀스 서술이다.
+	 * 총량(`/ MaxCount`)도 근거가 없다 — `STOCK-07`은 복제 반영 계약이지 표기 형식이 아니다.
+	 * `Text_*Count`가 `BindWidgetOptional`이라 위젯 인스턴스만으로는 검증할 수 없어 static으로 분리했다.
+	 */
+	static FText FormatPartCountText(int32 CurrentCount);
+
 	UFUNCTION(BlueprintPure, Category = "UI")
 	ARaidPlayerController* GetOwningRaidPlayerController() const;
 

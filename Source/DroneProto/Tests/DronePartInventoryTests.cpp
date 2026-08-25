@@ -3033,6 +3033,73 @@ bool FDronePartSelectUIGlueTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartSelectUIPartCountFormatTest,
+	"DroneProto.D5.DronePartSelectUI.PartCountFormatMatchesSpec",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartSelectUIPartCountFormatTest::RunTest(const FString& Parameters)
+{
+	// 목업 `08` 확정 계약은 `슬롯 하단 중앙에 회색 원형(남은 수량 표시 위치)`이며 그 안에는 숫자만 들어간다.
+	// `남은 수량`은 요소 이름(`:334,342,350`)이자 목업의 설명 주석이지 출력 문자열이 아니고,
+	// `:133-149`는 재고 변화를 설명하는 시퀀스 서술이다. 총량(`/ MaxCount`)도 근거가 없다.
+	TestEqual(
+		TEXT("part count renders the bare remaining number"),
+		UDronePartSelectWidget::FormatPartCountText(5).ToString(),
+		FString(TEXT("5")));
+	TestEqual(
+		TEXT("depleted stock renders a bare zero"),
+		UDronePartSelectWidget::FormatPartCountText(0).ToString(),
+		FString(TEXT("0")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDronePartDescriptionMatchesSpecTest,
+	"DroneProto.D5.DronePartSelectUI.PartDescriptionMatchesSpec",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FDronePartDescriptionMatchesSpecTest::RunTest(const FString& Parameters)
+{
+	// 원문 `현현_드론부품시스템_기획서.md:940-942`(코어)·`:948-950`(무기)이 6종 설명을 문자 단위로 확정한다.
+	// 종전 영문 fallback은 실제 구현과도 어긋났다 — 제니스 코어는 `DroneCore.csv`의 `HP_TO_ATTACK`인데
+	// `maximum raid durability`(내구형)로 읽혔다.
+	FDroneSelectionTestContext Context = CreateDroneSelectionTestContext(TEXT("DronePartDescriptionSpecWorld"));
+	TestNotNull(TEXT("part description world is created"), Context.World);
+	TestNotNull(TEXT("part description player controller is spawned"), Context.PC);
+	if (!Context.World || !Context.PC)
+	{
+		return false;
+	}
+
+	struct FExpectedDescription
+	{
+		FName PartID;
+		const TCHAR* Expected;
+	};
+
+	const FExpectedDescription Expectations[] = {
+		{ADronePartInventory::GetCoreZenithPartID(), TEXT("HP가 높을수록 공격력이 증가합니다.")},
+		{ADronePartInventory::GetCoreBoosterPartID(), TEXT("이동할수록 이동속도가 증가하고, 증가한 이동속도의 일부가 공격력으로 전환됩니다.")},
+		{ADronePartInventory::GetCoreDrainPartID(), TEXT("공격력과 이동속도는 낮지만, 가한 피해의 일부만큼 HP를 회복합니다.")},
+		{ADronePartInventory::GetPulseLaserPartID(), TEXT("3번째 공격마다 강력한 펄스 공격이 발생합니다.")},
+		{ADronePartInventory::GetFractureBurstPartID(), TEXT("공격 명중 후 파편이 분열되어 추가 타격을 가합니다.")},
+		{ADronePartInventory::GetVectorCannonPartID(), TEXT("이동한 거리만큼 다음 공격이 강화됩니다.")},
+	};
+
+	for (const FExpectedDescription& Expectation : Expectations)
+	{
+		TestEqual(
+			*FString::Printf(TEXT("%s description matches the spec string"), *Expectation.PartID.ToString()),
+			Context.PC->GetPartDescription(Expectation.PartID).ToString(),
+			FString(Expectation.Expected));
+	}
+
+	Context.World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDronePartSelectUIControlGuideTextTest,
 	"DroneProto.D5.DronePartSelectUI.ControlGuideMatchesSpec",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

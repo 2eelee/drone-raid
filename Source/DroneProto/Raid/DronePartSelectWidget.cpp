@@ -26,6 +26,17 @@ FText UDronePartSelectWidget::GetControlGuideText()
 		TEXT("C: 취소"));
 }
 
+FText UDronePartSelectWidget::FormatPartCountText(int32 CurrentCount)
+{
+	// 목업 `08`의 확정 계약은 `슬롯 하단 중앙에 회색 원형(남은 수량 표시 위치)`이고 그 안에는 숫자만 들어간다.
+	// 목업에서 `남은 수량` 텍스트가 좌측 무기 슬롯 아래 한 곳에만 있는 것은 원형이 무엇인지 설명한 주석이며,
+	// 세 슬롯 전부에 붙는 라벨이 아니다. 원문 `:334,342,350`의 `남은 수량 UI`도 요소 이름이지 출력 문자열이 아니고,
+	// `:133-149`의 `레이저포 남은 수량 2 → 남은 수량 1`은 재고 변화를 설명하는 시퀀스 서술이다.
+	// 따라서 출력은 수량 숫자 하나다. 종전 `남은 수량: %d / %d`는 레이블과 총량 모두 근거가 없었다.
+	// `FText::AsNumber`는 로케일에 따라 천단위 구분자를 넣는다. 좁은 원형 안 표시라 서식 없이 숫자만 찍는다.
+	return FText::FromString(FString::Printf(TEXT("%d"), CurrentCount));
+}
+
 void UDronePartSelectWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -598,14 +609,71 @@ void UDronePartSelectWidget::ApplyPlanningLayout()
 		FLinearColor(0.27f, 0.93f, 0.45f, 0.92f), -20);
 	AddPanel(TEXT("Planning_LeftCard"), FVector2D(0.0f, 220.0f), FVector2D(520.0f, 190.0f),
 		FLinearColor(0.33f, 0.62f, 0.96f, 0.92f), -20);
-	AddPanel(TEXT("Planning_CoreDescription"), FVector2D(560.0f, -350.0f), FVector2D(460.0f, 200.0f),
+	// 설명 패널은 카드 바깥 가장자리에서 190px 떨어뜨리고 폭을 440으로 통일한다.
+	// 종전에는 간격이 코어 190 / 우측 무기 120 / 좌측 무기 170으로 제각각이라
+	// 우측 무기 설명이 화살표 버튼에 붙어 보였다. 폭 440은 좌우 화면 여백을 70으로 대칭시킨다
+	// (앵커가 화면 중앙이므로 1920 기준 바깥 끝이 ±890이다).
+	// 카드 절반폭: 코어 140, 무기 260. 설명 절반폭 220. 따라서 중심 오프셋은 카드절반 + 190 + 220이다.
+	AddPanel(TEXT("Planning_CoreDescription"), FVector2D(550.0f, -350.0f), FVector2D(440.0f, 200.0f),
 		FLinearColor(0.80f, 0.96f, 0.65f, 0.95f), -20);
-	AddPanel(TEXT("Planning_RightDescription"), FVector2D(-620.0f, -70.0f), FVector2D(480.0f, 190.0f),
+	AddPanel(TEXT("Planning_RightDescription"), FVector2D(-670.0f, -70.0f), FVector2D(440.0f, 190.0f),
 		FLinearColor(1.0f, 0.85f, 0.72f, 0.95f), -20);
-	AddPanel(TEXT("Planning_LeftDescription"), FVector2D(660.0f, 220.0f), FVector2D(460.0f, 190.0f),
+	AddPanel(TEXT("Planning_LeftDescription"), FVector2D(670.0f, 220.0f), FVector2D(440.0f, 190.0f),
 		FLinearColor(0.52f, 0.93f, 0.91f, 0.95f), -20);
 	AddPanel(TEXT("Planning_Timer"), FVector2D(-660.0f, 410.0f), FVector2D(420.0f, 120.0f),
 		FLinearColor(0.72f, 0.74f, 0.78f, 0.98f), -20);
+
+	// 목업 `08` 확정 계약: `슬롯 하단 중앙에 회색 원형(남은 수량 표시 위치)이 붙는다`.
+	// 원형은 에셋 없이 `RoundedBox` + `HalfHeightRadius`로 그린다 — 정사각형이면 정원이 된다.
+	// 수량 텍스트를 배지의 Content로 넣어 세로·가로 중앙을 Border가 잡게 한다.
+	// 이렇게 해야 배지 위치를 옮겨도 숫자가 항상 원 중심에 남는다.
+	const auto AddCountBadge = [this, Canvas](FName BadgeName, FVector2D Position, UTextBlock* CountText)
+	{
+		constexpr float BadgeDiameter = 76.0f;
+
+		UBorder* Badge = Cast<UBorder>(WidgetTree->FindWidget(BadgeName));
+		if (!Badge)
+		{
+			Badge = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), BadgeName);
+			if (!Badge)
+			{
+				return;
+			}
+			Canvas->AddChildToCanvas(Badge);
+		}
+
+		FSlateBrush CircleBrush;
+		CircleBrush.DrawAs = ESlateBrushDrawType::RoundedBox;
+		CircleBrush.OutlineSettings.RoundingType = ESlateBrushRoundingType::HalfHeightRadius;
+		CircleBrush.TintColor = FSlateColor(FLinearColor(0.78f, 0.80f, 0.83f, 1.0f));
+		Badge->SetBrush(CircleBrush);
+		Badge->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Badge->SetPadding(FMargin(0.0f));
+		Badge->SetHorizontalAlignment(HAlign_Center);
+		Badge->SetVerticalAlignment(VAlign_Center);
+
+		if (UCanvasPanelSlot* BadgeSlot = Cast<UCanvasPanelSlot>(Badge->Slot))
+		{
+			BadgeSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+			BadgeSlot->SetPosition(Position);
+			BadgeSlot->SetSize(FVector2D(BadgeDiameter, BadgeDiameter));
+			BadgeSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+			// 카드(-20)보다 위에 그려야 카드 경계에 걸친 원으로 보인다.
+			BadgeSlot->SetZOrder(-10);
+		}
+
+		if (CountText)
+		{
+			CountText->SetJustification(ETextJustify::Center);
+			Badge->SetContent(CountText);
+		}
+	};
+
+	// 배지 중심을 카드 하단 경계에 두어 위쪽 절반이 카드에 걸치게 한다.
+	// 카드 하단 = 중심 + 높이/2 → 코어 -350+100, 우측 무기 -70+95, 좌측 무기 220+95.
+	AddCountBadge(TEXT("Planning_CoreCountBadge"), FVector2D(0.0f, -250.0f), Text_CoreCount.Get());
+	AddCountBadge(TEXT("Planning_RightCountBadge"), FVector2D(0.0f, 25.0f), Text_RightWeaponCount.Get());
+	AddCountBadge(TEXT("Planning_LeftCountBadge"), FVector2D(0.0f, 315.0f), Text_LeftWeaponCount.Get());
 
 	if (!ServerErrorPopupPanel)
 	{
@@ -949,7 +1017,7 @@ void UDronePartSelectWidget::RefreshSlot(
 		}
 		if (CountText)
 		{
-			CountText->SetText(FText::FromString(TEXT("남은 수량: 0 / 0")));
+			CountText->SetText(FormatPartCountText(0));
 		}
 		if (Image)
 		{
@@ -961,7 +1029,6 @@ void UDronePartSelectWidget::RefreshSlot(
 	const FText DisplayName = CachedRaidPlayerController->GetPartDisplayName(PartID);
 	const FText Description = CachedRaidPlayerController->GetPartDescription(PartID);
 	const int32 CurrentCount = CachedRaidPlayerController->GetPartCurrentCount(PartID);
-	const int32 MaxCount = CachedRaidPlayerController->GetPartMaxCount(PartID);
 	const FName SelectedPartID = CachedRaidPlayerController->GetSelectedPartForSlot(PartSlot);
 	const bool bIsSelected = SelectedPartID == PartID;
 	const bool bIsFocused = !bCombatStartFocused && FocusedSlot == PartSlot;
@@ -977,7 +1044,7 @@ void UDronePartSelectWidget::RefreshSlot(
 
 	if (CountText)
 	{
-		FString CountString = FString::Printf(TEXT("남은 수량: %d / %d"), CurrentCount, MaxCount);
+		FString CountString = FormatPartCountText(CurrentCount).ToString();
 		if (bIsSelected)
 		{
 			CountString += TEXT("\n[선택됨]");

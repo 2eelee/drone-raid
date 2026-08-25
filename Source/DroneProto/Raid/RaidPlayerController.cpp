@@ -172,34 +172,42 @@ FText GetFallbackPartDisplayName(FName PartID)
 	return PartID.IsNone() ? FText::GetEmpty() : FText::FromName(PartID);
 }
 
+/**
+ * 부품 설명은 기획 원문 `현현_드론부품시스템_기획서.md`의 `(2) 코어 설명 UI`(`:940-942`)와
+ * `(3) 무기 설명 UI`(`:948-950`)가 문자 단위로 확정한다.
+ *
+ * `DroneCore.csv`·`DroneWeapon.csv`에는 이름·설명 컬럼이 없어 이 함수가 유일한 표시 경로다.
+ * 종전 영문 문구는 2026-06-20 UI 흐름 구현 때 들어간 자리 채우기였고 원문 근거가 없었을 뿐 아니라
+ * 실제 구현과도 어긋났다 — 제니스 코어는 `HP_TO_ATTACK`(공격형)인데 `maximum raid durability`(내구형)로 읽혔다.
+ */
 FText GetFallbackPartDescription(FName PartID)
 {
 	if (PartID == ADronePartInventory::GetCoreZenithPartID())
 	{
-		return FText::FromString(TEXT("High-output core tuned for maximum raid durability."));
+		return FText::FromString(TEXT("HP가 높을수록 공격력이 증가합니다."));
 	}
 	if (PartID == ADronePartInventory::GetCoreBoosterPartID())
 	{
-		return FText::FromString(TEXT("Balanced core with stable booster support."));
+		return FText::FromString(TEXT("이동할수록 이동속도가 증가하고, 증가한 이동속도의 일부가 공격력으로 전환됩니다."));
 	}
 	if (PartID == ADronePartInventory::GetCoreDrainPartID())
 	{
-		return FText::FromString(TEXT("Risk-oriented core that channels enemy pressure into power."));
+		return FText::FromString(TEXT("공격력과 이동속도는 낮지만, 가한 피해의 일부만큼 HP를 회복합니다."));
 	}
 	if (PartID == ADronePartInventory::GetPulseLaserPartID())
 	{
-		return FText::FromString(TEXT("Reliable targeting weapon for steady boss damage."));
+		return FText::FromString(TEXT("3번째 공격마다 강력한 펄스 공격이 발생합니다."));
 	}
 	if (PartID == ADronePartInventory::GetFractureBurstPartID())
 	{
-		return FText::FromString(TEXT("Burst weapon built around short windows of amplified damage."));
+		return FText::FromString(TEXT("공격 명중 후 파편이 분열되어 추가 타격을 가합니다."));
 	}
 	if (PartID == ADronePartInventory::GetVectorCannonPartID())
 	{
-		return FText::FromString(TEXT("Directional cannon for precise ranged pressure."));
+		return FText::FromString(TEXT("이동한 거리만큼 다음 공격이 강화됩니다."));
 	}
 
-	return PartID.IsNone() ? FText::GetEmpty() : FText::FromString(TEXT("No description registered."));
+	return PartID.IsNone() ? FText::GetEmpty() : FText::FromString(TEXT("등록된 설명이 없습니다."));
 }
 }
 
