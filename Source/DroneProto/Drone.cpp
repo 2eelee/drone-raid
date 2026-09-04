@@ -285,6 +285,7 @@ void ADrone::PostInitializeComponents()
 void ADrone::BeginPlay()
 {
 	Super::BeginPlay();
+	RefreshWeaponVisualLoadoutLocally();
 
 	if (GetNetMode() != NM_DedicatedServer)
 	{
@@ -933,6 +934,9 @@ void ADrone::ClearEquippedLoadoutForServer(FName Reason)
 	EquippedCorePartID = NAME_None;
 	EquippedLeftWeaponPartID = NAME_None;
 	EquippedRightWeaponPartID = NAME_None;
+	WeaponVisualLoadout.LeftWeaponID = NAME_None;
+	WeaponVisualLoadout.RightWeaponID = NAME_None;
+	RefreshWeaponVisualLoadoutLocally();
 	AttackPower = 0;
 	RefreshMoveSpeedForServer();
 	ForceNetUpdate();
@@ -1104,6 +1108,9 @@ bool ADrone::ApplyLoadout(FName CorePartID, FName LeftWeaponPartID, FName RightW
 	EquippedCorePartID = ResolvedCorePartID;
 	EquippedLeftWeaponPartID = ResolvedLeftWeaponPartID;
 	EquippedRightWeaponPartID = ResolvedRightWeaponPartID;
+	WeaponVisualLoadout.LeftWeaponID = ResolvedLeftWeaponPartID;
+	WeaponVisualLoadout.RightWeaponID = ResolvedRightWeaponPartID;
+	RefreshWeaponVisualLoadoutLocally();
 	ResetCombatRuntimeStateForReason(FName(TEXT("Ready")));
 	RecalculateStats();
 	bIsDead = false;
@@ -1941,6 +1948,7 @@ void ADrone::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimePr
 	DOREPLIFETIME(ADrone, bIsDead);
 	DOREPLIFETIME(ADrone, bIsDodging);
 	DOREPLIFETIME(ADrone, LastDodgeEndTime);
+	DOREPLIFETIME(ADrone, WeaponVisualLoadout);
 	DOREPLIFETIME_CONDITION(ADrone, OwnerMoveSync, COND_OwnerOnly);
 }
 
@@ -3571,6 +3579,21 @@ void ADrone::PlayDroneDamageIgnoredVisualLocally(FName Reason)
 	}
 
 	// Invincible/ignored damage intentionally has no hit flash.
+}
+
+void ADrone::OnRep_WeaponVisualLoadout()
+{
+	RefreshWeaponVisualLoadoutLocally();
+}
+
+void ADrone::RefreshWeaponVisualLoadoutLocally()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+
+	BP_OnWeaponVisualLoadoutChanged(WeaponVisualLoadout.LeftWeaponID, WeaponVisualLoadout.RightWeaponID);
 }
 
 void ADrone::StartDroneHitFlash(float OldHP, float NewHP)

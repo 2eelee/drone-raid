@@ -6,6 +6,8 @@
 #include "Engine/DataTable.h"
 #include "DroneDataTableRows.generated.h"
 
+class UStaticMesh;
+
 USTRUCT(BlueprintType)
 struct DRONEPROTO_API FDronePartCountRow : public FTableRowBase
 {
@@ -79,6 +81,27 @@ struct DRONEPROTO_API FDroneWeaponRow : public FTableRowBase
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Weapon")
 	int32 HitCount = 0;
+};
+
+/**
+ * DataTable row used by BP_Drone to resolve an equipped weapon Part ID into
+ * a display-only mesh and the per-side mount transforms. The DataTable row
+ * name is the weapon Part ID (for example WEAPON_001), so this row deliberately
+ * does not duplicate that key in a WeaponID field.
+ */
+USTRUCT(BlueprintType)
+struct DRONEPROTO_API FDroneWeaponVisualRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Weapon Visual")
+	TObjectPtr<UStaticMesh> WeaponMesh = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Weapon Visual")
+	FTransform LeftRelativeTransform = FTransform::Identity;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drone Data|Weapon Visual")
+	FTransform RightRelativeTransform = FTransform::Identity;
 };
 
 USTRUCT(BlueprintType)

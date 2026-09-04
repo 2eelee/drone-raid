@@ -143,6 +143,18 @@ struct FDroneAttackVisualPayload
 	EDroneCombatWeaponType RightWeaponType = EDroneCombatWeaponType::None;
 };
 
+USTRUCT()
+struct FDroneWeaponVisualLoadout
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FName LeftWeaponID = NAME_None;
+
+	UPROPERTY()
+	FName RightWeaponID = NAME_None;
+};
+
 UCLASS()
 class DRONEPROTO_API ADrone : public APawn
 {
@@ -321,6 +333,13 @@ public:
 
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
 	void BP_OnDroneDamagedVisual(float Damage, float OldHP, float NewHP);
+
+	/**
+	 * Display-only notification for BP_Drone. The authoritative combat loadout
+	 * remains owned and validated by ADrone; Blueprint only resolves visual data.
+	 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Drone|Visual|Weapons")
+	void BP_OnWeaponVisualLoadoutChanged(FName LeftWeaponID, FName RightWeaponID);
 
 	UFUNCTION(BlueprintNativeEvent, Category = "Drone|Combat|Visual")
 	void BP_OnDroneDamageIgnoredVisual(FName Reason);
@@ -627,6 +646,9 @@ private:
 	UPROPERTY(Transient)
 	FName EquippedRightWeaponPartID = NAME_None;
 
+	UPROPERTY(ReplicatedUsing = OnRep_WeaponVisualLoadout, Transient)
+	FDroneWeaponVisualLoadout WeaponVisualLoadout;
+
 	UPROPERTY(Transient)
 	int32 LeftPulseAttackCount = 0;
 
@@ -913,6 +935,9 @@ private:
 	void PlayDroneAttackVisualLocally(FName LeftWeaponPartID, FName RightWeaponPartID, float Damage, FVector From, FVector To, const FDroneAttackVisualPayload& Payload);
 	void PlayDroneDamagedVisualLocally(float Damage, float OldHP, float NewHP);
 	void PlayDroneDamageIgnoredVisualLocally(FName Reason);
+	UFUNCTION()
+	void OnRep_WeaponVisualLoadout();
+	void RefreshWeaponVisualLoadoutLocally();
 	void StartDroneHitFlash(float OldHP, float NewHP);
 	void EndDroneHitFlash();
 
